@@ -2,14 +2,16 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import * as XLSX from 'xlsx'
 import { useAppStore } from '../store/appStore'
+import { useOrgStore } from '../store/orgStore'
 import { getDemoData, DEMO_EMPRESA } from '../lib/demoData'
 import { parseSalesFile, parseMetasFile, parseInventoryFile, parseRawFile } from '../lib/fileParser'
+import { uploadOrgFile } from '../lib/orgService'
 import LoadingOverlay from '../components/ui/LoadingOverlay'
 import StepIndicator from '../components/upload/StepIndicator'
 import FileDropzone from '../components/upload/FileDropzone'
 import DataPreview from '../components/upload/DataPreview'
 import { cn } from '../lib/utils'
-import { Sparkles, FileDown, Trash2, ChevronRight, ChevronLeft } from 'lucide-react'
+import { Sparkles, FileDown, Trash2, ChevronRight, ChevronLeft, ShieldOff } from 'lucide-react'
 import type { UploadStep } from '../types'
 
 const INITIAL_STEPS: UploadStep[] = [
@@ -57,6 +59,8 @@ const COLUMN_INFO: Record<string, { required: string[]; optional: { col: string;
 
 export default function UploadPage() {
   const { setSales, setMetas, setInventory, setIsProcessed, setSelectedPeriod, resetAll, configuracion, setConfiguracion } = useAppStore()
+  const { org } = useOrgStore()
+  const canEdit = useOrgStore(s => s.canEdit())
   const navigate = useNavigate()
 
   const [steps, setSteps] = useState<UploadStep[]>(INITIAL_STEPS)
@@ -139,6 +143,16 @@ export default function UploadPage() {
       setMetas(metasData)
       setInventory(inventoryData)
 
+      // Fire-and-forget: subir archivos al Storage de la org
+      if (org) {
+        steps.forEach((step) => {
+          if (step.status === 'loaded' && step.file) {
+            uploadOrgFile(org.id, step.id as 'ventas' | 'metas' | 'inventario', step.file)
+              .catch(console.warn)
+          }
+        })
+      }
+
       setLoading({ title: 'Iniciando análisis...', subtitle: 'Detectando patrones y riesgos comerciales', progress: 70 })
 
       setTimeout(() => {
@@ -198,6 +212,19 @@ export default function UploadPage() {
     )
 
     XLSX.writeFile(wb, 'plantilla-salesflow.xlsx')
+  }
+
+  // Guard: solo owner/editor pueden subir archivos
+  if (!canEdit) {
+    return (
+      <div className="max-w-3xl mx-auto flex flex-col items-center justify-center py-24 space-y-4">
+        <ShieldOff className="w-10 h-10 text-zinc-600" />
+        <h2 className="text-lg font-bold text-zinc-300">Sin permiso para cargar archivos</h2>
+        <p className="text-sm text-zinc-500 text-center max-w-sm">
+          Solo el propietario o un editor puede cargar archivos. Contacta al propietario de la organización.
+        </p>
+      </div>
+    )
   }
 
   const step = steps[currentStep]

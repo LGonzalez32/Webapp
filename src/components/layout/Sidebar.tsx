@@ -1,12 +1,15 @@
 import { useState } from 'react'
 import type { ComponentType } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
   AlertTriangle, Users, TrendingUp, UserCheck, Target,
-  Bot, Upload, Settings, Menu, X as CloseIcon, Zap, RotateCcw,
+  Bot, Upload, Settings, Menu, X as CloseIcon, Zap, RotateCcw, LogOut, Building2,
 } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { useAppStore } from '../../store/appStore'
+import { useAuthStore } from '../../store/authStore'
+import { useOrgStore } from '../../store/orgStore'
+import { supabase } from '../../lib/supabaseClient'
 
 interface NavItem {
   label: string
@@ -17,8 +20,17 @@ interface NavItem {
 
 export default function Sidebar() {
   const location = useLocation()
-  const { dataAvailability, configuracion, isProcessed } = useAppStore()
+  const navigate = useNavigate()
+  const { dataAvailability, configuracion, isProcessed, resetAll } = useAppStore()
+  const { user } = useAuthStore()
+  const org = useOrgStore(s => s.org)
   const [isOpen, setIsOpen] = useState(false)
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut()
+    resetAll()
+    navigate('/login')
+  }
 
   const PRINCIPAL: NavItem[] = [
     { label: 'Estado Comercial', href: '/dashboard', icon: AlertTriangle },
@@ -35,6 +47,7 @@ export default function Sidebar() {
   const HERRAMIENTAS: NavItem[] = [
     { label: 'Chat IA',        href: '/chat',          icon: Bot },
     { label: 'Cargar datos',   href: '/cargar',        icon: Upload },
+    { label: 'Organización',   href: '/organizacion',  icon: Building2 },
     { label: 'Configuración',  href: '/configuracion', icon: Settings },
   ]
 
@@ -67,9 +80,9 @@ export default function Sidebar() {
           </div>
           <div>
             <span className="text-lg font-black text-[#00B894] tracking-tight">SalesFlow</span>
-            {configuracion.empresa && (
+            {(org?.name ?? configuracion.empresa) && (
               <p className="text-[10px] text-zinc-600 font-medium leading-tight truncate max-w-[140px]">
-                {configuracion.empresa}
+                {org?.name ?? configuracion.empresa}
               </p>
             )}
           </div>
@@ -99,12 +112,21 @@ export default function Sidebar() {
         </div>
       </nav>
 
-      {/* Footer */}
-      <div className="px-5 py-4 border-t border-zinc-800">
-        <p className="text-[10px] text-zinc-700 font-medium">
-          Monitor de Riesgo Comercial
-        </p>
-        <p className="text-[10px] text-zinc-800 mt-0.5">v2.0 · SalesFlow</p>
+      {/* Footer — usuario + logout */}
+      <div className="px-4 py-4 border-t border-zinc-800 space-y-3">
+        {user?.email && (
+          <p className="px-1 text-[11px] text-zinc-600 font-medium truncate" title={user.email}>
+            {user.email}
+          </p>
+        )}
+        <button
+          onClick={handleLogout}
+          className="flex items-center gap-2.5 w-full px-4 py-2 rounded-xl text-sm text-zinc-500 hover:text-red-400 hover:bg-zinc-900 transition-all"
+        >
+          <LogOut className="w-4 h-4 shrink-0" />
+          Cerrar sesión
+        </button>
+        <p className="px-1 text-[10px] text-zinc-800">v2.0 · SalesFlow</p>
       </div>
     </div>
   )

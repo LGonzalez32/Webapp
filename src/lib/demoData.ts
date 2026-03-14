@@ -28,7 +28,9 @@ const CLIENTES = [
   'Bodega Express',
   'Comercial Rivera',
   'Tienda La Colonia',
-  'Farmacia San Miguel',   // cliente dormido asignado a Carlos
+  'Farmacia San Miguel',   // cliente dormido de Carlos — recovery dificil (comprador frecuente, muy vencido)
+  'Almacén Rivera',        // cliente dormido de Carlos — recovery alta (comprador mensual, 31 días)
+  'Mayoreo del Norte',     // cliente dormido de Carlos — recovery recuperable (comprador bimensual, ~55 días)
 ]
 
 const CATEGORIAS: Record<string, string> = {
@@ -91,6 +93,12 @@ export function getDemoData(): { sales: SaleRecord[]; metas: MetaRecord[]; inven
       addSale(sales, d(year, month, Math.min(day + 2, lastDay)), 'Carlos', 'Arroz 1kg', 'Tienda El Progreso', 25 + Math.floor(Math.random() * 8))
       addSale(sales, d(year, month, Math.min(day + 4, lastDay)), 'Carlos', 'Harina 1kg', 'Abarrotería La Paz', 18 + Math.floor(Math.random() * 6))
       addSale(sales, d(year, month, Math.min(day + 1, lastDay)), 'Carlos', 'Aceite 2L', 'Farmacia San Miguel', 12 + Math.floor(Math.random() * 5))
+    }
+    // Almacén Rivera — comprador mensual (recovery alta: frecuencia regular, alto valor)
+    addSale(sales, d(year, month, Math.min(8, lastDay)), 'Carlos', 'Aceite 2L', 'Almacén Rivera', 200)
+    // Mayoreo del Norte — comprador bimensual meses impares (recovery recuperable)
+    if (month % 2 === 1) {
+      addSale(sales, d(year, month, Math.min(15, lastDay)), 'Carlos', 'Aceite 2L', 'Mayoreo del Norte', 300)
     }
 
     // Ana — normal en historial, con Supermercado López ~60% de ventas
@@ -167,8 +175,11 @@ export function getDemoData(): { sales: SaleRecord[]; metas: MetaRecord[]; inven
   }
   for (let day = 3; day <= prevLastDay; day += 7) {
     addSale(sales, d(prevYear, prevMonth, Math.min(day, prevLastDay)), 'Carlos', 'Harina 1kg', 'Abarrotería La Paz', 22 + Math.floor(Math.random() * 5))
-    addSale(sales, d(prevYear, prevMonth, Math.min(day + 3, prevLastDay)), 'Carlos', 'Aceite 2L', 'Farmacia San Miguel', 14 + Math.floor(Math.random() * 4))
+    // Farmacia San Miguel NO compra en prevMonth → queda dormida (~42 días, recovery dificil)
   }
+  // Almacén Rivera compra en prevMonth día 8 (última compra → ~31 días inactiva, recovery alta)
+  addSale(sales, d(prevYear, prevMonth, 8), 'Carlos', 'Aceite 2L', 'Almacén Rivera', 200)
+  // Mayoreo del Norte: prevMonth = Feb (mes 2, par) → no compra → última compra en mes impar anterior
 
   // Ana — mes anterior: Supermercado López compró mucho
   for (let day = 1; day <= prevLastDay; day += 4) {

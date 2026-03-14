@@ -10,6 +10,7 @@ import type {
   Insight,
   InsightPrioridad,
 } from '../types'
+import type { SaleIndex } from './analysis'
 import {
   salesInPeriod,
   prevPeriod,
@@ -17,6 +18,10 @@ import {
   getVentasVendedorPorCliente,
   getMejoresPeriodosVendedor,
 } from './analysis'
+
+function byPeriod(index: SaleIndex, year: number, month: number): SaleRecord[] {
+  return index.byPeriod.get(`${year}-${String(month + 1).padStart(2, '0')}`) ?? []
+}
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
@@ -41,22 +46,31 @@ const PRIORITY_ORDER: Record<InsightPrioridad, number> = {
 }
 
 function sortInsights(insights: (Insight | null)[]): Insight[] {
-  return (insights.filter(Boolean) as Insight[]).sort(
-    (a, b) => PRIORITY_ORDER[a.prioridad] - PRIORITY_ORDER[b.prioridad]
-  )
+  return (insights.filter(Boolean) as Insight[]).sort((a, b) => {
+    const pDiff = PRIORITY_ORDER[a.prioridad] - PRIORITY_ORDER[b.prioridad]
+    if (pDiff !== 0) return pDiff
+    const aVal = a.impacto_economico?.valor ?? 0
+    const bVal = b.impacto_economico?.valor ?? 0
+    if (aVal !== bVal) return bVal - aVal
+    return 0
+  })
 }
 
 // ─── INSIGHT 1: META EN PELIGRO ───────────────────────────────────────────────
 
-function insightMetaEnPeligro(v: VendorAnalysis, teamStats: TeamStats): Insight | null {
+function insightMetaEnPeligro(
+  v: VendorAnalysis, teamStats: TeamStats,
+  precioUnitario: number, has_venta_neta: boolean,
+): Insight | null {
   if (!v.meta || !v.proyeccion_cierre) return null
   if (teamStats.dias_restantes <= 5) return null
   if (v.proyeccion_cierre >= v.meta * 0.85) return null
 
   const pctMeta = (v.proyeccion_cierre / v.meta) * 100
   const ritmo = v.ritmo_necesario ?? 0
+  const brecha = v.meta - v.proyeccion_cierre
 
-  return {
+  const insight: Insight = {
     id: uid('meta-peligro'),
     tipo: 'riesgo_vendedor',
     prioridad: 'CRITICA',
@@ -65,8 +79,18 @@ function insightMetaEnPeligro(v: VendorAnalysis, teamStats: TeamStats): Insight 
     descripcion: `${v.vendedor} proyecta cerrar en ${pct(pctMeta)} de su meta. Necesita ${fmt(ritmo, 1)} uds/día para los ${teamStats.dias_restantes} días restantes (meta: ${fmt(v.meta)} uds).`,
     vendedor: v.vendedor,
     valor_numerico: pctMeta,
-    accion_sugerida: 'Ver en Metas',
+    accion_sugerida: v.ritmo_necesario
+      ? `Requiere ${Math.round(v.ritmo_necesario).toLocaleString()} uds/día los ${teamStats.dias_restantes} días restantes — ritmo actual: ${Math.round(v.ritmo_diario ?? 0).toLocaleString()}`
+      : `Revisar pipeline y clientes activos con urgencia`,
   }
+  if (has_venta_neta && precioUnitario > 0 && brecha > 0) {
+    insight.impacto_economico = {
+      valor: Math.round(brecha * precioUnitario),
+      descripcion: 'en ventas que no se cerrarán si sigue la tendencia',
+      tipo: 'riesgo',
+    }
+  }
+  return insight
 }
 
 // ─── INSIGHT 2: RACHA NEGATIVA ────────────────────────────────────────────────
@@ -96,10 +120,11 @@ function insightDependenciaCliente(
   sales: SaleRecord[],
   selectedPeriod: { year: number; month: number },
   config: Configuracion,
+  index?: SaleIndex,
 ): Insight | null {
   if (v.ventas_periodo === 0) return null
 
-  const byCliente = getVentasVendedorPorCliente(sales, v.vendedor, selectedPeriod.year, selectedPeriod.month)
+  const byCliente = getVentasVendedorPorCliente(sales, v.vendedor, selectedPeriod.year, selectedPeriod.month, index)
   const entries = Object.entries(byCliente).sort(([, a], [, b]) => b - a)
   if (entries.length === 0) return null
 
@@ -113,7 +138,7 @@ function insightDependenciaCliente(
     prioridad: 'ALTA',
     emoji: '⚠️',
     titulo: `Dependencia de cliente — ${v.vendedor}`,
-    descripcion: `${v.vendedor} genera el ${pct(topPct)} de sus ventas con un solo cliente (${topCliente}). Si ese cliente reduce compras, ${v.vendedor} pierde meta automáticamente.`,
+    descripcion: `${v.vendedor} genera el ${pct(topPct)} de sus ventas con un solo cliente (${topCliente}). Si ese cliente reduce su volumen, ${v.vendedor} queda altamente expuesto para cerrar meta.`,
     vendedor: v.vendedor,
     cliente: topCliente,
     valor_numerico: topPct,
@@ -124,7 +149,12 @@ function insightDependenciaCliente(
 // ─── INSIGHT 4: CAÍDA ACELERADA ───────────────────────────────────────────────
 
 function insightCaidaAcelerada(v: VendorAnalysis): Insight | null {
-  if (v.variacion_pct === null || v.variacion_pct >= -20) return null
+  if ((v.periodos_base_promedio ?? 0) < 2) return null
+  if (
+    v.variacion_vs_promedio_pct === null ||
+    v.variacion_vs_promedio_pct === undefined ||
+    v.variacion_vs_promedio_pct >= -15
+  ) return null
 
   return {
     id: uid('caida'),
@@ -132,10 +162,10 @@ function insightCaidaAcelerada(v: VendorAnalysis): Insight | null {
     prioridad: 'ALTA',
     emoji: '⬇️',
     titulo: `Caída acelerada — ${v.vendedor}`,
-    descripcion: `${v.vendedor} cayó ${pct(v.variacion_pct)} vs. el período anterior (${fmt(v.ventas_mes_anterior)} → ${fmt(v.ventas_periodo)} uds).`,
+    descripcion: `${v.vendedor} está ${pct(Math.abs(v.variacion_vs_promedio_pct))} por debajo del promedio de sus últimos ${v.periodos_base_promedio ?? 3} períodos con datos (promedio: ${fmt(v.promedio_3m ?? 0)} uds/mes). Este período: ${fmt(v.ventas_periodo)} uds.`,
     vendedor: v.vendedor,
-    valor_numerico: v.variacion_pct,
-    accion_sugerida: 'Ver en Vendedores',
+    valor_numerico: v.variacion_vs_promedio_pct,
+    accion_sugerida: `Está ${Math.abs(v.variacion_vs_promedio_pct ?? 0)}% por debajo del promedio de sus últimos ${v.periodos_base_promedio ?? 3} períodos — revisar causas esta semana`,
   }
 }
 
@@ -165,8 +195,9 @@ function insightMejorMomento(
   v: VendorAnalysis,
   sales: SaleRecord[],
   selectedPeriod: { year: number; month: number },
+  index?: SaleIndex,
 ): Insight | null {
-  const historicos = getMejoresPeriodosVendedor(sales, v.vendedor, selectedPeriod.year, selectedPeriod.month, 6)
+  const historicos = getMejoresPeriodosVendedor(sales, v.vendedor, selectedPeriod.year, selectedPeriod.month, 6, index)
   if (historicos.length === 0) return null
   const maxHistorico = Math.max(...historicos)
   if (v.ventas_periodo <= maxHistorico) return null
@@ -185,19 +216,41 @@ function insightMejorMomento(
 
 // ─── INSIGHT 7: CLIENTES DORMIDOS ALTO VALOR ─────────────────────────────────
 
+const RECOVERY_LABEL_TEXTO: Record<ClienteDormido['recovery_label'], string> = {
+  alta:        'Alta probabilidad de recuperación',
+  recuperable: 'Recuperable con gestión activa',
+  dificil:     'Recuperación difícil',
+  perdido:     'Cliente posiblemente perdido',
+}
+
 function insightsClientesDormidos(clientesDormidos: ClienteDormido[]): Insight[] {
-  return clientesDormidos.slice(0, 3).map((c) => ({
-    id: uid('dormido'),
-    tipo: 'riesgo_cliente' as const,
-    prioridad: 'ALTA' as const,
-    emoji: '😴',
-    titulo: `Cliente dormido — ${c.cliente}`,
-    descripcion: `${c.cliente} no compra desde hace ${c.dias_sin_actividad} días. Históricamente generaba ${fmt(c.valor_historico / Math.max(c.compras_historicas, 1), 1)} uds/compra. Vendedor asignado: ${c.vendedor}.`,
-    vendedor: c.vendedor,
-    cliente: c.cliente,
-    valor_numerico: c.dias_sin_actividad,
-    accion_sugerida: 'Ver en Clientes',
-  }))
+  return clientesDormidos.slice(0, 3).map((c, index) => {
+    const ticketPromedio = c.compras_historicas > 0
+      ? Math.round(c.valor_historico / c.compras_historicas)
+      : 0
+    const labelStr = RECOVERY_LABEL_TEXTO[c.recovery_label]
+    const esPrioritario = index === 0
+
+    const accion = esPrioritario &&
+      (c.recovery_label === 'alta' || c.recovery_label === 'recuperable')
+      ? `Primer contacto prioritario — mejor combinación valor/probabilidad del período`
+      : c.recovery_label === 'alta' || c.recovery_label === 'recuperable'
+        ? `Contactar esta semana — buena probabilidad de reactivación`
+        : `Evaluar costo-beneficio antes de invertir en recuperación`
+
+    return {
+      id: uid('dormido'),
+      tipo: 'riesgo_cliente' as const,
+      prioridad: 'ALTA' as const,
+      emoji: '😴',
+      titulo: `Cliente dormido — ${c.cliente}`,
+      descripcion: `${labelStr} — sin actividad hace ${c.dias_sin_actividad} días. Realizó ${c.compras_historicas} compras con ticket promedio de ${fmt(ticketPromedio)} uds. Score de recuperación: ${c.recovery_score}/100.`,
+      vendedor: c.vendedor,
+      cliente: c.cliente,
+      valor_numerico: c.dias_sin_actividad,
+      accion_sugerida: accion,
+    }
+  })
 }
 
 // ─── INSIGHT 8: CLIENTE EN DECLIVE ───────────────────────────────────────────
@@ -205,19 +258,22 @@ function insightsClientesDormidos(clientesDormidos: ClienteDormido[]): Insight[]
 function insightsClienteEnDeclive(
   sales: SaleRecord[],
   selectedPeriod: { year: number; month: number },
+  index?: SaleIndex,
 ): Insight[] {
   const { year, month } = selectedPeriod
   const prev = prevPeriod(year, month)
 
   const actual: Record<string, { ventas: number; vendedor: string }> = {}
-  salesInPeriod(sales, year, month).forEach((s) => {
+  const periodSalesDecl = index ? byPeriod(index, year, month) : salesInPeriod(sales, year, month)
+  periodSalesDecl.forEach((s) => {
     if (!s.cliente) return
     if (!actual[s.cliente]) actual[s.cliente] = { ventas: 0, vendedor: s.vendedor }
     actual[s.cliente].ventas += s.unidades
   })
 
   const anterior: Record<string, number> = {}
-  salesInPeriod(sales, prev.year, prev.month).forEach((s) => {
+  const prevSalesDecl = index ? byPeriod(index, prev.year, prev.month) : salesInPeriod(sales, prev.year, prev.month)
+  prevSalesDecl.forEach((s) => {
     if (!s.cliente) return
     anterior[s.cliente] = (anterior[s.cliente] ?? 0) + s.unidades
   })
@@ -251,6 +307,8 @@ function insightsClienteEnDeclive(
 function insightConcentracionSistemica(
   concentracion: ConcentracionRiesgo[],
   teamStats: TeamStats,
+  ventasNetaTop3: number,
+  has_venta_neta: boolean,
 ): Insight | null {
   const top3 = concentracion.slice(0, 3)
   if (top3.length < 2) return null
@@ -258,19 +316,29 @@ function insightConcentracionSistemica(
   const pctTop3 = top3.reduce((a, c) => a + c.pct_del_total, 0)
   if (pctTop3 <= 40) return null
 
-  const impacto30 = Math.round(teamStats.total_ventas * (pctTop3 / 100) * 0.3)
+  const ESCENARIO_REDUCCION = 0.30
+  const clientePrincipal = top3[0] // mayor ventas_absolutas (ya ordenado por analysis.ts)
+  const impactoEscenario = Math.round(clientePrincipal.ventas_absolutas * ESCENARIO_REDUCCION)
   const nombres = top3.map((c) => c.cliente).join(', ')
 
-  return {
+  const insight: Insight = {
     id: uid('concentracion'),
     tipo: 'riesgo_cliente',
     prioridad: 'CRITICA',
     emoji: '🎯',
     titulo: 'Concentración sistémica de clientes',
-    descripcion: `El ${pct(pctTop3)} de las ventas del equipo depende de ${top3.length} clientes (${nombres}). Si cualquiera reduce compras un 30%, el equipo pierde ${fmt(impacto30)} uds en el mes.`,
+    descripcion: `${nombres} concentran el ${pct(pctTop3)} de las ventas. Una reducción del 30% en el cliente principal representaría una pérdida estimada de ${fmt(impactoEscenario)} uds.`,
     valor_numerico: pctTop3,
-    accion_sugerida: 'Ver en Clientes',
+    accion_sugerida: `Iniciar diversificación — reducir dependencia de ${clientePrincipal.cliente} al menos un 10% en los próximos 3 meses`,
   }
+  if (has_venta_neta && ventasNetaTop3 > 0) {
+    insight.impacto_economico = {
+      valor: impactoEscenario,
+      descripcion: `pérdida estimada si el cliente principal reduce un 30% su volumen`,
+      tipo: 'riesgo',
+    }
+  }
+  return insight
 }
 
 // ─── INSIGHT 10: CLIENTE NUEVO ACTIVO ────────────────────────────────────────
@@ -279,9 +347,10 @@ function insightsClienteNuevoActivo(
   sales: SaleRecord[],
   selectedPeriod: { year: number; month: number },
   fechaReferencia: Date,
+  index?: SaleIndex,
 ): Insight[] {
   const { year, month } = selectedPeriod
-  const periodSales = salesInPeriod(sales, year, month)
+  const periodSales = index ? byPeriod(index, year, month) : salesInPeriod(sales, year, month)
   const hace28 = new Date(fechaReferencia.getTime() - 28 * 86400000)
 
   const byCliente: Record<string, { fechas: Date[]; vendedor: string }> = {}
@@ -293,9 +362,12 @@ function insightsClienteNuevoActivo(
 
   const insights: Insight[] = []
   for (const [cliente, { fechas, vendedor }] of Object.entries(byCliente)) {
-    const primeraGlobal = sales
-      .filter((s) => s.cliente === cliente)
-      .reduce((min, s) => (s.fecha < min ? s.fecha : min), fechas[0])
+    // Use index.byClient for fast lookup instead of scanning all sales
+    const allClientSales = index ? (index.byClient.get(cliente) ?? []) : sales.filter(s => s.cliente === cliente)
+    const primeraGlobal = allClientSales.reduce(
+      (min, s) => s.fecha < min ? s.fecha : min,
+      fechas[0]
+    )
 
     if (primeraGlobal < hace28) continue
     if (fechas.length < 2) continue
@@ -319,32 +391,57 @@ function insightsClienteNuevoActivo(
 
 // ─── INSIGHT 11: PRODUCTO SIN MOVIMIENTO ─────────────────────────────────────
 
-function insightsProductoSinMovimiento(sales: SaleRecord[], fechaReferencia: Date): Insight[] {
+function insightsProductoSinMovimiento(sales: SaleRecord[], fechaReferencia: Date, index?: SaleIndex): Insight[] {
   const hace15 = new Date(fechaReferencia.getTime() - 15 * 86400000)
-  const productos = new Set(sales.map((s) => s.producto).filter(Boolean)) as Set<string>
 
   const insights: Insight[] = []
-  for (const producto of productos) {
-    const ventasProd = sales.filter((s) => s.producto === producto)
-    if (ventasProd.some((s) => new Date(s.fecha) >= hace15)) continue
 
-    const sorted = [...ventasProd].sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime())
-    if (sorted.length === 0) continue
+  if (index) {
+    for (const [producto, ventasProd] of index.byProduct.entries()) {
+      if (ventasProd.some((s) => s.fecha >= hace15)) continue
 
-    const ultima = sorted[0]
-    const dias = Math.floor((fechaReferencia.getTime() - new Date(ultima.fecha).getTime()) / 86400000)
+      let ultima = ventasProd[0]
+      for (const s of ventasProd) {
+        if (s.fecha > ultima.fecha) ultima = s
+      }
+      const dias = Math.floor((fechaReferencia.getTime() - ultima.fecha.getTime()) / 86400000)
 
-    insights.push({
-      id: uid('prod-sin-mov'),
-      tipo: 'riesgo_producto',
-      prioridad: 'ALTA',
-      emoji: '📦',
-      titulo: `Producto sin movimiento — ${producto}`,
-      descripcion: `${producto} no registra ventas en ${dias} días. Último vendedor que lo movió: ${ultima.vendedor} hace ${dias} días.`,
-      producto,
-      vendedor: ultima.vendedor,
-      valor_numerico: dias,
-    })
+      insights.push({
+        id: uid('prod-sin-mov'),
+        tipo: 'riesgo_producto',
+        prioridad: 'ALTA',
+        emoji: '📦',
+        titulo: `Producto sin movimiento — ${producto}`,
+        descripcion: `${producto} no registra ventas en ${dias} días. Último vendedor que lo movió: ${ultima.vendedor} hace ${dias} días.`,
+        producto,
+        vendedor: ultima.vendedor,
+        valor_numerico: dias,
+      })
+    }
+  } else {
+    const productos = new Set(sales.map((s) => s.producto).filter(Boolean)) as Set<string>
+    for (const producto of productos) {
+      const ventasProd = sales.filter((s) => s.producto === producto)
+      if (ventasProd.some((s) => new Date(s.fecha) >= hace15)) continue
+
+      const sorted = [...ventasProd].sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime())
+      if (sorted.length === 0) continue
+
+      const ultima = sorted[0]
+      const dias = Math.floor((fechaReferencia.getTime() - new Date(ultima.fecha).getTime()) / 86400000)
+
+      insights.push({
+        id: uid('prod-sin-mov'),
+        tipo: 'riesgo_producto',
+        prioridad: 'ALTA',
+        emoji: '📦',
+        titulo: `Producto sin movimiento — ${producto}`,
+        descripcion: `${producto} no registra ventas en ${dias} días. Último vendedor que lo movió: ${ultima.vendedor} hace ${dias} días.`,
+        producto,
+        vendedor: ultima.vendedor,
+        valor_numerico: dias,
+      })
+    }
   }
 
   return insights.slice(0, 3)
@@ -355,17 +452,20 @@ function insightsProductoSinMovimiento(sales: SaleRecord[], fechaReferencia: Dat
 function insightsProductoEnCaida(
   sales: SaleRecord[],
   selectedPeriod: { year: number; month: number },
+  index?: SaleIndex,
 ): Insight[] {
   const { year, month } = selectedPeriod
   const prev = prevPeriod(year, month)
 
   const actual: Record<string, number> = {}
-  salesInPeriod(sales, year, month).forEach((s) => {
+  const periodSalesCaida = index ? byPeriod(index, year, month) : salesInPeriod(sales, year, month)
+  periodSalesCaida.forEach((s) => {
     if (!s.producto) return
     actual[s.producto] = (actual[s.producto] ?? 0) + s.unidades
   })
   const anterior: Record<string, number> = {}
-  salesInPeriod(sales, prev.year, prev.month).forEach((s) => {
+  const prevSalesCaida = index ? byPeriod(index, prev.year, prev.month) : salesInPeriod(sales, prev.year, prev.month)
+  prevSalesCaida.forEach((s) => {
     if (!s.producto) return
     anterior[s.producto] = (anterior[s.producto] ?? 0) + s.unidades
   })
@@ -397,8 +497,9 @@ function insightsProductoEnCaida(
 function insightsProductoConcentrado(
   sales: SaleRecord[],
   selectedPeriod: { year: number; month: number },
+  index?: SaleIndex,
 ): Insight[] {
-  const periodSales = salesInPeriod(sales, selectedPeriod.year, selectedPeriod.month)
+  const periodSales = index ? byPeriod(index, selectedPeriod.year, selectedPeriod.month) : salesInPeriod(sales, selectedPeriod.year, selectedPeriod.month)
 
   const byProd: Record<string, Record<string, number>> = {}
   periodSales.forEach((s) => {
@@ -421,7 +522,7 @@ function insightsProductoConcentrado(
       prioridad: 'MEDIA',
       emoji: '⚠️',
       titulo: `Producto concentrado — ${producto}`,
-      descripcion: `El ${pct(topPct)} de ${producto} lo vende solo ${topVendedor}. Si ese vendedor sale, el producto pierde su principal canal.`,
+      descripcion: `El ${pct(topPct)} de ${producto} lo vende solo ${topVendedor}. Si ese vendedor deja de mover ese producto, perdería su principal canal activo.`,
       producto,
       vendedor: topVendedor,
       valor_numerico: topPct,
@@ -436,17 +537,20 @@ function insightsProductoConcentrado(
 function insightsProductoEnCrecimiento(
   sales: SaleRecord[],
   selectedPeriod: { year: number; month: number },
+  index?: SaleIndex,
 ): Insight[] {
   const { year, month } = selectedPeriod
   const prev = prevPeriod(year, month)
 
   const actual: Record<string, number> = {}
-  salesInPeriod(sales, year, month).forEach((s) => {
+  const periodSalesCrecim = index ? byPeriod(index, year, month) : salesInPeriod(sales, year, month)
+  periodSalesCrecim.forEach((s) => {
     if (!s.producto) return
     actual[s.producto] = (actual[s.producto] ?? 0) + s.unidades
   })
   const anterior: Record<string, number> = {}
-  salesInPeriod(sales, prev.year, prev.month).forEach((s) => {
+  const prevSalesCrecim = index ? byPeriod(index, prev.year, prev.month) : salesInPeriod(sales, prev.year, prev.month)
+  prevSalesCrecim.forEach((s) => {
     if (!s.producto) return
     anterior[s.producto] = (anterior[s.producto] ?? 0) + s.unidades
   })
@@ -475,7 +579,7 @@ function insightsProductoEnCrecimiento(
 
 // ─── INSIGHT 15: EQUIPO NO CERRARÁ META ──────────────────────────────────────
 
-function insightEquipoNoCerraraMeta(teamStats: TeamStats): Insight | null {
+function insightEquipoNoCerraraMeta(teamStats: TeamStats, ticketEquipo: number, has_venta_neta: boolean): Insight | null {
   if (!teamStats.meta_equipo || !teamStats.proyeccion_equipo) return null
   const ratio = teamStats.proyeccion_equipo / teamStats.meta_equipo
   if (ratio >= 0.9) return null
@@ -485,16 +589,24 @@ function insightEquipoNoCerraraMeta(teamStats: TeamStats): Insight | null {
     ? teamStats.total_ventas / teamStats.dias_transcurridos : 0
   const ritmoNec = teamStats.dias_restantes > 0 ? brecha / teamStats.dias_restantes : 0
 
-  return {
+  const insight: Insight = {
     id: uid('equipo-meta'),
     tipo: 'riesgo_meta',
     prioridad: 'CRITICA',
     emoji: '🔴',
-    titulo: 'Equipo no cerrará la meta del mes',
+    titulo: 'Equipo difícilmente cerrará la meta del mes',
     descripcion: `El equipo proyecta cerrar en ${pct(ratio * 100)} de la meta. Faltan ${fmt(brecha)} uds en ${teamStats.dias_restantes} días. Ritmo necesario: ${fmt(ritmoNec, 1)} uds/día (actual: ${fmt(ritmoActual, 1)}).`,
     valor_numerico: ratio * 100,
     accion_sugerida: 'Ver en Metas',
   }
+  if (has_venta_neta && ticketEquipo > 0 && brecha > 0) {
+    insight.impacto_economico = {
+      valor: Math.round(brecha * ticketEquipo),
+      descripcion: 'en ventas proyectadas que no se alcanzarán',
+      tipo: 'perdida',
+    }
+  }
+  return insight
 }
 
 // ─── INSIGHT 16: META ALCANZABLE CON ESFUERZO ────────────────────────────────
@@ -528,6 +640,7 @@ function insightsPatronSubejecucion(
   sales: SaleRecord[],
   metas: MetaRecord[],
   selectedPeriod: { year: number; month: number },
+  index?: SaleIndex,
 ): Insight[] {
   const { year, month } = selectedPeriod
   const insights: Insight[] = []
@@ -545,7 +658,8 @@ function insightsPatronSubejecucion(
         (mr) => mr.mes_periodo === pk && mr.vendedor.toLowerCase() === v.vendedor.toLowerCase()
       )
       if (!metaHist) continue
-      const ventasHist = salesInPeriod(sales, y, m)
+      const periodSalesSubej = index ? byPeriod(index, y, m) : salesInPeriod(sales, y, m)
+      const ventasHist = periodSalesSubej
         .filter((s) => s.vendedor === v.vendedor)
         .reduce((a, s) => a + s.unidades, 0)
       const cumpl = (ventasHist / metaHist.meta) * 100
@@ -597,13 +711,14 @@ function insightsDobleRiesgo(
   vendorAnalysis: VendorAnalysis[],
   clientesDormidos: ClienteDormido[],
   config: Configuracion,
+  has_venta_neta: boolean,
 ): Insight[] {
   return vendorAnalysis
     .filter((v) => (v.riesgo === 'critico' || v.riesgo === 'riesgo'))
     .map((v) => {
       const dormidos = clientesDormidos.filter((c) => c.vendedor === v.vendedor)
       if (dormidos.length === 0) return null
-      return {
+      const insight: Insight = {
         id: uid('doble-riesgo'),
         tipo: 'cruzado' as const,
         prioridad: 'CRITICA' as const,
@@ -614,6 +729,17 @@ function insightsDobleRiesgo(
         valor_numerico: dormidos.length,
         accion_sugerida: 'Ver en Vendedores',
       }
+      if (has_venta_neta) {
+        const valorDormidos = dormidos.reduce((a, c) => a + c.valor_historico, 0)
+        if (valorDormidos > 0) {
+          insight.impacto_economico = {
+            valor: Math.round(valorDormidos),
+            descripcion: 'en cuentas sin actividad asignadas a este vendedor',
+            tipo: 'riesgo',
+          }
+        }
+      }
+      return insight
     })
     .filter(Boolean) as Insight[]
 }
@@ -625,29 +751,38 @@ function insightsCaidaExplicada(
   sales: SaleRecord[],
   clientesDormidos: ClienteDormido[],
   selectedPeriod: { year: number; month: number },
+  has_venta_neta: boolean,
+  index?: SaleIndex,
 ): Insight[] {
   const { year, month } = selectedPeriod
   const prev = prevPeriod(year, month)
   const insights: Insight[] = []
 
   for (const v of vendorAnalysis) {
-    if (v.variacion_pct === null || v.variacion_pct >= -15) continue
+    if ((v.periodos_base_promedio ?? 0) < 2) continue
+    if (v.variacion_vs_promedio_pct === null || (v.variacion_vs_promedio_pct ?? 0) >= -10) continue
     if (v.ventas_mes_anterior === 0) continue
 
     const clientesActual: Record<string, number> = {}
-    salesInPeriod(sales, year, month)
+    const clientesActualNeta: Record<string, number> = {}
+    const periodSalesCaida2 = index ? byPeriod(index, year, month) : salesInPeriod(sales, year, month)
+    periodSalesCaida2
       .filter((s) => s.vendedor === v.vendedor)
       .forEach((s) => {
         if (!s.cliente) return
         clientesActual[s.cliente] = (clientesActual[s.cliente] ?? 0) + s.unidades
+        clientesActualNeta[s.cliente] = (clientesActualNeta[s.cliente] ?? 0) + (s.venta_neta ?? 0)
       })
 
     const clientesAnterior: Record<string, number> = {}
-    salesInPeriod(sales, prev.year, prev.month)
+    const clientesAnteriorNeta: Record<string, number> = {}
+    const prevSalesCaida2 = index ? byPeriod(index, prev.year, prev.month) : salesInPeriod(sales, prev.year, prev.month)
+    prevSalesCaida2
       .filter((s) => s.vendedor === v.vendedor)
       .forEach((s) => {
         if (!s.cliente) return
         clientesAnterior[s.cliente] = (clientesAnterior[s.cliente] ?? 0) + s.unidades
+        clientesAnteriorNeta[s.cliente] = (clientesAnteriorNeta[s.cliente] ?? 0) + (s.venta_neta ?? 0)
       })
 
     const caidaTotal = v.ventas_mes_anterior - v.ventas_periodo
@@ -659,6 +794,7 @@ function insightsCaidaExplicada(
         caida: ventAnt - (clientesActual[cliente] ?? 0),
         ventasAnterior: ventAnt,
         ventasActual: clientesActual[cliente] ?? 0,
+        caidaNeta: (clientesAnteriorNeta[cliente] ?? 0) - (clientesActualNeta[cliente] ?? 0),
       }))
       .filter((x) => x.caida > 0)
       .sort((a, b) => b.caida - a.caida)
@@ -670,7 +806,7 @@ function insightsCaidaExplicada(
 
     const dormido = clientesDormidos.find((c) => c.cliente === top.cliente)
 
-    insights.push({
+    const insight: Insight = {
       id: uid('caida-explicada'),
       tipo: 'cruzado',
       prioridad: 'CRITICA',
@@ -681,7 +817,15 @@ function insightsCaidaExplicada(
       cliente: top.cliente,
       valor_numerico: pctExplicado,
       accion_sugerida: 'Ver en Clientes',
-    })
+    }
+    if (has_venta_neta && top.caidaNeta > 0) {
+      insight.impacto_economico = {
+        valor: Math.round(top.caidaNeta),
+        descripcion: `de caída explicada por ${top.cliente}`,
+        tipo: 'perdida',
+      }
+    }
+    insights.push(insight)
   }
 
   return insights
@@ -699,53 +843,85 @@ export function generateInsights(
   dataAvailability: DataAvailability,
   config: Configuracion,
   selectedPeriod: { year: number; month: number },
+  index?: SaleIndex,
 ): Insight[] {
   _idCounter = 0
 
-  const fechaReferencia = sales.length > 0
-    ? sales.reduce((max, s) => s.fecha > max ? s.fecha : max, sales[0].fecha)
-    : new Date()
+  const fechaReferencia = index && index.fechaReferencia.getTime() > 0
+    ? index.fechaReferencia
+    : sales.length > 0
+      ? sales.reduce((max, s) => s.fecha > max ? s.fecha : max, sales[0].fecha)
+      : new Date()
+
+  // ── Pre-computaciones para impacto_economico ──
+  const periodSalesAll = index ? byPeriod(index, selectedPeriod.year, selectedPeriod.month) : salesInPeriod(sales, selectedPeriod.year, selectedPeriod.month)
+  const ticketEquipo = (() => {
+    const u = periodSalesAll.reduce((a, s) => a + s.unidades, 0)
+    const n = periodSalesAll.reduce((a, s) => a + (s.venta_neta ?? 0), 0)
+    return u > 0 && dataAvailability.has_venta_neta ? n / u : 0
+  })()
+  const preciosPorVendedor = new Map<string, number>()
+  if (dataAvailability.has_venta_neta) {
+    for (const v of vendorAnalysis) {
+      const vs = periodSalesAll.filter(s => s.vendedor === v.vendedor)
+      const u = vs.reduce((a, s) => a + s.unidades, 0)
+      const n = vs.reduce((a, s) => a + (s.venta_neta ?? 0), 0)
+      preciosPorVendedor.set(v.vendedor, u > 0 ? n / u : ticketEquipo)
+    }
+  }
+  const ventasNetaTop3 = dataAvailability.has_venta_neta && dataAvailability.has_cliente
+    ? concentracion.slice(0, 3).reduce((sum, c) => {
+        const clientSales = index
+          ? (index.byClient.get(c.cliente) ?? []).filter(s => {
+              const start = new Date(selectedPeriod.year, selectedPeriod.month, 1)
+              const end = new Date(selectedPeriod.year, selectedPeriod.month + 1, 0, 23, 59, 59, 999)
+              return s.fecha >= start && s.fecha <= end
+            })
+          : periodSalesAll.filter(s => s.cliente === c.cliente)
+        return sum + clientSales.reduce((a, s) => a + (s.venta_neta ?? 0), 0)
+      }, 0)
+    : 0
 
   const all: (Insight | null | Insight[])[] = []
 
   // ── Riesgo de Vendedor ──
   for (const v of vendorAnalysis) {
-    if (dataAvailability.has_metas) all.push(insightMetaEnPeligro(v, teamStats))
+    if (dataAvailability.has_metas) all.push(insightMetaEnPeligro(v, teamStats, preciosPorVendedor.get(v.vendedor) ?? 0, dataAvailability.has_venta_neta))
     all.push(insightRachaNegativa(v, config))
-    if (dataAvailability.has_cliente) all.push(insightDependenciaCliente(v, sales, selectedPeriod, config))
+    if (dataAvailability.has_cliente) all.push(insightDependenciaCliente(v, sales, selectedPeriod, config, index))
     all.push(insightCaidaAcelerada(v))
     if (dataAvailability.has_metas) all.push(insightSuperandoMeta(v))
-    all.push(insightMejorMomento(v, sales, selectedPeriod))
+    all.push(insightMejorMomento(v, sales, selectedPeriod, index))
   }
 
   // ── Riesgo de Cliente ──
   if (dataAvailability.has_cliente) {
     all.push(...insightsClientesDormidos(clientesDormidos))
-    all.push(...insightsClienteEnDeclive(sales, selectedPeriod))
-    all.push(insightConcentracionSistemica(concentracion, teamStats))
-    all.push(...insightsClienteNuevoActivo(sales, selectedPeriod, fechaReferencia))
+    all.push(...insightsClienteEnDeclive(sales, selectedPeriod, index))
+    all.push(insightConcentracionSistemica(concentracion, teamStats, ventasNetaTop3, dataAvailability.has_venta_neta))
+    all.push(...insightsClienteNuevoActivo(sales, selectedPeriod, fechaReferencia, index))
   }
 
   // ── Riesgo de Producto ──
   if (dataAvailability.has_producto) {
-    all.push(...insightsProductoSinMovimiento(sales, fechaReferencia))
-    all.push(...insightsProductoEnCaida(sales, selectedPeriod))
-    if (dataAvailability.has_cliente) all.push(...insightsProductoConcentrado(sales, selectedPeriod))
-    all.push(...insightsProductoEnCrecimiento(sales, selectedPeriod))
+    all.push(...insightsProductoSinMovimiento(sales, fechaReferencia, index))
+    all.push(...insightsProductoEnCaida(sales, selectedPeriod, index))
+    if (dataAvailability.has_cliente) all.push(...insightsProductoConcentrado(sales, selectedPeriod, index))
+    all.push(...insightsProductoEnCrecimiento(sales, selectedPeriod, index))
   }
 
   // ── Riesgo de Meta ──
   if (dataAvailability.has_metas) {
-    all.push(insightEquipoNoCerraraMeta(teamStats))
+    all.push(insightEquipoNoCerraraMeta(teamStats, ticketEquipo, dataAvailability.has_venta_neta))
     all.push(insightMetaAlcanzable(teamStats))
-    all.push(...insightsPatronSubejecucion(vendorAnalysis, sales, metas, selectedPeriod))
+    all.push(...insightsPatronSubejecucion(vendorAnalysis, sales, metas, selectedPeriod, index))
     all.push(...insightsMetaSuperada(vendorAnalysis, teamStats))
   }
 
   // ── Cruzados ──
   if (dataAvailability.has_cliente) {
-    all.push(...insightsDobleRiesgo(vendorAnalysis, clientesDormidos, config))
-    all.push(...insightsCaidaExplicada(vendorAnalysis, sales, clientesDormidos, selectedPeriod))
+    all.push(...insightsDobleRiesgo(vendorAnalysis, clientesDormidos, config, dataAvailability.has_venta_neta))
+    all.push(...insightsCaidaExplicada(vendorAnalysis, sales, clientesDormidos, selectedPeriod, dataAvailability.has_venta_neta, index))
   }
 
   return sortInsights(all.flat())

@@ -1,7 +1,7 @@
 import { useMemo, type FC } from 'react'
 import { cn } from '../../lib/utils'
 import { salesInPeriod, prevPeriod } from '../../lib/analysis'
-import type { VendorAnalysis, Insight, SaleRecord } from '../../types'
+import type { VendorAnalysis, Insight, SaleRecord, ClienteDormido } from '../../types'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -11,6 +11,7 @@ interface Props {
   sales: SaleRecord[]
   selectedPeriod: { year: number; month: number }
   allVendorAnalysis: VendorAnalysis[]
+  clientesDormidos: ClienteDormido[]
   onClose: () => void
 }
 
@@ -271,7 +272,14 @@ function useRecomendaciones(
 
 // ─── Componente principal ─────────────────────────────────────────────────────
 
-export default function VendedorPanel({ vendedor: v, insights, sales, selectedPeriod, allVendorAnalysis, onClose }: Props) {
+const RECOVERY_CONFIG = {
+  alta:        { cls: 'bg-[#00B894]/15 text-[#00B894] border-[#00B894]/30',        label: 'Alta' },
+  recuperable: { cls: 'bg-blue-500/15 text-blue-400 border-blue-500/30',            label: 'Recuperable' },
+  dificil:     { cls: 'bg-amber-500/15 text-amber-400 border-amber-500/30',          label: 'Difícil' },
+  perdido:     { cls: 'bg-zinc-700/50 text-zinc-400 border-zinc-600/30',             label: 'Perdido' },
+}
+
+export default function VendedorPanel({ vendedor: v, insights, sales, selectedPeriod, allVendorAnalysis, clientesDormidos, onClose }: Props) {
   const rConfig = RIESGO_CONFIG[v.riesgo]
   const recomendaciones = useRecomendaciones(v, sales, selectedPeriod, allVendorAnalysis)
   const vendorInsights = insights.filter((i) => i.vendedor === v.vendedor)
@@ -323,7 +331,46 @@ export default function VendedorPanel({ vendedor: v, insights, sales, selectedPe
           {v.semanas_bajo_promedio > 0 && (
             <Stat label="Semanas racha" value={String(v.semanas_bajo_promedio)} unit="sem" colorVal={-v.semanas_bajo_promedio} />
           )}
+          {v.promedio_3m !== undefined && v.promedio_3m > 0 && (
+            <Stat label="Promedio 3m" value={v.promedio_3m.toLocaleString()} unit="uds" />
+          )}
+          {v.variacion_vs_promedio_pct !== undefined && v.variacion_vs_promedio_pct !== null && (
+            <Stat
+              label="Var. vs prom."
+              value={`${v.variacion_vs_promedio_pct >= 0 ? '+' : ''}${v.variacion_vs_promedio_pct.toFixed(1)}%`}
+              colorVal={v.variacion_vs_promedio_pct}
+              unit={`(${v.periodos_base_promedio ?? 3}m base)`}
+            />
+          )}
         </div>
+
+        {/* Clientes dormidos del vendedor */}
+        {(v.riesgo === 'critico' || v.riesgo === 'riesgo') && (() => {
+          const dormidos = clientesDormidos
+            .filter((d) => d.vendedor === v.vendedor)
+            .slice(0, 3)
+          if (dormidos.length === 0) return null
+          return (
+            <div className="space-y-2">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-600">Clientes dormidos ({dormidos.length})</p>
+              {dormidos.map((d) => {
+                const rc = RECOVERY_CONFIG[d.recovery_label]
+                return (
+                  <div key={d.cliente} className="bg-zinc-900 border border-zinc-700/40 rounded-xl p-3 space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-bold text-zinc-200 truncate">{d.cliente}</span>
+                      <span className={cn('shrink-0 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase border', rc.cls)}>
+                        {rc.label} {d.recovery_score}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-zinc-500 leading-relaxed">{d.recovery_explicacion}</p>
+                    <p className="text-[10px] text-zinc-600">{d.dias_sin_actividad} días sin comprar · historial {d.compras_historicas} compras</p>
+                  </div>
+                )
+              })}
+            </div>
+          )
+        })()}
 
         {/* Recomendaciones */}
         {recomendaciones.length > 0 && (

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
@@ -10,8 +10,15 @@ function formatDays(d: number): string {
   return `${d}d`
 }
 
-type SortKey = 'dias_sin_actividad' | 'valor_historico' | 'compras_historicas' | 'vendedor' | 'cliente'
+type SortKey = 'prioridad' | 'dias_sin_actividad' | 'valor_historico' | 'compras_historicas' | 'vendedor' | 'cliente'
 type SortDir = 'asc' | 'desc'
+
+const RECOVERY_CONFIG = {
+  alta:        { label: 'Alta',        cls: 'bg-[#00B894]/10 text-[#00B894]' },
+  recuperable: { label: 'Recuperable', cls: 'bg-blue-500/10 text-blue-400' },
+  dificil:     { label: 'Difícil',     cls: 'bg-yellow-500/10 text-yellow-400' },
+  perdido:     { label: 'Perdido',     cls: 'bg-red-500/10 text-red-400' },
+}
 
 export default function ClientesPage() {
   useAnalysis()
@@ -21,12 +28,17 @@ export default function ClientesPage() {
     concentracionRiesgo,
     dataAvailability,
     configuracion,
-    isProcessed,
   } = useAppStore()
 
-  const [sortKey, setSortKey] = useState<SortKey>('dias_sin_actividad')
+  const [sortKey, setSortKey] = useState<SortKey>('prioridad')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [tab, setTab] = useState<'dormidos' | 'concentracion'>('dormidos')
+  const [filterVendedor, setFilterVendedor] = useState<string>('all')
+
+  const vendedores = useMemo(
+    () => [...new Set(clientesDormidos.map(c => c.vendedor))].sort(),
+    [clientesDormidos],
+  )
 
   if (!dataAvailability.has_cliente) {
     navigate('/dashboard')
@@ -49,8 +61,13 @@ export default function ClientesPage() {
       : <ChevronUp className="w-3 h-3 text-[#00B894]" />
   }
 
-  const sorted = [...clientesDormidos].sort((a, b) => {
+  const filtered = filterVendedor === 'all'
+    ? clientesDormidos
+    : clientesDormidos.filter(c => c.vendedor === filterVendedor)
+
+  const sorted = [...filtered].sort((a, b) => {
     const mul = sortDir === 'desc' ? -1 : 1
+    if (sortKey === 'prioridad') return mul * (a.recovery_score - b.recovery_score)
     if (sortKey === 'dias_sin_actividad') return mul * (a.dias_sin_actividad - b.dias_sin_actividad)
     if (sortKey === 'valor_historico') return mul * (a.valor_historico - b.valor_historico)
     if (sortKey === 'compras_historicas') return mul * (a.compras_historicas - b.compras_historicas)
@@ -111,36 +128,48 @@ export default function ClientesPage() {
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-1 bg-zinc-900/50 border border-zinc-800 rounded-xl p-1 w-fit">
-        <button
-          onClick={() => setTab('dormidos')}
-          className={cn(
-            'px-4 py-2 rounded-lg text-xs font-bold transition-all',
-            tab === 'dormidos'
-              ? 'bg-[#00B894] text-black'
-              : 'text-zinc-500 hover:text-zinc-300'
-          )}
-        >
-          <span className="flex items-center gap-1.5">
-            <Clock className="w-3.5 h-3.5" />
-            Clientes Dormidos ({clientesDormidos.length})
-          </span>
-        </button>
-        <button
-          onClick={() => setTab('concentracion')}
-          className={cn(
-            'px-4 py-2 rounded-lg text-xs font-bold transition-all',
-            tab === 'concentracion'
-              ? 'bg-orange-500 text-black'
-              : 'text-zinc-500 hover:text-zinc-300'
-          )}
-        >
-          <span className="flex items-center gap-1.5">
-            <AlertTriangle className="w-3.5 h-3.5" />
-            Concentración ({concentracionRiesgo.length})
-          </span>
-        </button>
+      {/* Tabs + filtro vendedor */}
+      <div className="flex flex-wrap items-center gap-3 justify-between">
+        <div className="flex gap-1 bg-zinc-900/50 border border-zinc-800 rounded-xl p-1">
+          <button
+            onClick={() => setTab('dormidos')}
+            className={cn(
+              'px-4 py-2 rounded-lg text-xs font-bold transition-all',
+              tab === 'dormidos'
+                ? 'bg-[#00B894] text-black'
+                : 'text-zinc-500 hover:text-zinc-300'
+            )}
+          >
+            <span className="flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5" />
+              Clientes Dormidos ({clientesDormidos.length})
+            </span>
+          </button>
+          <button
+            onClick={() => setTab('concentracion')}
+            className={cn(
+              'px-4 py-2 rounded-lg text-xs font-bold transition-all',
+              tab === 'concentracion'
+                ? 'bg-orange-500 text-black'
+                : 'text-zinc-500 hover:text-zinc-300'
+            )}
+          >
+            <span className="flex items-center gap-1.5">
+              <AlertTriangle className="w-3.5 h-3.5" />
+              Concentración ({concentracionRiesgo.length})
+            </span>
+          </button>
+        </div>
+        {tab === 'dormidos' && vendedores.length > 1 && (
+          <select
+            value={filterVendedor}
+            onChange={e => setFilterVendedor(e.target.value)}
+            className="px-3 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-zinc-200 focus:outline-none focus:border-[#00B894]/50"
+          >
+            <option value="all">Todos los vendedores</option>
+            {vendedores.map(v => <option key={v} value={v}>{v}</option>)}
+          </select>
+        )}
       </div>
 
       {/* Clientes dormidos table */}
@@ -149,8 +178,10 @@ export default function ClientesPage() {
           {sorted.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-zinc-600">
               <Users className="w-10 h-10 mb-3 opacity-30" />
-              <p className="font-bold text-sm">Sin clientes dormidos</p>
-              <p className="text-xs mt-1">Todos tus clientes han comprado recientemente</p>
+              <p className="font-bold text-sm">
+                {filterVendedor === 'all' ? 'Sin clientes dormidos' : `Sin clientes dormidos para ${filterVendedor}`}
+              </p>
+              <p className="text-xs mt-1">Todos los clientes han comprado recientemente</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -160,9 +191,10 @@ export default function ClientesPage() {
                     {([
                       ['cliente', 'Cliente'],
                       ['vendedor', 'Vendedor'],
-                      ['dias_sin_actividad', 'Días inactivo'],
-                      ['compras_historicas', 'Compras hist.'],
+                      ['dias_sin_actividad', 'Inactivo'],
+                      ['compras_historicas', 'Compras'],
                       ['valor_historico', 'Valor hist.'],
+                      ['prioridad', 'Recuperación'],
                     ] as [SortKey, string][]).map(([k, label]) => (
                       <th
                         key={k}
@@ -175,50 +207,57 @@ export default function ClientesPage() {
                         </span>
                       </th>
                     ))}
-                    <th className="px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-zinc-600">
-                      Riesgo
-                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {sorted.map((c, i) => {
-                    const riskLevel =
-                      c.dias_sin_actividad >= 90 ? 'alto' :
-                        c.dias_sin_actividad >= 60 ? 'medio' : 'bajo'
+                    const rc = RECOVERY_CONFIG[c.recovery_label]
                     return (
                       <tr key={i} className="border-b border-zinc-800/50 hover:bg-zinc-900/50 transition-colors">
-                        <td className="px-5 py-3 font-bold text-zinc-200">{c.cliente}</td>
+                        <td className="px-5 py-3">
+                          <p className="font-bold text-zinc-200">{c.cliente}</p>
+                          <p className="text-zinc-600 text-[10px] mt-0.5 max-w-[220px] truncate" title={c.recovery_explicacion}>
+                            {c.recovery_explicacion}
+                          </p>
+                        </td>
                         <td className="px-5 py-3 text-zinc-400">{c.vendedor}</td>
                         <td className={cn(
-                          'px-5 py-3 font-bold',
-                          riskLevel === 'alto' ? 'text-red-400' :
-                            riskLevel === 'medio' ? 'text-yellow-400' : 'text-zinc-400'
+                          'px-5 py-3 font-bold tabular-nums',
+                          c.dias_sin_actividad >= 90 ? 'text-red-400' :
+                            c.dias_sin_actividad >= 60 ? 'text-yellow-400' : 'text-zinc-400'
                         )}>
                           {formatDays(c.dias_sin_actividad)}
                         </td>
-                        <td className="px-5 py-3 text-zinc-400">{c.compras_historicas}</td>
-                        <td className="px-5 py-3 text-zinc-300 font-medium">
+                        <td className="px-5 py-3 text-zinc-400 tabular-nums">{c.compras_historicas}</td>
+                        <td className="px-5 py-3 text-zinc-300 font-medium tabular-nums">
                           {moneda} {c.valor_historico >= 1000
                             ? `${(c.valor_historico / 1000).toFixed(1)}k`
                             : c.valor_historico.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                         </td>
                         <td className="px-5 py-3">
-                          <span className={cn(
-                            'px-2 py-1 rounded text-[10px] font-bold uppercase',
-                            riskLevel === 'alto'
-                              ? 'bg-red-500/10 text-red-400'
-                              : riskLevel === 'medio'
-                                ? 'bg-yellow-500/10 text-yellow-400'
-                                : 'bg-zinc-700/50 text-zinc-500'
-                          )}>
-                            {riskLevel === 'alto' ? 'Crítico' : riskLevel === 'medio' ? 'Medio' : 'Bajo'}
-                          </span>
+                          <div className="flex flex-col gap-1.5">
+                            <span className={cn('px-2 py-0.5 rounded text-[10px] font-bold w-fit', rc.cls)}>
+                              {rc.label}
+                            </span>
+                            <div className="w-20 h-1 bg-zinc-800 rounded-full overflow-hidden">
+                              <div
+                                className={cn('h-full rounded-full', c.recovery_score >= 70 ? 'bg-[#00B894]' : c.recovery_score >= 40 ? 'bg-blue-400' : c.recovery_score >= 20 ? 'bg-yellow-400' : 'bg-red-400')}
+                                style={{ width: `${c.recovery_score}%` }}
+                              />
+                            </div>
+                            <span className="text-[10px] text-zinc-600 tabular-nums">{c.recovery_score}/100</span>
+                          </div>
                         </td>
                       </tr>
                     )
                   })}
                 </tbody>
               </table>
+              {filtered.length !== clientesDormidos.length && (
+                <p className="px-5 py-2 text-[10px] text-zinc-600 border-t border-zinc-800">
+                  Mostrando {filtered.length} de {clientesDormidos.length} clientes dormidos
+                </p>
+              )}
             </div>
           )}
         </div>

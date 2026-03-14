@@ -57,6 +57,9 @@ export interface VendorAnalysis {
   clientes_activos?: number
   semanas_bajo_promedio: number
   promedio_semanal_historico?: number
+  promedio_3m?: number
+  variacion_vs_promedio_pct?: number | null
+  periodos_base_promedio?: number
   riesgo: RiesgoVendedor
   ytd_actual?: number
   ytd_anterior?: number
@@ -108,6 +111,11 @@ export interface Insight {
   producto?: string
   valor_numerico?: number
   accion_sugerida?: string
+  impacto_economico?: {
+    valor: number
+    descripcion: string
+    tipo: 'perdida' | 'riesgo' | 'oportunidad'
+  }
 }
 
 // ─── CLIENTES DORMIDOS ────────────────────────────────────────────────────────
@@ -119,6 +127,9 @@ export interface ClienteDormido {
   dias_sin_actividad: number
   valor_historico: number
   compras_historicas: number
+  recovery_score: number
+  recovery_label: 'alta' | 'recuperable' | 'dificil' | 'perdido'
+  recovery_explicacion: string
 }
 
 // ─── CONCENTRACIÓN DE RIESGO ──────────────────────────────────────────────────
@@ -128,6 +139,34 @@ export interface ConcentracionRiesgo {
   pct_del_total: number
   vendedores_involucrados: string[]
   ventas_absolutas: number
+}
+
+// ─── FORECAST DESDE BACKEND ───────────────────────────────────────────────────
+
+export interface SeriesDataPoint {
+  month: number
+  value: number | null
+}
+
+export interface ForecastKPIs {
+  ytd: number
+  ytd_prior_year: number
+  vs_prior_year_pct: number | null
+  best_month: { month: number; value: number } | null
+  projected_year_total: number
+}
+
+export interface ForecastData {
+  year: number
+  metric: 'units' | 'revenue'
+  seller: string
+  kpis: ForecastKPIs
+  series: {
+    actual_current_year: SeriesDataPoint[]
+    prior_year: SeriesDataPoint[]
+    forecast: SeriesDataPoint[]
+    meta: SeriesDataPoint[]
+  }
 }
 
 // ─── UPLOAD / SESIÓN ──────────────────────────────────────────────────────────
@@ -198,4 +237,49 @@ export interface Configuracion {
   umbral_baja_cobertura: number
   umbral_normal: number
   tema: 'dark' | 'light'
+  deepseek_api_key?: string
+}
+
+// ─── MULTI-TENANT ─────────────────────────────────────────────────────────────
+
+export interface Organization {
+  id: string
+  name: string
+  owner_id: string
+  created_at: string
+}
+
+export type OrgRole = 'owner' | 'editor' | 'viewer'
+
+export interface OrgMember {
+  id: string
+  org_id: string
+  user_id: string
+  role: OrgRole
+  joined_at: string
+}
+
+export interface OrgInvitation {
+  id: string
+  org_id: string
+  email: string
+  role: OrgRole
+  token: string
+  accepted_at: string | null
+  expires_at: string
+  created_at: string
+}
+
+// ─── CHAT CONTEXT (para IA) ───────────────────────────────────────────────────
+
+export interface ChatContext {
+  configuracion: Configuracion
+  selectedPeriod: { year: number; month: number }
+  vendorAnalysis: VendorAnalysis[]
+  teamStats: TeamStats | null
+  insights: Insight[]
+  clientesDormidos: ClienteDormido[]
+  concentracionRiesgo: ConcentracionRiesgo[]
+  categoriasInventario: CategoriaInventario[]
+  dataAvailability: DataAvailability
 }

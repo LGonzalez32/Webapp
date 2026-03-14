@@ -12,6 +12,7 @@ import type {
   DataAvailability,
   Configuracion,
   CategoriaInventario,
+  ForecastData,
 } from '../types'
 
 const DEFAULT_CONFIG: Configuracion = {
@@ -24,6 +25,7 @@ const DEFAULT_CONFIG: Configuracion = {
   umbral_baja_cobertura: 15,
   umbral_normal: 30,
   tema: 'dark',
+  deepseek_api_key: 'sk-be7fa627e4a04ca6a0d0be9bdb3fc29c',
 }
 
 const DEFAULT_AVAILABILITY: DataAvailability = {
@@ -50,6 +52,11 @@ interface AppState {
   concentracionRiesgo: ConcentracionRiesgo[]
   categoriasInventario: CategoriaInventario[]
   dataAvailability: DataAvailability
+
+  // Forecast del backend
+  forecastData: ForecastData | null
+  forecastLoading: boolean        // useAnalysis: enriquecimiento proyeccion_cierre
+  forecastChartLoading: boolean   // RendimientoPage: series mensuales para el gráfico
 
   // Control de UI
   isProcessed: boolean
@@ -81,6 +88,9 @@ interface AppState {
   setLoadingMessage: (msg: string) => void
   setSelectedPeriod: (period: { year: number; month: number }) => void
   setConfiguracion: (config: Partial<Configuracion>) => void
+  setForecastData: (data: ForecastData | null) => void
+  setForecastLoading: (loading: boolean) => void
+  setForecastChartLoading: (loading: boolean) => void
 
   resetAll: () => void
 }
@@ -99,6 +109,9 @@ export const useAppStore = create<AppState>()(
       concentracionRiesgo: [],
       categoriasInventario: [],
       dataAvailability: DEFAULT_AVAILABILITY,
+      forecastData: null,
+      forecastLoading: false,
+      forecastChartLoading: false,
       isProcessed: false,
       isLoading: false,
       loadingMessage: '',
@@ -130,6 +143,9 @@ export const useAppStore = create<AppState>()(
         set((state) => ({
           configuracion: { ...state.configuracion, ...config },
         })),
+      setForecastData: (forecastData) => set({ forecastData }),
+      setForecastLoading: (forecastLoading) => set({ forecastLoading }),
+      setForecastChartLoading: (forecastChartLoading) => set({ forecastChartLoading }),
 
       resetAll: () => {
         localStorage.removeItem('salesflow-storage')
@@ -144,6 +160,9 @@ export const useAppStore = create<AppState>()(
           concentracionRiesgo: [],
           categoriasInventario: [],
           dataAvailability: DEFAULT_AVAILABILITY,
+          forecastData: null,
+          forecastLoading: false,
+          forecastChartLoading: false,
           isProcessed: false,
           isLoading: false,
           selectedPeriod: {

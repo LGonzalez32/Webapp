@@ -4,8 +4,10 @@ import Sidebar from './Sidebar'
 import TopBar from './TopBar'
 import { Toaster } from 'sonner'
 import { useAppStore } from '../../store/appStore'
+import { useAutoLoad } from '../../lib/useAutoLoad'
 
 export default function AppLayout() {
+  useAutoLoad()
   const tema = useAppStore((s) => s.configuracion.tema)
 
   useEffect(() => {
