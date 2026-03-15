@@ -6,6 +6,7 @@ import {
   getOrgMembersWithEmail,
   removeMember,
   updateMemberRole,
+  updateOrgJoinPolicy,
 } from '../lib/orgService'
 import type { OrgRole } from '../types'
 
@@ -39,6 +40,8 @@ export default function OrganizacionPage() {
   const [membersError, setMembersError] = useState<string | null>(null)
 
   const [copied, setCopied] = useState(false)
+  const [allowOpenJoin, setAllowOpenJoin] = useState<boolean>(org?.allow_open_join ?? true)
+  const [joinPolicyUpdating, setJoinPolicyUpdating] = useState(false)
 
   // Confirm delete
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
@@ -66,6 +69,15 @@ export default function OrganizacionPage() {
     await navigator.clipboard.writeText(link)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
+  }
+
+  async function handleToggleOpenJoin(value: boolean) {
+    if (!org) return
+    setAllowOpenJoin(value)
+    setJoinPolicyUpdating(true)
+    const { error } = await updateOrgJoinPolicy(org.id, value)
+    if (error) setAllowOpenJoin(!value) // revert on error
+    setJoinPolicyUpdating(false)
   }
 
   async function handleRoleChange(memberId: string, userId: string, newRole: 'editor' | 'viewer') {
@@ -137,16 +149,41 @@ export default function OrganizacionPage() {
             </p>
           </div>
           <div className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)' }}>
-            <code className="flex-1 text-xs truncate" style={{ color: 'var(--color-text-secondary)' }}>
+            <code className="flex-1 text-xs truncate" style={{ color: allowOpenJoin ? 'var(--color-text-secondary)' : 'var(--color-text-secondary)', opacity: allowOpenJoin ? 1 : 0.4 }}>
               {`${window.location.origin}/join/${org.id}`}
             </code>
             <button
-              onClick={() => handleCopyLink(`${window.location.origin}/join/${org.id}`)}
-              className="flex items-center gap-1 px-2 py-1 rounded text-xs flex-shrink-0 transition-colors"
+              onClick={() => allowOpenJoin && handleCopyLink(`${window.location.origin}/join/${org.id}`)}
+              disabled={!allowOpenJoin}
+              className="flex items-center gap-1 px-2 py-1 rounded text-xs flex-shrink-0 transition-colors disabled:opacity-40"
               style={{ color: copied ? 'var(--color-primary)' : 'var(--color-text-secondary)' }}
             >
               {copied ? <Check size={13} /> : <Copy size={13} />}
               {copied ? '¡Copiado!' : 'Copiar'}
+            </button>
+          </div>
+          <div className="flex items-center justify-between pt-1">
+            <div>
+              <p className="text-xs font-medium" style={{ color: 'var(--color-text-primary)' }}>
+                Link abierto
+              </p>
+              <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-secondary)' }}>
+                {allowOpenJoin
+                  ? 'Cualquier persona con el link puede unirse'
+                  : 'El link está desactivado — nadie nuevo puede unirse'}
+              </p>
+            </div>
+            <button
+              onClick={() => handleToggleOpenJoin(!allowOpenJoin)}
+              disabled={joinPolicyUpdating}
+              className="relative flex-shrink-0 w-10 h-5 rounded-full transition-colors duration-200 disabled:opacity-60"
+              style={{ background: allowOpenJoin ? 'var(--color-primary)' : 'var(--color-border)' }}
+              aria-label={allowOpenJoin ? 'Desactivar link abierto' : 'Activar link abierto'}
+            >
+              <span
+                className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform duration-200"
+                style={{ transform: allowOpenJoin ? 'translateX(20px)' : 'translateX(0)' }}
+              />
             </button>
           </div>
         </div>

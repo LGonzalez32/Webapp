@@ -6,12 +6,6 @@ export default function AuthCallbackPage() {
   const navigate = useNavigate()
 
   useEffect(() => {
-    console.log('=== AUTH CALLBACK DEBUG ===')
-    console.log('href:', window.location.href)
-    console.log('search:', window.location.search)
-    console.log('hash:', window.location.hash)
-    console.log('pathname:', window.location.pathname)
-
     const handle = async () => {
       const { data: { session } } = await supabase.auth.getSession()
 

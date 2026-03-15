@@ -350,13 +350,20 @@ export default function VendedorPanel({ vendedor: v, insights, sales, selectedPe
             .filter((d) => d.vendedor === v.vendedor)
             .slice(0, 3)
           if (dormidos.length === 0) return null
+          const impactoTotal = dormidos.reduce((a, d) => a + d.valor_historico, 0)
           return (
             <div className="space-y-2">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-600">Clientes dormidos ({dormidos.length})</p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-600">Clientes dormidos ({dormidos.length})</p>
+                {impactoTotal > 0 && (
+                  <p className="text-[10px] text-zinc-600">hist. total: {impactoTotal.toLocaleString()} uds</p>
+                )}
+              </div>
               {dormidos.map((d) => {
                 const rc = RECOVERY_CONFIG[d.recovery_label]
+                const barColor = d.recovery_score >= 60 ? '#10b981' : d.recovery_score >= 40 ? '#f59e0b' : '#ef4444'
                 return (
-                  <div key={d.cliente} className="bg-zinc-900 border border-zinc-700/40 rounded-xl p-3 space-y-1">
+                  <div key={d.cliente} className="bg-zinc-900 border border-zinc-700/40 rounded-xl p-3 space-y-2">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-sm font-bold text-zinc-200 truncate">{d.cliente}</span>
                       <span className={cn('shrink-0 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase border', rc.cls)}>
@@ -364,7 +371,16 @@ export default function VendedorPanel({ vendedor: v, insights, sales, selectedPe
                       </span>
                     </div>
                     <p className="text-[10px] text-zinc-500 leading-relaxed">{d.recovery_explicacion}</p>
-                    <p className="text-[10px] text-zinc-600">{d.dias_sin_actividad} días sin comprar · historial {d.compras_historicas} compras</p>
+                    <div className="flex items-center justify-between text-[10px] text-zinc-600">
+                      <span>{d.dias_sin_actividad} días sin comprar · {d.compras_historicas} compras</span>
+                      {d.valor_historico > 0 && (
+                        <span className="text-zinc-500">{d.valor_historico.toLocaleString()} uds hist.</span>
+                      )}
+                    </div>
+                    {/* Mini barra de recovery score */}
+                    <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
+                      <div className="h-full rounded-full transition-all" style={{ width: `${d.recovery_score}%`, background: barColor }} />
+                    </div>
                   </div>
                 )
               })}

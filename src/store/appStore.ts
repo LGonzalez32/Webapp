@@ -25,7 +25,7 @@ const DEFAULT_CONFIG: Configuracion = {
   umbral_baja_cobertura: 15,
   umbral_normal: 30,
   tema: 'dark',
-  deepseek_api_key: 'sk-be7fa627e4a04ca6a0d0be9bdb3fc29c',
+  deepseek_api_key: '',
 }
 
 const DEFAULT_AVAILABILITY: DataAvailability = {

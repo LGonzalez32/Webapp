@@ -1,9 +1,10 @@
 import logging
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.api.routes import health, forecast, sales_forecast
+from app.api.routes import health, forecast, sales_forecast, chat
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger(__name__)
@@ -14,17 +15,20 @@ app = FastAPI(
     version="1.0.0",
 )
 
+_allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_allowed_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 app.include_router(health.router, prefix="/api/v1", tags=["health"])
 app.include_router(forecast.router, prefix="/api/v1", tags=["forecast"])
 app.include_router(sales_forecast.router, prefix="/api/v1", tags=["sales-forecast"])
+app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
 
 
 @app.on_event("startup")

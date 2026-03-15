@@ -1,7 +1,6 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '../store/appStore'
-import { Store, BarChart3, ShieldAlert, Trash2, Save, Package, Bot, Eye, EyeOff } from 'lucide-react'
+import { Store, BarChart3, Save, Package } from 'lucide-react'
 
 const CURRENCIES = [
   { code: 'USD', name: 'Dólar Estadounidense' },
@@ -16,13 +15,8 @@ const CURRENCIES = [
 ]
 
 export default function ConfiguracionPage() {
-  const navigate = useNavigate()
-  const { configuracion, setConfiguracion, resetAll } = useAppStore()
+  const { configuracion, setConfiguracion, setIsProcessed } = useAppStore()
   const [local, setLocal] = useState({ ...configuracion })
-  const [showResetConfirm, setShowResetConfirm] = useState(false)
-  const [showApiKey, setShowApiKey] = useState(false)
-
-  const { setIsProcessed } = useAppStore()
 
   const inventoryError =
     local.umbral_riesgo_quiebre >= local.umbral_baja_cobertura ||
@@ -33,69 +27,11 @@ export default function ConfiguracionPage() {
     setIsProcessed(false)
   }
 
-  const handleReset = () => {
-    resetAll()
-    navigate('/cargar')
-  }
-
   return (
     <div className="max-w-2xl mx-auto space-y-8 pb-20 animate-in fade-in duration-500">
       <div>
         <h1 className="text-3xl font-black text-zinc-50 tracking-tight">Configuración</h1>
         <p className="text-sm text-zinc-500 mt-1">Ajustes de empresa y parámetros de análisis</p>
-      </div>
-
-      {/* Integración IA */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
-        <div className="px-6 py-4 border-b border-zinc-800 flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-violet-500/10 flex items-center justify-center border border-violet-500/20">
-            <Bot className="w-4 h-4 text-violet-400" />
-          </div>
-          <div>
-            <h3 className="text-sm font-bold text-zinc-50">Integración IA</h3>
-            <p className="text-[11px] text-zinc-500">Chat con IA — DeepSeek</p>
-          </div>
-        </div>
-        <div className="p-6 space-y-4">
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">
-              DeepSeek API Key
-            </label>
-            <div className="relative">
-              <input
-                type={showApiKey ? 'text' : 'password'}
-                value={local.deepseek_api_key ?? ''}
-                onChange={(e) => setLocal({ ...local, deepseek_api_key: e.target.value })}
-                placeholder="sk-..."
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 pr-11 text-sm text-white font-mono focus:outline-none focus:border-violet-500/50 transition-all"
-              />
-              <button
-                type="button"
-                onClick={() => setShowApiKey((v) => !v)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 transition-colors"
-              >
-                {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
-            </div>
-            <p className="text-[10px] text-zinc-600">
-              Obtén tu API key en platform.deepseek.com → API Keys
-            </p>
-          </div>
-          <div className="bg-violet-500/5 border border-violet-500/15 rounded-xl px-4 py-3">
-            <p className="text-[11px] text-zinc-400">
-              Tu API key se guarda localmente en tu navegador. Nunca se envía a nuestros servidores.
-            </p>
-          </div>
-          <div className="flex justify-end">
-            <button
-              onClick={handleSave}
-              className="flex items-center gap-2 px-5 py-2.5 bg-violet-600 hover:bg-violet-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-violet-600/20"
-            >
-              <Save className="w-3.5 h-3.5" />
-              Guardar API Key
-            </button>
-          </div>
-        </div>
       </div>
 
       {/* Empresa */}
@@ -269,60 +205,6 @@ export default function ConfiguracionPage() {
         )}
       </div>
 
-      {/* Datos y privacidad */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
-        <div className="px-6 py-4 border-b border-zinc-800 flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-red-500/10 flex items-center justify-center border border-red-500/20">
-            <ShieldAlert className="w-4 h-4 text-red-500" />
-          </div>
-          <div>
-            <h3 className="text-sm font-bold text-zinc-50">Datos y privacidad</h3>
-            <p className="text-[11px] text-zinc-500">Todos los datos se procesan localmente en tu navegador</p>
-          </div>
-        </div>
-        <div className="p-6 flex items-center justify-between">
-          <div>
-            <p className="text-sm font-bold text-zinc-300">Borrar todos los datos</p>
-            <p className="text-[11px] text-zinc-600">Elimina ventas, metas, inventario y configuración.</p>
-          </div>
-          <button
-            onClick={() => setShowResetConfirm(true)}
-            className="flex items-center gap-2 px-4 py-2.5 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded-xl text-xs font-bold transition-all border border-red-500/20"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            Borrar todo
-          </button>
-        </div>
-      </div>
-
-      {/* Reset confirmation modal */}
-      {showResetConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 max-w-sm w-full shadow-2xl">
-            <div className="w-12 h-12 rounded-xl bg-red-500/10 flex items-center justify-center border border-red-500/20 mx-auto mb-5">
-              <Trash2 className="w-6 h-6 text-red-500" />
-            </div>
-            <h3 className="text-lg font-bold text-white text-center mb-2">¿Borrar todo?</h3>
-            <p className="text-xs text-zinc-500 text-center mb-6">
-              Se eliminarán ventas, metas, inventario y análisis. No se puede deshacer.
-            </p>
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                onClick={() => setShowResetConfirm(false)}
-                className="px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl text-xs font-bold transition-all"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={handleReset}
-                className="px-4 py-2.5 bg-red-500 hover:bg-red-400 text-white rounded-xl text-xs font-bold transition-all"
-              >
-                Sí, borrar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

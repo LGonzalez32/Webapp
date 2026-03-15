@@ -237,6 +237,7 @@ export interface Configuracion {
   umbral_baja_cobertura: number
   umbral_normal: number
   tema: 'dark' | 'light'
+  /** @deprecated API key moved to backend env var DEEPSEEK_API_KEY */
   deepseek_api_key?: string
 }
 
@@ -247,6 +248,7 @@ export interface Organization {
   name: string
   owner_id: string
   created_at: string
+  allow_open_join?: boolean
 }
 
 export type OrgRole = 'owner' | 'editor' | 'viewer'
@@ -259,6 +261,7 @@ export interface OrgMember {
   joined_at: string
 }
 
+/** @deprecated No usado en el flujo actual. El join se hace via link abierto (allow_open_join). */
 export interface OrgInvitation {
   id: string
   org_id: string

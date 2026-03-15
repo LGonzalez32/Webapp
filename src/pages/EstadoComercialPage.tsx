@@ -1,9 +1,9 @@
-import { useEffect, useState, useMemo, type FC } from 'react'
+import { useEffect, useState, useMemo, useDeferredValue, type FC } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
 import { cn } from '../lib/utils'
-import type { Insight, InsightTipo, InsightPrioridad, VendorAnalysis, ClienteDormido } from '../types'
+import type { Insight, InsightTipo, InsightPrioridad, VendorAnalysis } from '../types'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 import { salesInPeriod, prevPeriod } from '../lib/analysis'
 import VendedorPanel from '../components/vendedor/VendedorPanel'
@@ -112,7 +112,10 @@ export default function EstadoComercialPage() {
 
   const [dimension, setDimension] = useState<Dimension>('vendedor')
   const [vendedorPanel, setVendedorPanel] = useState<VendorAnalysis | null>(null)
-  const [activeChip, setActiveChip] = useState<ActiveChip>(null)
+  const [expandedChip, setExpandedChip] = useState<ActiveChip>(null)
+  const toggleChip = (chip: ActiveChip) => setExpandedChip(prev => prev === chip ? null : chip)
+  const [expandedCausa, setExpandedCausa] = useState<string | null>(null)
+  const toggleCausa = (label: string) => setExpandedCausa(prev => prev === label ? null : label)
   const [showAllAlertas, setShowAllAlertas] = useState(false)
 
   useEffect(() => {
@@ -125,13 +128,27 @@ export default function EstadoComercialPage() {
   [sales])
   const maxChipMonth = maxDate.getFullYear() === selectedPeriod.year ? maxDate.getMonth() : selectedPeriod.month
 
+  // ── Slices de ventas cacheados (evitar llamadas repetidas a salesInPeriod) ─
+  const salesActual = useMemo(() =>
+    salesInPeriod(sales, selectedPeriod.year, selectedPeriod.month),
+  [sales, selectedPeriod.year, selectedPeriod.month])
+
+  const salesAnterior = useMemo(() =>
+    salesInPeriod(sales, selectedPeriod.year - 1, selectedPeriod.month),
+  [sales, selectedPeriod.year, selectedPeriod.month])
+
+  // ── Datos diferidos para secciones secundarias (evita freeze UI) ────────────
+  const deferredSales            = useDeferredValue(sales)
+  const deferredVendorAnalysis   = useDeferredValue(vendorAnalysis)
+  const deferredClientesDormidos = useDeferredValue(clientesDormidos)
+
   // ── Datos cliente ──────────────────────────────────────────────────────────
   const clienteSummary = useMemo(() => {
     if (!dataAvailability.has_cliente) return []
     const { year, month } = selectedPeriod
     const prev = prevPeriod(year, month)
-    const periodS = salesInPeriod(sales, year, month)
-    const prevS   = salesInPeriod(sales, prev.year, prev.month)
+    const periodS = salesInPeriod(deferredSales, year, month)
+    const prevS   = salesInPeriod(deferredSales, prev.year, prev.month)
     const fechaRef = maxDate
 
     const byCliente: Record<string, { curr: number; prevVal: number; ultima: Date; vendedor: string }> = {}
@@ -156,15 +173,15 @@ export default function EstadoComercialPage() {
         (variacion_pct !== null && variacion_pct < -20) ? 'en_riesgo' : 'activo'
       return { cliente, curr: d.curr, prevVal: d.prevVal, variacion_pct, dias_sin_actividad: dias, vendedor: d.vendedor, clasificacion }
     }).sort((a, b) => b.curr - a.curr)
-  }, [sales, selectedPeriod, dataAvailability.has_cliente, maxDate, configuracion.dias_dormido_threshold])
+  }, [deferredSales, selectedPeriod, dataAvailability.has_cliente, maxDate, configuracion.dias_dormido_threshold])
 
   // ── Datos canal ────────────────────────────────────────────────────────────
   const canalSummary = useMemo(() => {
     if (!dataAvailability.has_canal) return []
     const { year, month } = selectedPeriod
     const prev = prevPeriod(year, month)
-    const periodS = salesInPeriod(sales, year, month)
-    const prevS   = salesInPeriod(sales, prev.year, prev.month)
+    const periodS = salesInPeriod(deferredSales, year, month)
+    const prevS   = salesInPeriod(deferredSales, prev.year, prev.month)
     const total = periodS.reduce((a, s) => a + s.unidades, 0)
 
     const byCanal: Record<string, { curr: number; prevVal: number; vendedores: Record<string, number>; clientes: Record<string, number> }> = {}
@@ -188,7 +205,7 @@ export default function EstadoComercialPage() {
       const pct = total > 0 ? (d.curr / total) * 100 : 0
       return { canal, curr: d.curr, prevVal: d.prevVal, variacion_pct, topVendedor, topCliente, pct }
     }).sort((a, b) => b.curr - a.curr)
-  }, [sales, selectedPeriod, dataAvailability.has_canal])
+  }, [deferredSales, selectedPeriod, dataAvailability.has_canal])
 
   // ── Datos producto ─────────────────────────────────────────────────────────
   const productoSummary = useMemo(() => {
@@ -196,7 +213,7 @@ export default function EstadoComercialPage() {
     const { year, month } = selectedPeriod
     const prev = prevPeriod(year, month)
     const map = new Map<string, { producto: string; ventas: number; ventas_prev: number; unidades: number }>()
-    sales.forEach(s => {
+    deferredSales.forEach(s => {
       if (!s.producto) return
       const anio = s.fecha.getFullYear()
       const mes = s.fecha.getMonth()
@@ -209,28 +226,20 @@ export default function EstadoComercialPage() {
       map.set(s.producto, cur)
     })
     return [...map.values()].sort((a, b) => b.unidades - a.unidades)
-  }, [sales, selectedPeriod, dataAvailability.has_producto])
+  }, [deferredSales, selectedPeriod, dataAvailability.has_producto])
 
   // ── Estado del mes (vs histórico mismo mes años anteriores) ────────────────
   const estadoMes = useMemo(() => {
-    const { year, month } = selectedPeriod
     const diasTranscurridos = teamStats?.dias_transcurridos ?? 1
     const diasTotales       = teamStats?.dias_totales ?? 30
 
-    const actual         = salesInPeriod(sales, year, month).reduce((a, s) => a + s.unidades, 0)
-    const ingreso_actual = salesInPeriod(sales, year, month).reduce((a, s) => a + (s.venta_neta ?? 0), 0)
-
-    // Promedio del mismo mes en hasta 3 años anteriores
-    const referenciasAnuales: number[] = []
-    for (let i = 1; i <= 3; i++) {
-      const records = salesInPeriod(sales, year - i, month)
-      if (records.length > 0)
-        referenciasAnuales.push(records.reduce((a, s) => a + s.unidades, 0))
-    }
-
-    const historico_mes = referenciasAnuales.length > 0
-      ? Math.round(referenciasAnuales.reduce((a, b) => a + b, 0) / referenciasAnuales.length)
+    // Usar slices cacheados — evita 3 pasadas completas sobre sales[]
+    const actual         = salesActual.reduce((a, s) => a + s.unidades, 0)
+    const ingreso_actual = salesActual.reduce((a, s) => a + (s.venta_neta ?? 0), 0)
+    const historico_mes  = salesAnterior.length > 0
+      ? salesAnterior.reduce((a, s) => a + s.unidades, 0)
       : 0
+    const anos_base = salesAnterior.length > 0 ? 1 : 0
 
     const esperado_a_fecha = diasTotales > 0 && historico_mes > 0
       ? Math.round(historico_mes * (diasTranscurridos / diasTotales))
@@ -271,10 +280,10 @@ export default function EstadoComercialPage() {
       actual, ingreso_actual, esperado_a_fecha, historico_mes,
       gap, gap_pct, proyeccion_cierre, estado,
       frase, frase_proyeccion,
-      anos_base: referenciasAnuales.length,
+      anos_base,
       diasTranscurridos, diasTotales,
     }
-  }, [sales, selectedPeriod, teamStats])
+  }, [salesActual, salesAnterior, teamStats])
 
   // ── Causas del atraso ────────────────────────────────────────────────────────
   const causasAtraso = useMemo(() => {
@@ -284,36 +293,28 @@ export default function EstadoComercialPage() {
     const causas: Array<{ dimension: 'canal' | 'vendedor'; label: string; caida_pct: number; impacto_uds: number }> = []
 
     if (dataAvailability.has_canal) {
-      const canalesActual = new Map<string, number>()
-      const canalesSuma   = new Map<string, number>()
-      const canalesConteo = new Map<string, number>()
+      // Una sola pasada sobre deferredSales — antes eran 4 pasadas (1 forEach + 3 filter)
+      const canalActual  = new Map<string, number>()
+      const canalSuma    = new Map<string, number>()
+      const canalConteo  = new Map<string, Set<number>>()
 
-      sales.forEach(s => {
-        if (!s.canal) return
+      for (const s of deferredSales) {
+        if (!s.canal) continue
         const d = new Date(s.fecha)
-        if (d.getFullYear() === year && d.getMonth() === month) {
-          canalesActual.set(s.canal, (canalesActual.get(s.canal) ?? 0) + s.unidades)
+        const y = d.getFullYear()
+        const m = d.getMonth()
+        if (y === year && m === month) {
+          canalActual.set(s.canal, (canalActual.get(s.canal) ?? 0) + s.unidades)
+        } else if (m === month && y >= year - 3 && y < year) {
+          canalSuma.set(s.canal, (canalSuma.get(s.canal) ?? 0) + s.unidades)
+          if (!canalConteo.has(s.canal)) canalConteo.set(s.canal, new Set())
+          canalConteo.get(s.canal)!.add(y)
         }
-      })
-
-      for (let i = 1; i <= 3; i++) {
-        const recordsAnio = sales.filter(s => {
-          if (!s.canal) return false
-          const d = new Date(s.fecha)
-          return d.getFullYear() === year - i && d.getMonth() === month
-        })
-        const canalesEnAnio = new Set(recordsAnio.map(s => s.canal as string))
-        canalesEnAnio.forEach(canal => {
-          canalesConteo.set(canal, (canalesConteo.get(canal) ?? 0) + 1)
-        })
-        recordsAnio.forEach(s => {
-          canalesSuma.set(s.canal!, (canalesSuma.get(s.canal!) ?? 0) + s.unidades)
-        })
       }
 
-      canalesActual.forEach((actual, canal) => {
-        const suma   = canalesSuma.get(canal) ?? 0
-        const conteo = canalesConteo.get(canal) ?? 0
+      canalActual.forEach((actual, canal) => {
+        const suma   = canalSuma.get(canal) ?? 0
+        const conteo = canalConteo.get(canal)?.size ?? 0
         if (conteo === 0) return
         const hist = suma / conteo
         if (hist > 0 && actual < hist * 0.7) {
@@ -327,7 +328,7 @@ export default function EstadoComercialPage() {
       })
     }
 
-    vendorAnalysis
+    deferredVendorAnalysis
       .filter(v => v.variacion_vs_promedio_pct != null && v.variacion_vs_promedio_pct < -30 && (v.periodos_base_promedio ?? 0) >= 2)
       .sort((a, b) => (a.variacion_vs_promedio_pct ?? 0) - (b.variacion_vs_promedio_pct ?? 0))
       .slice(0, 3)
@@ -341,7 +342,7 @@ export default function EstadoComercialPage() {
       })
 
     return causas.sort((a, b) => b.impacto_uds - a.impacto_uds).slice(0, 3)
-  }, [estadoMes, sales, selectedPeriod, vendorAnalysis, dataAvailability])
+  }, [estadoMes, deferredSales, selectedPeriod, deferredVendorAnalysis, dataAvailability])
 
   // ── Focos de riesgo críticos ──────────────────────────────────────────────────
   const focosRiesgo = useMemo(() =>
@@ -358,39 +359,147 @@ export default function EstadoComercialPage() {
 
   // ── Resumen ejecutivo automático ─────────────────────────────────────────────
   const resumenEjecutivo = useMemo(() => {
-    const bullets: string[] = []
+    const bullets: Array<{ texto: string; tipo: 'alerta' | 'neutro' | 'positivo' }> = []
 
-    if (estadoMes.estado !== 'sin_base' && estadoMes.frase)
-      bullets.push(estadoMes.frase)
+    // Bullet 1 — estado del mes con cuantificación
+    if (estadoMes.estado !== 'sin_base' && estadoMes.gap_pct !== null) {
+      const signo = estadoMes.gap_pct >= 0 ? '+' : ''
+      const ref = estadoMes.historico_mes > 0
+        ? ` (esperado: ${estadoMes.esperado_a_fecha.toLocaleString()} uds al día ${estadoMes.diasTranscurridos})`
+        : ''
+      bullets.push({
+        texto: estadoMes.estado === 'atrasado'
+          ? `El mes acumula ${estadoMes.actual.toLocaleString()} uds — ${Math.abs(estadoMes.gap_pct)}% por debajo del ritmo histórico${ref}.`
+          : estadoMes.estado === 'adelantado'
+          ? `El mes acumula ${estadoMes.actual.toLocaleString()} uds — ${signo}${estadoMes.gap_pct}% sobre el ritmo histórico${ref}.`
+          : `El mes avanza en línea con el ritmo histórico (${estadoMes.actual.toLocaleString()} uds al día ${estadoMes.diasTranscurridos}).`,
+        tipo: estadoMes.estado === 'atrasado' ? 'alerta' : estadoMes.estado === 'adelantado' ? 'positivo' : 'neutro',
+      })
+    }
 
+    // Bullet 2 — causa principal con impacto o vendedores superando
     if (estadoMes.estado === 'atrasado' && causasAtraso.length > 0) {
       const principal = causasAtraso[0]
       const dim = principal.dimension === 'canal' ? 'canal' : 'vendedor'
-      bullets.push(`El atraso se explica principalmente por caída en ${dim} ${principal.label} (${Math.abs(principal.caida_pct)}% menos que el histórico).`)
-    } else if (estadoMes.estado === 'adelantado' && vendorAnalysis.length > 0) {
-      const mejor = vendorAnalysis.filter(v => v.riesgo === 'superando').length
-      if (mejor > 0)
-        bullets.push(`${mejor} vendedor${mejor > 1 ? 'es están' : ' está'} superando meta este mes.`)
+      const resto = causasAtraso.length > 1
+        ? `, junto con ${causasAtraso.slice(1).map(c => c.label).join(' y ')}`
+        : ''
+      bullets.push({
+        texto: `El atraso se concentra en ${dim} ${principal.label} (${Math.abs(principal.caida_pct)}% de caída, −${principal.impacto_uds.toLocaleString()} uds estimadas)${resto}.`,
+        tipo: 'alerta',
+      })
+    } else if (estadoMes.estado === 'adelantado') {
+      const superando = deferredVendorAnalysis.filter(v => v.riesgo === 'superando')
+      if (superando.length > 0) {
+        bullets.push({
+          texto: `${superando.length} vendedor${superando.length > 1 ? 'es están' : ' está'} superando su ritmo habitual — impulsando el avance del mes.`,
+          tipo: 'positivo',
+        })
+      }
     }
 
-    const nCriticos = vendorAnalysis.filter(v => v.riesgo === 'critico').length
-    const nTotal = vendorAnalysis.length
-    if (nCriticos > 0)
-      bullets.push(`${nCriticos} de ${nTotal} vendedor${nCriticos > 1 ? 'es presentan' : ' presenta'} riesgo crítico.`)
+    // Bullet 3 — vendedores críticos con porcentaje
+    const nCriticos = deferredVendorAnalysis.filter(v => v.riesgo === 'critico').length
+    const nTotal = deferredVendorAnalysis.length
+    if (nCriticos > 0) {
+      const pctCriticos = Math.round((nCriticos / nTotal) * 100)
+      bullets.push({
+        texto: `${nCriticos} de ${nTotal} vendedores (${pctCriticos}%) presentan riesgo crítico — sin ventas o muy por debajo de su promedio histórico.`,
+        tipo: 'alerta',
+      })
+    }
 
-    const nDormidos = clientesDormidos.length
+    // Bullet 4 — clientes dormidos con potencial o concentración
+    const nDormidos = deferredClientesDormidos.length
+    const recuperables = deferredClientesDormidos.filter(
+      c => c.recovery_label === 'alta' || c.recovery_label === 'recuperable'
+    ).length
     if (nDormidos > 0) {
-      const recuperables = clientesDormidos.filter(c => c.recovery_label === 'alta' || c.recovery_label === 'recuperable').length
-      bullets.push(recuperables > 0
-        ? `${nDormidos.toLocaleString()} clientes sin actividad — ${recuperables} con alta probabilidad de recuperación.`
-        : `${nDormidos.toLocaleString()} clientes sin actividad en el período.`)
+      bullets.push({
+        texto: recuperables > 0
+          ? `${nDormidos.toLocaleString()} clientes sin actividad — ${recuperables} con alta probabilidad de reactivación esta semana.`
+          : `${nDormidos.toLocaleString()} clientes sin actividad en el período actual.`,
+        tipo: recuperables > 0 ? 'neutro' : 'alerta',
+      })
     } else if (concentracionRiesgo.length > 0) {
       const top = concentracionRiesgo[0]
-      bullets.push(`${top.cliente} concentra el ${top.pct_del_total.toFixed(0)}% de las ventas — riesgo de concentración activo.`)
+      bullets.push({
+        texto: `${top.cliente} concentra el ${top.pct_del_total.toFixed(0)}% de las ventas — riesgo de concentración activo.`,
+        tipo: 'alerta',
+      })
     }
 
     return bullets.slice(0, 4)
-  }, [estadoMes, causasAtraso, vendorAnalysis, clientesDormidos, concentracionRiesgo])
+  }, [estadoMes, causasAtraso, deferredVendorAnalysis, deferredClientesDormidos, concentracionRiesgo])
+
+  // ── Escenario de mejora con clientes recuperables ───────────────────────────
+  const escenarioMejora = useMemo(() => {
+    if (estadoMes.proyeccion_cierre <= 0) return null
+
+    const recuperablesAlta  = deferredClientesDormidos.filter(c => c.recovery_label === 'alta')
+    const recuperablesMedia = deferredClientesDormidos.filter(c => c.recovery_label === 'recuperable')
+
+    const totalClientesActivos = deferredVendorAnalysis.reduce((a, v) => a + (v.clientes_activos ?? 0), 0)
+    const ticketPromedioUds = estadoMes.actual > 0 && totalClientesActivos > 0
+      ? Math.round(estadoMes.actual / totalClientesActivos)
+      : 0
+
+    const udsAlta   = recuperablesAlta.length  * ticketPromedioUds * 0.30
+    const udsMedia  = recuperablesMedia.length * ticketPromedioUds * 0.15
+    const mejoraPotencial = Math.round(udsAlta + udsMedia)
+
+    const proyeccionMejorada = estadoMes.proyeccion_cierre + mejoraPotencial
+    const gapHistorico = estadoMes.historico_mes > 0
+      ? Math.max(0, estadoMes.historico_mes - estadoMes.proyeccion_cierre)
+      : 0
+    const pctMejora = estadoMes.proyeccion_cierre > 0
+      ? Math.round((mejoraPotencial / estadoMes.proyeccion_cierre) * 100)
+      : 0
+
+    return {
+      recuperablesAlta:  recuperablesAlta.length,
+      recuperablesMedia: recuperablesMedia.length,
+      mejoraPotencial,
+      proyeccionMejorada,
+      gapHistorico,
+      pctMejora,
+    }
+  }, [estadoMes, deferredClientesDormidos, deferredVendorAnalysis])
+
+  // ── Detalle expandible de cada causa ─────────────────────────────────────────
+  const detalleCausas = useMemo(() => {
+    const result = new Map<string, {
+      vendedores: Array<{ vendedor: string; caida_pct: number | null; clientes_dormidos: number }>
+    }>()
+
+    causasAtraso.forEach(causa => {
+      if (causa.dimension === 'canal') {
+        // Usar vendorAnalysis directamente — evita O(N×V) sales.some() sobre 90k filas
+        const vendedoresCanal = deferredVendorAnalysis
+          .filter(v =>
+            v.variacion_vs_promedio_pct !== null &&
+            v.variacion_vs_promedio_pct < -20 &&
+            (v.periodos_base_promedio ?? 0) >= 2
+          )
+          .sort((a, b) => (a.variacion_vs_promedio_pct ?? 0) - (b.variacion_vs_promedio_pct ?? 0))
+          .slice(0, 5)
+          .map(v => ({
+            vendedor: v.vendedor,
+            caida_pct: v.variacion_vs_promedio_pct ?? null,
+            clientes_dormidos: deferredClientesDormidos.filter(c => c.vendedor === v.vendedor).length,
+          }))
+        result.set(causa.label, { vendedores: vendedoresCanal })
+      } else {
+        const dormidosVendedor = deferredClientesDormidos
+          .filter(c => c.vendedor === causa.label)
+          .slice(0, 3)
+          .map(c => ({ vendedor: c.cliente, caida_pct: null, clientes_dormidos: c.dias_sin_actividad }))
+        result.set(causa.label, { vendedores: dormidosVendedor })
+      }
+    })
+
+    return result
+  }, [causasAtraso, deferredVendorAnalysis, deferredClientesDormidos])
 
   // ── Frase narrativa compuesta ─────────────────────────────────────────────────
   const fraseNarrativa = useMemo(() => {
@@ -404,6 +513,98 @@ export default function EstadoComercialPage() {
     }
     return partes.join(' ')
   }, [estadoMes, causasAtraso])
+
+  // ── Preguntas puente a IA ─────────────────────────────────────────────────────
+  const preguntasPuente = useMemo(() => {
+    const preguntas: Array<{ texto: string; contexto: string }> = []
+
+    preguntas.push({
+      texto: '¿Por qué estamos atrasados este mes?',
+      contexto: '¿Por qué estamos atrasados este mes? Dame nombres concretos, causas principales y acciones prioritarias basadas en los datos actuales.',
+    })
+
+    if (causasAtraso.length > 0) {
+      const principal = causasAtraso[0]
+      preguntas.push({
+        texto: `¿Qué está pasando con ${principal.label}?`,
+        contexto: `Explícame en detalle qué está causando la caída en ${principal.label}. ¿Qué vendedores están involucrados, qué clientes dejaron de comprar y qué se puede hacer esta semana?`,
+      })
+    }
+
+    const recuperables = deferredClientesDormidos.filter(
+      c => c.recovery_label === 'alta' || c.recovery_label === 'recuperable'
+    ).length
+    if (recuperables > 0) {
+      preguntas.push({
+        texto: `¿Cuáles ${Math.min(recuperables, 5)} clientes puedo recuperar esta semana?`,
+        contexto: `Dame los ${Math.min(recuperables, 5)} clientes dormidos con mayor probabilidad de recuperación. Para cada uno: nombre, vendedor asignado, días sin actividad, valor histórico, score de recuperación y qué decirles para reactivarlos esta semana.`,
+      })
+    }
+
+    const topCritico = deferredVendorAnalysis
+      .filter(v => v.riesgo === 'critico')
+      .sort((a, b) => (a.variacion_vs_promedio_pct ?? 0) - (b.variacion_vs_promedio_pct ?? 0))[0]
+    if (topCritico) {
+      preguntas.push({
+        texto: `¿Qué le pasa a ${topCritico.vendedor}?`,
+        contexto: `Analiza en detalle la situación de ${topCritico.vendedor}. ¿Qué clientes perdió, qué productos dejó de mover, cuánto impacta al equipo y qué hacer hoy?`,
+      })
+    }
+
+    if (preguntas.length < 4) {
+      const sinMovimiento = categoriasInventario
+        ?.filter(c => c.clasificacion === 'sin_movimiento' || c.clasificacion === 'lento_movimiento')
+        .length ?? 0
+
+      if (sinMovimiento > 0) {
+        preguntas.push({
+          texto: `¿Qué hago con los ${sinMovimiento} productos sin rotación?`,
+          contexto: `Tengo ${sinMovimiento} productos sin movimiento o con rotación lenta. Dame los más críticos por valor de inventario inmovilizado y recomienda qué hacer: ¿promover, descontinuar, reubicar o esperar? Prioriza por impacto económico.`,
+        })
+      } else if ((teamStats?.clientes_dormidos_count ?? 0) > 100) {
+        preguntas.push({
+          texto: `¿Cómo priorizo ${teamStats!.clientes_dormidos_count.toLocaleString()} clientes dormidos?`,
+          contexto: `Tengo ${teamStats!.clientes_dormidos_count} clientes sin actividad. Explícame cómo segmentarlos por prioridad de recuperación: cuáles contactar primero, cuáles descartar y cuáles programar para seguimiento en 30 días.`,
+        })
+      }
+    }
+
+    return preguntas.slice(0, 4)
+  }, [causasAtraso, deferredClientesDormidos, deferredVendorAnalysis, categoriasInventario, teamStats])
+
+  // ── Oportunidades activas ─────────────────────────────────────────────────
+  const oportunidades = useMemo(() => {
+    const items: Array<{ emoji: string; titulo: string; detalle: string }> = []
+
+    const superando = deferredVendorAnalysis.filter(v => v.riesgo === 'superando')
+    if (superando.length > 0) {
+      items.push({
+        emoji: '👤',
+        titulo: `${superando.length} vendedor${superando.length > 1 ? 'es' : ''} superando meta`,
+        detalle: superando.slice(0, 2).map(v => v.vendedor).join(', '),
+      })
+    }
+
+    const creciendo = clienteSummary.filter(c => c.variacion_pct !== null && c.variacion_pct > 15)
+    if (creciendo.length > 0) {
+      items.push({
+        emoji: '🏢',
+        titulo: `${creciendo.length} cliente${creciendo.length > 1 ? 's' : ''} con crecimiento`,
+        detalle: creciendo.slice(0, 2).map(c => c.cliente).join(', '),
+      })
+    }
+
+    const recuperables = deferredClientesDormidos.filter(c => c.recovery_label === 'alta')
+    if (recuperables.length > 0) {
+      items.push({
+        emoji: '📦',
+        titulo: `${recuperables.length} cliente${recuperables.length > 1 ? 's' : ''} recuperable${recuperables.length > 1 ? 's' : ''} esta semana`,
+        detalle: recuperables.slice(0, 2).map(c => c.cliente).join(', '),
+      })
+    }
+
+    return items.slice(0, 3)
+  }, [deferredVendorAnalysis, clienteSummary, deferredClientesDormidos])
 
   const [analysisStep, setAnalysisStep] = useState(0)
   useEffect(() => {
@@ -539,51 +740,53 @@ export default function EstadoComercialPage() {
       </div>
 
       {/* Resumen ejecutivo */}
-      {resumenEjecutivo.length > 0 && (() => {
-        const bullet0Color =
-          estadoMes.estado === 'adelantado' ? '#00B894'
-          : estadoMes.estado === 'en_linea' ? '#F59E0B'
-          : estadoMes.estado === 'atrasado' ? '#F87171'
-          : '#71717a'
-        return (
-          <div className="px-4 py-3.5 rounded-xl border border-zinc-800 bg-zinc-900/50">
-            <p className="text-[10px] font-medium uppercase tracking-widest text-zinc-600 mb-2">Resumen ejecutivo</p>
-            <ul className="space-y-1.5 list-none p-0 m-0">
-              {resumenEjecutivo.map((bullet, i) => (
-                <li key={i} className="flex items-start gap-2 text-[13px] text-zinc-300 leading-relaxed">
-                  <span
-                    className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0"
-                    style={{ background: i === 0 ? bullet0Color : i === 1 ? '#F59E0B' : '#71717a' }}
-                  />
-                  {bullet}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )
-      })()}
+      {resumenEjecutivo.length > 0 && (
+        <div className="px-4 py-3.5 rounded-xl border border-zinc-800 bg-zinc-900/50">
+          <p className="text-[10px] font-medium uppercase tracking-widest text-zinc-600 mb-2">Resumen ejecutivo</p>
+          <ul className="space-y-1.5 list-none p-0 m-0">
+            {resumenEjecutivo.map((bullet, i) => (
+              <li key={i} className="flex items-start gap-2 text-[13px] text-zinc-300 leading-relaxed">
+                <span
+                  className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0"
+                  style={{
+                    background:
+                      bullet.tipo === 'alerta'   ? '#F87171'
+                      : bullet.tipo === 'positivo' ? '#00B894'
+                      : '#71717a'
+                  }}
+                />
+                <span>{bullet.texto}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* 4 KPIs ejecutivos — orden: Estado | Proyección | Avance | YTD */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
 
         {/* CARD 1 — Estado del mes */}
-        <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-5 flex flex-col items-center justify-center text-center gap-2">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-600 self-start">Estado del mes</p>
-          {estadoMes.estado === 'adelantado' && (
-            <span className="px-6 py-3 rounded-xl bg-[#00B894]/20 text-[#00B894] font-bold text-lg border border-[#00B894]/30">ADELANTADO</span>
-          )}
-          {estadoMes.estado === 'en_linea' && (
-            <span className="px-6 py-3 rounded-xl bg-amber-500/20 text-amber-300 font-bold text-lg border border-amber-500/30">EN LÍNEA</span>
-          )}
-          {estadoMes.estado === 'atrasado' && (
-            <span className="px-6 py-3 rounded-xl bg-red-500/20 text-red-400 font-bold text-lg border border-red-500/30">ATRASADO</span>
-          )}
-          {estadoMes.estado === 'sin_base' && (
-            <span className="px-6 py-3 rounded-xl bg-zinc-800 text-zinc-500 font-bold text-lg border border-zinc-700">SIN HISTORIAL</span>
-          )}
-          <p className="text-[10px] text-zinc-600">día {estadoMes.diasTranscurridos} de {estadoMes.diasTotales}</p>
-          {estadoMes.estado === 'sin_base' && (
-            <p className="text-[10px] text-zinc-700 leading-relaxed">No hay suficientes años comparables para evaluar ritmo</p>
+        <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-5 space-y-2">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-600">Estado del mes</p>
+          <div>
+            {estadoMes.estado === 'adelantado' && (
+              <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-bold bg-[#00B894]/20 text-[#00B894] border border-[#00B894]/30">↑ Adelantado</span>
+            )}
+            {estadoMes.estado === 'en_linea' && (
+              <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">→ En línea</span>
+            )}
+            {estadoMes.estado === 'atrasado' && (
+              <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-bold bg-red-500/20 text-red-400 border border-red-500/30">↓ Atrasado</span>
+            )}
+            {estadoMes.estado === 'sin_base' && (
+              <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-bold bg-zinc-800 text-zinc-500 border border-zinc-700">Sin referencia</span>
+            )}
+          </div>
+          <p className="text-[10px] text-zinc-600">Día {estadoMes.diasTranscurridos} de {estadoMes.diasTotales}</p>
+          {estadoMes.gap_pct !== null && (
+            <p className={cn('text-[10px] font-medium', estadoMes.gap_pct >= 0 ? 'text-[#00B894]' : 'text-red-400')}>
+              {estadoMes.gap_pct >= 0 ? '+' : ''}{estadoMes.gap_pct}% vs {selectedPeriod.year - 1}
+            </p>
           )}
         </div>
 
@@ -598,11 +801,37 @@ export default function EstadoComercialPage() {
             {estadoMes.proyeccion_cierre.toLocaleString()} uds
           </p>
           {estadoMes.anos_base > 0 ? (
-            <p className="text-[10px] text-zinc-500">Histórico mes: {estadoMes.historico_mes.toLocaleString()} uds</p>
+            <p className="text-[10px] text-zinc-500">{selectedPeriod.year - 1}: {estadoMes.historico_mes.toLocaleString()} uds</p>
           ) : (
             <p className="text-[10px] text-zinc-600">Sin histórico comparable</p>
           )}
           <p className="text-[10px] text-zinc-700">Estimación al ritmo actual</p>
+
+          {/* Escenario de mejora */}
+          {estadoMes.anos_base > 0 && escenarioMejora && (
+            <>
+              <div className="border-t border-zinc-800/80 pt-2 mt-1 space-y-1.5">
+                {escenarioMejora.gapHistorico > 0 && (
+                  <p className="text-[10px] text-zinc-500">
+                    Faltan <span className="text-zinc-400 font-medium">{escenarioMejora.gapHistorico.toLocaleString()} uds</span> para igualar el histórico
+                  </p>
+                )}
+                {escenarioMejora.mejoraPotencial > 0 && (
+                  <div className="space-y-0.5">
+                    <p className="text-[10px] text-zinc-600">Si se reactivan clientes recuperables:</p>
+                    <p className="text-[10px] font-medium text-[#00B894]">
+                      ↑ {escenarioMejora.proyeccionMejorada.toLocaleString()} uds{' '}
+                      <span className="text-zinc-500 font-normal">(+{escenarioMejora.pctMejora}%)</span>
+                    </p>
+                    <p className="text-[10px] text-zinc-600">
+                      {escenarioMejora.recuperablesAlta} alta prob.
+                      {escenarioMejora.recuperablesMedia > 0 && ` + ${escenarioMejora.recuperablesMedia} recuperables`}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
         </div>
 
         {/* CARD 3 — Avance a la fecha */}
@@ -617,7 +846,7 @@ export default function EstadoComercialPage() {
                   {estadoMes.gap >= 0 ? '+' : ''}{estadoMes.gap.toLocaleString()} ({estadoMes.gap >= 0 ? '+' : ''}{estadoMes.gap_pct}%)
                 </p>
               )}
-              <p className="text-[10px] text-zinc-700">ref: prom. mismo mes, {estadoMes.anos_base} año{estadoMes.anos_base > 1 ? 's' : ''} ant.</p>
+              <p className="text-[10px] text-zinc-700">ref: mismo mes {selectedPeriod.year - 1}</p>
             </div>
           ) : (
             <p className="text-[10px] text-zinc-600">Sin historial comparativo disponible</p>
@@ -684,36 +913,85 @@ export default function EstadoComercialPage() {
               −{causasAtraso.reduce((a, c) => a + c.impacto_uds, 0).toLocaleString()} uds estimadas
             </span>
           </div>
-          <div className="space-y-2">
+          <div className="space-y-1">
             {(() => {
               const impactoTotal = causasAtraso.reduce((a, c) => a + c.impacto_uds, 0)
               return causasAtraso.map((causa, i) => {
-                const maxImpacto = causasAtraso[0].impacto_uds
-                const barWidth   = maxImpacto > 0 ? Math.round((causa.impacto_uds / maxImpacto) * 100) : 0
-                const pctExplica = impactoTotal > 0 ? Math.round((causa.impacto_uds / impactoTotal) * 100) : 0
+                const maxImpacto   = causasAtraso[0].impacto_uds
+                const barWidth     = maxImpacto > 0 ? Math.round((causa.impacto_uds / maxImpacto) * 100) : 0
+                const pctExplica   = impactoTotal > 0 ? Math.round((causa.impacto_uds / impactoTotal) * 100) : 0
+                const isExpanded   = expandedCausa === causa.label
+                const detalle      = detalleCausas.get(causa.label)
                 return (
-                  <div key={i} className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-zinc-900/60 border border-zinc-800">
-                    <span className={cn(
-                      'shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase',
-                      causa.dimension === 'canal' ? 'bg-blue-500/15 text-blue-400' : 'bg-amber-500/15 text-amber-400'
-                    )}>
-                      {causa.dimension === 'canal' ? 'Canal' : 'Vendedor'}
-                    </span>
-                    <div className="w-12 h-1.5 bg-zinc-800 rounded-full overflow-hidden shrink-0">
-                      <div className="h-full bg-red-500 rounded-full" style={{ width: `${barWidth}%` }} />
+                  <div key={i}>
+                    <div
+                      onClick={() => toggleCausa(causa.label)}
+                      className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-zinc-900/60 border border-zinc-800 cursor-pointer hover:bg-zinc-900/80 transition-colors"
+                    >
+                      <span className={cn(
+                        'shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase',
+                        causa.dimension === 'canal' ? 'bg-blue-500/15 text-blue-400' : 'bg-amber-500/15 text-amber-400'
+                      )}>
+                        {causa.dimension === 'canal' ? 'Canal' : 'Vendedor'}
+                      </span>
+                      <div className="w-12 h-1.5 bg-zinc-800 rounded-full overflow-hidden shrink-0">
+                        <div className="h-full bg-red-500 rounded-full" style={{ width: `${barWidth}%` }} />
+                      </div>
+                      <span className="text-sm text-zinc-200 flex-1 truncate">{causa.label}</span>
+                      <span className="text-sm font-semibold text-red-400 shrink-0 tabular-nums">{causa.caida_pct}%</span>
+                      <div className="text-right shrink-0">
+                        <p className="text-[10px] text-zinc-600 tabular-nums">−{causa.impacto_uds.toLocaleString()} uds</p>
+                        <p className="text-[10px] text-zinc-700">Explica {pctExplica}% del atraso</p>
+                      </div>
+                      <span className="text-[10px] text-zinc-600 shrink-0">{isExpanded ? '▲' : '▼'}</span>
                     </div>
-                    <span className="text-sm text-zinc-200 flex-1 truncate">{causa.label}</span>
-                    <span className="text-sm font-semibold text-red-400 shrink-0 tabular-nums">{causa.caida_pct}%</span>
-                    <div className="text-right shrink-0">
-                      <p className="text-[10px] text-zinc-600 tabular-nums">−{causa.impacto_uds.toLocaleString()} uds</p>
-                      <p className="text-[10px] text-zinc-700">Explica {pctExplica}% del atraso</p>
-                    </div>
+
+                    {isExpanded && detalle && (
+                      <div className="mt-1 mb-1 px-3 py-3 rounded-xl bg-zinc-950 border border-zinc-800/60">
+                        {causa.dimension === 'canal' ? (
+                          <>
+                            <p className="text-[9px] font-bold uppercase tracking-wider text-zinc-600 mb-2">
+                              Vendedores en {causa.label} con mayor caída
+                            </p>
+                            {detalle.vendedores.length === 0 ? (
+                              <p className="text-[10px] text-zinc-600">Sin datos disponibles</p>
+                            ) : detalle.vendedores.map((v, j) => (
+                              <div key={j} className={cn('flex items-center gap-2 py-1.5', j < detalle.vendedores.length - 1 && 'border-b border-zinc-800/60')}>
+                                <span className="text-xs text-zinc-300 flex-1 truncate">{v.vendedor}</span>
+                                {v.caida_pct !== null && (
+                                  <span className={cn('text-xs font-medium shrink-0', v.caida_pct < 0 ? 'text-red-400' : 'text-[#00B894]')}>
+                                    {v.caida_pct.toFixed(0)}%
+                                  </span>
+                                )}
+                                {v.clientes_dormidos > 0 && (
+                                  <span className="text-[10px] text-zinc-600 shrink-0">{v.clientes_dormidos} dormidos</span>
+                                )}
+                              </div>
+                            ))}
+                          </>
+                        ) : (
+                          <>
+                            <p className="text-[9px] font-bold uppercase tracking-wider text-zinc-600 mb-2">
+                              Clientes dormidos de {causa.label}
+                            </p>
+                            {detalle.vendedores.length === 0 ? (
+                              <p className="text-[10px] text-zinc-600">Sin clientes dormidos</p>
+                            ) : detalle.vendedores.map((c, j) => (
+                              <div key={j} className={cn('flex items-center gap-2 py-1.5', j < detalle.vendedores.length - 1 && 'border-b border-zinc-800/60')}>
+                                <span className="text-xs text-zinc-300 flex-1 truncate">{c.vendedor}</span>
+                                <span className="text-[10px] text-zinc-600 shrink-0">{c.clientes_dormidos} días sin comprar</span>
+                              </div>
+                            ))}
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )
               })
             })()}
           </div>
-          <p className="text-[10px] text-zinc-700">Calculado vs promedio del mismo mes en años anteriores</p>
+          <p className="text-[10px] text-zinc-700">Calculado vs mismo mes {selectedPeriod.year - 1}</p>
         </div>
       )}
 
@@ -737,6 +1015,49 @@ export default function EstadoComercialPage() {
           >
             Ver detalle →
           </button>
+        </div>
+      )}
+
+      {/* ── Puente a IA ──────────────────────────────────────────────────── */}
+      {preguntasPuente.length > 0 && (
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-sm">✦</span>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Analizar con IA</p>
+            </div>
+            <p className="text-[10px] text-zinc-700">Preguntas basadas en tus datos de hoy</p>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {preguntasPuente.map((p, i) => (
+              <button
+                key={i}
+                onClick={() => navigate('/chat?q=' + encodeURIComponent(p.contexto))}
+                className="flex items-start gap-2 px-3 py-2.5 rounded-lg border border-zinc-800 bg-zinc-950 text-left text-xs text-zinc-400 hover:border-zinc-600 hover:text-zinc-200 transition-colors leading-relaxed"
+              >
+                <span className="text-zinc-700 mt-0.5 shrink-0">→</span>
+                {p.texto}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Oportunidades activas ─────────────────────────────────────────── */}
+      {oportunidades.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-600">Oportunidades activas</p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {oportunidades.map((op, i) => (
+              <div key={i} className="flex items-start gap-3 px-4 py-3 rounded-xl border border-[#00B894]/20 bg-[#00B894]/5">
+                <span className="text-xl shrink-0">{op.emoji}</span>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-[#00B894] leading-snug">{op.titulo}</p>
+                  <p className="text-[10px] text-zinc-500 mt-0.5 truncate">{op.detalle}</p>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -782,21 +1103,131 @@ export default function EstadoComercialPage() {
 
           <section className="flex flex-wrap gap-3">
             {dataAvailability.has_cliente && (
-              <button onClick={() => setActiveChip('dormidos')} className={cn('px-4 py-2 rounded-xl text-xs font-bold border transition-all', teamStats.clientes_dormidos_count > 0 ? 'bg-orange-500/10 border-orange-500/30 text-orange-400 hover:bg-orange-500/20' : 'bg-zinc-900 border-zinc-800 text-zinc-500')}>
-                😴 {teamStats.clientes_dormidos_count} clientes dormidos
+              <button onClick={() => toggleChip('dormidos')} className={cn('px-4 py-2 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5', expandedChip === 'dormidos' ? 'bg-orange-500/20 border-orange-500/40 text-orange-400' : teamStats.clientes_dormidos_count > 0 ? 'bg-orange-500/10 border-orange-500/30 text-orange-400 hover:bg-orange-500/20' : 'bg-zinc-900 border-zinc-800 text-zinc-500')}>
+                😴 {teamStats.clientes_dormidos_count} clientes dormidos {expandedChip === 'dormidos' ? '▲' : '▼'}
               </button>
             )}
             {dataAvailability.has_producto && (
-              <button onClick={() => setActiveChip('sinMovimiento')} className={cn('px-4 py-2 rounded-xl text-xs font-bold border transition-all', teamStats.productos_sin_movimiento_count > 0 ? 'bg-amber-500/10 border-amber-500/30 text-amber-400 hover:bg-amber-500/20' : 'bg-zinc-900 border-zinc-800 text-zinc-500')}>
-                📦 {teamStats.productos_sin_movimiento_count} productos sin movimiento
+              <button onClick={() => toggleChip('sinMovimiento')} className={cn('px-4 py-2 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5', expandedChip === 'sinMovimiento' ? 'bg-amber-500/20 border-amber-500/40 text-amber-400' : teamStats.productos_sin_movimiento_count > 0 ? 'bg-amber-500/10 border-amber-500/30 text-amber-400 hover:bg-amber-500/20' : 'bg-zinc-900 border-zinc-800 text-zinc-500')}>
+                📦 {teamStats.productos_sin_movimiento_count} productos sin movimiento {expandedChip === 'sinMovimiento' ? '▲' : '▼'}
               </button>
             )}
             {dataAvailability.has_cliente && teamStats.riesgos_concentracion_count > 0 && (
-              <button onClick={() => setActiveChip('concentracion')} className="px-4 py-2 rounded-xl text-xs font-bold border bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20 transition-all">
-                🎯 {teamStats.riesgos_concentracion_count} clientes = {'>'}50% de ventas
+              <button onClick={() => toggleChip('concentracion')} className={cn('px-4 py-2 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5', expandedChip === 'concentracion' ? 'bg-red-500/20 border-red-500/40 text-red-400' : 'bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20')}>
+                🎯 {teamStats.riesgos_concentracion_count} clientes = {'>'}50% de ventas {expandedChip === 'concentracion' ? '▲' : '▼'}
               </button>
             )}
           </section>
+
+          {/* ── ACORDEÓN INLINE DE CHIPS ──────────────────────────────────── */}
+          {expandedChip && (
+            <section className="border border-zinc-800 bg-zinc-900/40 rounded-2xl p-4 space-y-3">
+
+              {/* Clientes dormidos */}
+              {expandedChip === 'dormidos' && (
+                <>
+                  <div className="flex items-center justify-between">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                      Clientes sin actividad — priorizados por recuperación
+                    </p>
+                    <button onClick={() => navigate('/clientes')} className="text-xs text-[#00B894] hover:text-[#00a884] font-medium transition-colors">
+                      Ver todos →
+                    </button>
+                  </div>
+                  <div className="divide-y divide-zinc-800/60">
+                    {clientesDormidos.length === 0 ? (
+                      <p className="text-center text-zinc-600 text-sm py-6">Sin clientes dormidos detectados</p>
+                    ) : clientesDormidos.slice(0, 10).map((c, i) => {
+                      const rcCls = c.recovery_label === 'alta' ? 'bg-emerald-500/15 text-emerald-400'
+                        : c.recovery_label === 'recuperable' ? 'bg-amber-500/15 text-amber-400'
+                        : 'bg-zinc-800 text-zinc-500'
+                      const rcLabel = c.recovery_label === 'alta' ? 'Alta rec.'
+                        : c.recovery_label === 'recuperable' ? 'Recuperable'
+                        : c.recovery_label === 'dificil' ? 'Difícil' : 'Perdido'
+                      return (
+                        <div key={i} className="flex items-center gap-3 py-2.5">
+                          <div className={cn('w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0', rcCls)}>
+                            {c.recovery_score}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-medium text-zinc-200 truncate">{c.cliente}</p>
+                            <p className="text-[10px] text-zinc-500">{c.vendedor} · {c.dias_sin_actividad} días sin comprar</p>
+                          </div>
+                          <span className={cn('text-[11px] px-2 py-0.5 rounded-full shrink-0', rcCls)}>{rcLabel}</span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
+
+              {/* Productos sin movimiento */}
+              {expandedChip === 'sinMovimiento' && (
+                <>
+                  <div className="flex items-center justify-between">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                      Productos sin movimiento o lento movimiento
+                    </p>
+                    <button onClick={() => navigate('/rotacion')} className="text-xs text-[#00B894] hover:text-[#00a884] font-medium transition-colors">
+                      Ver todos en Rotación →
+                    </button>
+                  </div>
+                  {categoriasInventario.length === 0 ? (
+                    <p className="text-sm text-zinc-600 text-center py-6">Carga el archivo de inventario para ver este análisis</p>
+                  ) : (
+                    <div className="divide-y divide-zinc-800/60">
+                      {categoriasInventario
+                        .filter(c => c.clasificacion === 'sin_movimiento' || c.clasificacion === 'lento_movimiento')
+                        .slice(0, 10)
+                        .map(c => (
+                          <div key={c.producto} className="flex items-center gap-3 py-2.5">
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-medium text-zinc-200 truncate">{c.producto}</p>
+                              <p className="text-[10px] text-zinc-500">PM3: {c.pm3.toFixed(1)} · Días inv.: {c.dias_inventario}</p>
+                            </div>
+                            <span className={cn('text-[11px] px-2 py-0.5 rounded-full shrink-0',
+                              c.clasificacion === 'sin_movimiento' ? 'bg-red-500/15 text-red-400' : 'bg-amber-500/15 text-amber-400'
+                            )}>
+                              {c.clasificacion === 'sin_movimiento' ? 'Sin movimiento' : 'Lento'}
+                            </span>
+                          </div>
+                        ))
+                      }
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* Concentración */}
+              {expandedChip === 'concentracion' && (() => {
+                const maxPct = Math.max(...concentracionRiesgo.map(c => c.pct_del_total), 1)
+                return (
+                  <>
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                      Concentración de ventas — alta dependencia de clientes clave
+                    </p>
+                    <div className="space-y-3">
+                      {concentracionRiesgo.length === 0 ? (
+                        <p className="text-center text-zinc-600 text-sm py-6">Sin datos de concentración</p>
+                      ) : concentracionRiesgo.map(c => (
+                        <div key={c.cliente} className="space-y-1.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-medium text-zinc-200 truncate">{c.cliente}</span>
+                            <span className="text-xs font-black text-red-400 shrink-0">{c.pct_del_total.toFixed(1)}%</span>
+                          </div>
+                          <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                            <div className="h-full bg-red-500/70 rounded-full" style={{ width: `${(c.pct_del_total / maxPct) * 100}%` }} />
+                          </div>
+                          <p className="text-[10px] text-zinc-600">{c.ventas_absolutas.toLocaleString()} uds · {c.vendedores_involucrados.join(', ')}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )
+              })()}
+
+            </section>
+          )}
 
           {dataAvailability.has_metas && teamStats.meta_equipo && teamStats.proyeccion_equipo !== undefined && (
             <section className="bg-zinc-900/40 border border-zinc-800 rounded-2xl p-5 space-y-3">
@@ -960,138 +1391,6 @@ export default function EstadoComercialPage() {
         </div>
       )}
 
-      {/* ── PANELES DE CHIPS ──────────────────────────────────────────────── */}
-      {activeChip && (
-        <>
-          <div className="fixed inset-0 bg-black/50 z-40" onClick={() => setActiveChip(null)} />
-          {/* Panel: Clientes dormidos */}
-          {activeChip === 'dormidos' && (
-            <div className="fixed inset-y-0 right-0 w-full max-w-md bg-zinc-950 border-l border-zinc-800 z-50 overflow-y-auto shadow-2xl animate-in slide-in-from-right duration-300">
-              <div className="sticky top-0 bg-zinc-950 border-b border-zinc-800 px-6 py-4 flex items-center justify-between">
-                <div>
-                  <h2 className="text-lg font-bold text-zinc-100">Clientes sin actividad</h2>
-                  <p className="text-xs text-zinc-500 mt-0.5">Ordenados por probabilidad de recuperación × valor</p>
-                </div>
-                <button onClick={() => setActiveChip(null)} className="w-8 h-8 rounded-lg flex items-center justify-center text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors text-xl">×</button>
-              </div>
-              <div className="p-5 space-y-3">
-                {clientesDormidos.slice(0, 20).map((d: ClienteDormido) => {
-                  const rcCls: Record<ClienteDormido['recovery_label'], string> = {
-                    alta:        'bg-[#00B894]/15 text-[#00B894] border-[#00B894]/30',
-                    recuperable: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
-                    dificil:     'bg-amber-500/15 text-amber-400 border-amber-500/30',
-                    perdido:     'bg-zinc-700/50 text-zinc-400 border-zinc-600/30',
-                  }
-                  const rcLabel: Record<ClienteDormido['recovery_label'], string> = {
-                    alta: 'Alta', recuperable: 'Recuperable', dificil: 'Difícil', perdido: 'Perdido',
-                  }
-                  return (
-                    <div key={d.cliente} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-1.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-bold text-zinc-200 truncate">{d.cliente}</span>
-                        <span className={cn('shrink-0 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase border', rcCls[d.recovery_label])}>
-                          {rcLabel[d.recovery_label]} {d.recovery_score}/100
-                        </span>
-                      </div>
-                      <p className="text-[10px] text-zinc-500">{d.vendedor} · {d.dias_sin_actividad} días sin actividad</p>
-                      <p className="text-[10px] text-zinc-600">Valor histórico: {d.valor_historico.toLocaleString()} · {d.compras_historicas} compras</p>
-                    </div>
-                  )
-                })}
-                {clientesDormidos.length === 0 && (
-                  <p className="text-center text-zinc-600 text-sm py-8">Sin clientes dormidos detectados</p>
-                )}
-              </div>
-              <div className="sticky bottom-0 bg-zinc-950 border-t border-zinc-800 p-4">
-                <button onClick={() => { setActiveChip(null); navigate('/clientes') }} className="w-full py-2.5 rounded-xl bg-[#00B894]/10 text-[#00B894] text-sm font-bold hover:bg-[#00B894]/20 transition-colors">
-                  Ver todos en Clientes →
-                </button>
-              </div>
-            </div>
-          )}
-          {/* Panel: Productos sin movimiento */}
-          {activeChip === 'sinMovimiento' && (
-            <div className="fixed inset-y-0 right-0 w-full max-w-md bg-zinc-950 border-l border-zinc-800 z-50 overflow-y-auto shadow-2xl animate-in slide-in-from-right duration-300">
-              <div className="sticky top-0 bg-zinc-950 border-b border-zinc-800 px-6 py-4 flex items-center justify-between">
-                <div>
-                  <h2 className="text-lg font-bold text-zinc-100">Productos sin movimiento</h2>
-                  <p className="text-xs text-zinc-500 mt-0.5">Sin ventas en el período actual</p>
-                </div>
-                <button onClick={() => setActiveChip(null)} className="w-8 h-8 rounded-lg flex items-center justify-center text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors text-xl">×</button>
-              </div>
-              <div className="p-5 space-y-3">
-                {categoriasInventario.length === 0 ? (
-                  <div className="text-center py-10 space-y-2">
-                    <p className="text-zinc-500 text-sm font-medium">Sin inventario cargado</p>
-                    <p className="text-zinc-600 text-xs">Carga el archivo de inventario para ver este análisis</p>
-                  </div>
-                ) : categoriasInventario
-                    .filter(c => c.clasificacion === 'sin_movimiento' || c.clasificacion === 'lento_movimiento')
-                    .slice(0, 20)
-                    .map(c => {
-                      const clsCls: Record<string, string> = {
-                        sin_movimiento: 'bg-red-500/15 text-red-400 border-red-500/30',
-                        lento_movimiento: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
-                      }
-                      const clsLabel: Record<string, string> = {
-                        sin_movimiento: 'Sin movimiento', lento_movimiento: 'Lento movimiento',
-                      }
-                      return (
-                        <div key={c.producto} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-1.5">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-sm font-bold text-zinc-200 truncate">{c.producto}</span>
-                            <span className={cn('shrink-0 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase border', clsCls[c.clasificacion] ?? '')}>
-                              {clsLabel[c.clasificacion] ?? c.clasificacion}
-                            </span>
-                          </div>
-                          <p className="text-[10px] text-zinc-500">{c.unidades_actuales.toLocaleString()} uds actuales · PM3: {c.pm3.toFixed(1)}</p>
-                          <p className="text-[10px] text-zinc-600">Días inventario: {c.dias_inventario}</p>
-                        </div>
-                      )
-                    })
-                }
-              </div>
-              <div className="sticky bottom-0 bg-zinc-950 border-t border-zinc-800 p-4">
-                <button onClick={() => { setActiveChip(null); navigate('/rotacion') }} className="w-full py-2.5 rounded-xl bg-[#00B894]/10 text-[#00B894] text-sm font-bold hover:bg-[#00B894]/20 transition-colors">
-                  Ver todos en Rotación →
-                </button>
-              </div>
-            </div>
-          )}
-          {/* Panel: Concentración */}
-          {activeChip === 'concentracion' && (
-            <div className="fixed inset-y-0 right-0 w-full max-w-md bg-zinc-950 border-l border-zinc-800 z-50 overflow-y-auto shadow-2xl animate-in slide-in-from-right duration-300">
-              <div className="sticky top-0 bg-zinc-950 border-b border-zinc-800 px-6 py-4 flex items-center justify-between">
-                <div>
-                  <h2 className="text-lg font-bold text-zinc-100">Concentración de ventas</h2>
-                  <p className="text-xs text-zinc-500 mt-0.5">Clientes con mayor peso en el total de ventas</p>
-                </div>
-                <button onClick={() => setActiveChip(null)} className="w-8 h-8 rounded-lg flex items-center justify-center text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors text-xl">×</button>
-              </div>
-              <div className="p-5 space-y-4">
-                <p className="text-xs text-zinc-500 bg-zinc-900 border border-zinc-800 rounded-xl p-3">
-                  Alta concentración aumenta el riesgo ante pérdida de clientes clave
-                </p>
-                {concentracionRiesgo.map(c => (
-                  <div key={c.cliente} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-bold text-zinc-200">{c.cliente}</span>
-                      <span className="text-sm font-black text-red-400">{c.pct_del_total.toFixed(1)}%</span>
-                    </div>
-                    <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                      <div className="h-full bg-red-500/60 rounded-full" style={{ width: `${Math.min(c.pct_del_total, 100)}%` }} />
-                    </div>
-                    <p className="text-[10px] text-zinc-500">{c.ventas_absolutas.toLocaleString()} uds · Vendedores: {c.vendedores_involucrados.join(', ')}</p>
-                  </div>
-                ))}
-                {concentracionRiesgo.length === 0 && (
-                  <p className="text-center text-zinc-600 text-sm py-8">Sin datos de concentración</p>
-                )}
-              </div>
-            </div>
-          )}
-        </>
-      )}
 
       {/* ── ALERTAS ACTIVAS ───────────────────────────────────────────────── */}
       <section className="space-y-4">

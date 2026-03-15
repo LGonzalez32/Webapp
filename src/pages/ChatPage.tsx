@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
 import { sendChatMessage, sendDeepAnalysis, parseFollowUps } from '../lib/chatService'
 import type { ChatMessage as BaseChatMessage } from '../types'
 import type { ChatContext } from '../lib/chatService'
-import { Bot, Send, User, Loader2, Settings, Zap, ArrowRight, ExternalLink, BrainCircuit } from 'lucide-react'
+import { Bot, Send, User, Loader2, Zap, ArrowRight, ExternalLink, BrainCircuit } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { format } from 'date-fns'
 
@@ -21,10 +21,10 @@ interface ChatMessage {
 }
 
 const ERROR_MESSAGES: Record<string, string> = {
-  CONFIG_MISSING: 'Ve a Configuración y agrega tu DeepSeek API key',
-  INVALID_KEY: 'La API key no es válida. Verifica en platform.deepseek.com',
+  CONFIG_MISSING: 'El asistente IA no está configurado en el servidor.',
+  INVALID_KEY: 'Error de configuración del servidor. Contacta al administrador.',
   RATE_LIMIT: 'Límite de requests alcanzado. Espera unos segundos.',
-  API_ERROR: 'Error al conectar con DeepSeek. Intenta de nuevo.',
+  API_ERROR: 'Error al conectar con el asistente. Intenta de nuevo.',
 }
 
 // ─── Helpers de parseado ───────────────────────────────────────────────────────
@@ -269,6 +269,7 @@ function ParsedContent({
 export default function ChatPage() {
   useAnalysis()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const {
     isProcessed, vendorAnalysis, teamStats, insights, clientesDormidos,
     concentracionRiesgo, categoriasInventario, dataAvailability,
@@ -286,8 +287,6 @@ export default function ChatPage() {
   } | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const welcomeSentRef = useRef(false)
-
-  const apiKey = configuracion.deepseek_api_key ?? ''
 
   const chatContext: ChatContext = useMemo(() => ({
     configuracion,
@@ -369,7 +368,7 @@ export default function ChatPage() {
 
   // Auto-bienvenida al montar (una sola vez, cuando hay datos + key)
   useEffect(() => {
-    if (welcomeSentRef.current || !isProcessed || !apiKey) return
+    if (welcomeSentRef.current || !isProcessed) return
     welcomeSentRef.current = true
     setIsLoading(true)
     const initMsg: ChatMessage = {
@@ -377,7 +376,7 @@ export default function ChatPage() {
       content: '¿Cuáles son los 3 problemas principales de ventas de este período? Responde usando ### para el título de cada problema y bullets (-) para los datos. Máximo 3 bullets por problema. Solo datos reales con nombres y números.',
       timestamp: new Date(),
     }
-    sendChatMessage(toApi([initMsg]), chatContext, apiKey)
+    sendChatMessage(toApi([initMsg]), chatContext)
       .then((response) => {
         const { cleanContent, followUps } = parseFollowUps(response)
         setMessages([{ role: 'assistant', content: cleanContent, timestamp: new Date(), followUps }])
@@ -390,17 +389,16 @@ export default function ChatPage() {
     scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight)
   }, [messages, isLoading])
 
+  // Enviar pregunta desde ?q= al montar (puente desde EstadoComercialPage)
+  useEffect(() => {
+    const pregunta = searchParams.get('q')
+    if (!pregunta) return
+    const timer = setTimeout(() => handleSend(pregunta), 800)
+    return () => clearTimeout(timer)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleSend = async (text: string) => {
     if (!text.trim() || isLoading || profundizandoIndex !== null) return
-
-    if (!apiKey) {
-      setMessages((prev) => [...prev, {
-        role: 'assistant',
-        content: 'Configura tu API key de DeepSeek en Configuración → Integración IA para usar el asistente.',
-        timestamp: new Date(),
-      }])
-      return
-    }
 
     const entity = detectEntity(text)
     if (entity) setActiveEntity(entity)
@@ -413,7 +411,7 @@ export default function ChatPage() {
 
     try {
       const allMessages = [...messages, userMsg]
-      const response = await sendChatMessage(toApi(allMessages), ctx, apiKey)
+      const response = await sendChatMessage(toApi(allMessages), ctx)
       const { cleanContent, followUps } = parseFollowUps(response)
       setMessages((prev) => [...prev, { role: 'assistant', content: cleanContent, timestamp: new Date(), followUps }])
     } catch (error: any) {
@@ -438,7 +436,7 @@ export default function ChatPage() {
 
     try {
       const allMessages = [...messages, userMsg]
-      const response = await sendChatMessage(toApi(allMessages), buildCtxWithEntity(activeEntity), apiKey)
+      const response = await sendChatMessage(toApi(allMessages), buildCtxWithEntity(activeEntity))
       const { cleanContent, followUps } = parseFollowUps(response)
       setMessages((prev) => [...prev, {
         role: 'assistant',
@@ -468,7 +466,7 @@ export default function ChatPage() {
     setIsDeepLoading(true)
 
     try {
-      const response = await sendDeepAnalysis(chatContext, apiKey)
+      const response = await sendDeepAnalysis(chatContext)
       setMessages((prev) => [...prev, {
         role: 'assistant',
         content: response,
@@ -484,7 +482,7 @@ export default function ChatPage() {
   }
 
   const showEmptyState = messages.length === 0 && !isLoading
-  const showTodayButton = isProcessed && !!apiKey
+  const showTodayButton = isProcessed
 
   return (
     <div className="flex flex-col h-[calc(100vh-120px)] animate-in fade-in duration-500">
@@ -499,21 +497,10 @@ export default function ChatPage() {
             <div className="flex-1">
               <p className="text-sm font-bold text-zinc-100">Asistente SalesFlow</p>
               <div className="flex items-center gap-1.5">
-                <div className={cn('w-1.5 h-1.5 rounded-full', apiKey ? 'bg-[#00B894]' : 'bg-red-500')} />
-                <span className={cn('text-[10px] font-bold', apiKey ? 'text-[#00B894]' : 'text-red-500')}>
-                  {apiKey ? 'DeepSeek conectado' : 'Sin API key'}
-                </span>
+                <div className="w-1.5 h-1.5 rounded-full bg-[#00B894]" />
+                <span className="text-[10px] font-bold text-[#00B894]">DeepSeek conectado</span>
               </div>
             </div>
-            {!apiKey && (
-              <button
-                onClick={() => navigate('/configuracion')}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/30 text-violet-400 rounded-lg text-[11px] font-bold transition-all"
-              >
-                <Settings className="w-3 h-3" />
-                Configurar
-              </button>
-            )}
           </div>
 
           {/* Messages */}
@@ -704,20 +691,6 @@ export default function ChatPage() {
                   </div>
                 </button>
               </>
-            )}
-            {!apiKey && (
-              <div className="mb-3 flex items-center gap-3 bg-violet-500/10 border border-violet-500/20 rounded-xl px-4 py-3">
-                <p className="text-[11px] text-zinc-300 flex-1">
-                  Configura tu API key de DeepSeek en{' '}
-                  <button
-                    onClick={() => navigate('/configuracion')}
-                    className="text-violet-400 underline underline-offset-2 font-bold"
-                  >
-                    Configuración → Integración IA
-                  </button>
-                  {' '}para usar el asistente.
-                </p>
-              </div>
             )}
             <div className="relative">
               <textarea

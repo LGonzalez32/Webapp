@@ -91,12 +91,65 @@ export async function getOrgMembersWithEmail(orgId: string): Promise<
   return (data ?? []).map(m => ({ ...m, email: null }))
 }
 
+export async function getOrgStorageFiles(orgId: string): Promise<{
+  ventas:     { exists: boolean; name: string | null; updated_at: string | null }
+  metas:      { exists: boolean; name: string | null; updated_at: string | null }
+  inventario: { exists: boolean; name: string | null; updated_at: string | null }
+}> {
+  const empty = { exists: false, name: null, updated_at: null }
+  const { data, error } = await supabase.storage.from(BUCKET).list(orgId, { limit: 20 })
+  if (error || !data) return { ventas: empty, metas: empty, inventario: empty }
+
+  const find = (prefix: string) => {
+    const file = data.find(f => f.name.startsWith(prefix))
+    return file ? { exists: true, name: file.name, updated_at: (file as any).updated_at ?? null } : empty
+  }
+
+  return { ventas: find('ventas'), metas: find('metas'), inventario: find('inventario') }
+}
+
+export async function getOrgPublicInfo(orgId: string): Promise<{
+  id: string
+  name: string
+  allow_open_join: boolean
+} | null> {
+  const { data } = await supabase
+    .from('organizations')
+    .select('id, name, allow_open_join')
+    .eq('id', orgId)
+    .single()
+  if (!data) return null
+  return {
+    id: data.id,
+    name: data.name,
+    allow_open_join: data.allow_open_join ?? true,
+  }
+}
+
+export async function updateOrgJoinPolicy(
+  orgId: string,
+  allowOpenJoin: boolean
+): Promise<{ error: string | null }> {
+  const { error } = await supabase
+    .from('organizations')
+    .update({ allow_open_join: allowOpenJoin })
+    .eq('id', orgId)
+  return { error: error?.message ?? null }
+}
+
 // ── Storage ───────────────────────────────────────────────────────────────────
 
 type FileType = 'ventas' | 'metas' | 'inventario'
 
 function getExtension(file: File): string {
   return file.name.split('.').pop()?.toLowerCase() ?? 'csv'
+}
+
+export async function deleteOrgFiles(orgId: string): Promise<void> {
+  const { data: files } = await supabase.storage.from(BUCKET).list(orgId)
+  if (!files || files.length === 0) return
+  const paths = files.map(f => `${orgId}/${f.name}`)
+  await supabase.storage.from(BUCKET).remove(paths)
 }
 
 export async function uploadOrgFile(

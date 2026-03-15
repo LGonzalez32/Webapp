@@ -232,7 +232,11 @@ export default function RendimientoPage() {
   const [pivotConfigOpen, setPivotConfigOpen] = useState(false)
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
 
-  if (sales.length === 0) { navigate('/cargar'); return null }
+  useEffect(() => {
+    if (sales.length === 0) navigate('/cargar', { replace: true })
+  }, [sales.length, navigate])
+
+  if (sales.length === 0) return null
 
   const useVentaNeta = metric === 'venta_neta' && dataAvailability.has_venta_neta
 

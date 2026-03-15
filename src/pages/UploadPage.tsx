@@ -1,11 +1,12 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { toast } from 'sonner'
 import { useNavigate } from 'react-router-dom'
 import * as XLSX from 'xlsx'
 import { useAppStore } from '../store/appStore'
 import { useOrgStore } from '../store/orgStore'
 import { getDemoData, DEMO_EMPRESA } from '../lib/demoData'
 import { parseSalesFile, parseMetasFile, parseInventoryFile, parseRawFile } from '../lib/fileParser'
-import { uploadOrgFile } from '../lib/orgService'
+import { uploadOrgFile, getOrgStorageFiles, deleteOrgFiles } from '../lib/orgService'
 import LoadingOverlay from '../components/ui/LoadingOverlay'
 import StepIndicator from '../components/upload/StepIndicator'
 import FileDropzone from '../components/upload/FileDropzone'
@@ -38,23 +39,105 @@ const INITIAL_STEPS: UploadStep[] = [
   },
 ]
 
-const COLUMN_INFO: Record<string, { required: string[]; optional: { col: string; unlock: string }[] }> = {
-  ventas: {
-    required: ['fecha', 'vendedor', 'unidades'],
-    optional: [
-      { col: 'cliente', unlock: 'Activa: clientes dormidos, caída explicada, concentración de riesgo' },
-      { col: 'producto', unlock: 'Activa: productos sin movimiento, análisis de mix' },
-      { col: 'venta_neta', unlock: 'Activa: ticket promedio, análisis de facturación' },
-    ],
-  },
-  metas: {
-    required: ['mes_periodo', 'vendedor', 'meta'],
-    optional: [],
-  },
-  inventario: {
-    required: ['producto', 'unidades'],
-    optional: [],
-  },
+// ── Datos de ejemplo por tipo de archivo ──────────────────────────────────────
+
+const VENTAS_HEADERS = [
+  { col: 'fecha',      req: true  },
+  { col: 'vendedor',   req: true  },
+  { col: 'unidades',   req: true  },
+  { col: 'cliente',    req: false },
+  { col: 'producto',   req: false },
+  { col: 'venta_neta', req: false },
+  { col: 'canal',      req: false },
+  { col: 'categoria',  req: false },
+]
+const VENTAS_ROWS = [
+  ['2026-03-01','ANA MARIA LOPEZ','24','SUPER SELECTOS S.A.','ACEITE CORONA 1L','142.80','RUTEO','ALIMENTOS'],
+  ['2026-03-01','CARLOS MENDOZA','15','DISTRIBUIDORA NORTE','DETERGENTE ARIEL 2KG','89.25','MAYOREO','LIMPIEZA'],
+  ['2026-03-02','ANA MARIA LOPEZ','8','TIENDA LA UNION','ACEITE CORONA 1L','47.60','RUTEO','ALIMENTOS'],
+  ['2026-03-03','ROBERTO CHAVEZ','31','SUPER SELECTOS S.A.','SHAMPOO PANTENE 400ML','198.40','MODERNO','CUIDADO PERSONAL'],
+  ['2026-03-04','MARIA GONZALEZ','19','MERCADO CENTRAL','DETERGENTE ARIEL 2KG','113.05','RUTEO','LIMPIEZA'],
+  ['2026-03-05','CARLOS MENDOZA','42','DISTRIBUIDORA NORTE','ACEITE CORONA 1L','249.90','MAYOREO','ALIMENTOS'],
+  ['2026-03-06','ROBERTO CHAVEZ','7','TIENDA EL SOL','SHAMPOO PANTENE 400ML','44.80','RUTEO','CUIDADO PERSONAL'],
+  ['2026-03-07','ANA MARIA LOPEZ','28','SUPER SELECTOS S.A.','DETERGENTE ARIEL 2KG','166.60','MODERNO','LIMPIEZA'],
+]
+
+const METAS_HEADERS = [
+  { col: 'mes_periodo', req: true  },
+  { col: 'vendedor',    req: true  },
+  { col: 'meta',        req: true  },
+  { col: 'canal',       req: false },
+]
+const METAS_ROWS = [
+  ['2026-03','ANA MARIA LOPEZ','800','RUTEO'],
+  ['2026-03','CARLOS MENDOZA','1200','MAYOREO'],
+  ['2026-03','ROBERTO CHAVEZ','950','MODERNO'],
+  ['2026-03','MARIA GONZALEZ','750','RUTEO'],
+  ['2026-04','ANA MARIA LOPEZ','850','RUTEO'],
+  ['2026-04','CARLOS MENDOZA','1250','MAYOREO'],
+]
+
+const INVENTARIO_HEADERS = [
+  { col: 'producto',  req: true  },
+  { col: 'unidades',  req: true  },
+  { col: 'categoria', req: false },
+  { col: 'proveedor', req: false },
+]
+const INVENTARIO_ROWS = [
+  ['ACEITE CORONA 1L','145','ALIMENTOS','SIGMA'],
+  ['DETERGENTE ARIEL 2KG','89','LIMPIEZA','P&G'],
+  ['SHAMPOO PANTENE 400ML','234','CUIDADO PERSONAL','P&G'],
+  ['JABON PALMOLIVE 3PK','67','CUIDADO PERSONAL','COLGATE'],
+  ['ACEITE MAZOLA 900ML','43','ALIMENTOS','CJ'],
+  ['SUAVITEL 850ML','156','LIMPIEZA','COLGATE'],
+]
+
+// ── Tabla de ejemplo ──────────────────────────────────────────────────────────
+
+function TablaEjemplo({ headers, rows }: { headers: { col: string; req: boolean }[]; rows: string[][] }) {
+  return (
+    <div style={{ overflowX: 'auto', marginTop: '1rem' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.72rem' }}>
+        <thead>
+          <tr>
+            {headers.map(({ col, req }) => (
+              <th key={col} style={{
+                padding: '0.35rem 0.625rem',
+                textAlign: 'left',
+                borderBottom: '2px solid #3f3f46',
+                background: '#18181b',
+                color: '#a1a1aa',
+                fontWeight: 500,
+                whiteSpace: 'nowrap',
+              }}>
+                {col}
+                {req && <span style={{ marginLeft: '0.25rem', color: '#10b981', fontSize: '0.625rem', fontWeight: 700 }}>*</span>}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => (
+            <tr key={i} style={{ background: i % 2 === 0 ? 'transparent' : '#18181b' }}>
+              {row.map((cell, j) => (
+                <td key={j} style={{
+                  padding: '0.3rem 0.625rem',
+                  borderBottom: '1px solid #27272a',
+                  color: '#d4d4d8',
+                  whiteSpace: 'nowrap',
+                }}>
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p style={{ fontSize: '0.6875rem', color: '#71717a', marginTop: '0.375rem' }}>
+        * Requerido — las demás columnas son opcionales y activan funciones adicionales.
+      </p>
+    </div>
+  )
 }
 
 export default function UploadPage() {
@@ -67,6 +150,22 @@ export default function UploadPage() {
   const [currentStep, setCurrentStep] = useState(0)
   const [processingStep, setProcessingStep] = useState<number | null>(null)
   const [loading, setLoading] = useState<{ title: string; subtitle: string; progress: number } | null>(null)
+
+  type StorageFiles = {
+    ventas:     { exists: boolean; name: string | null; updated_at: string | null }
+    metas:      { exists: boolean; name: string | null; updated_at: string | null }
+    inventario: { exists: boolean; name: string | null; updated_at: string | null }
+  }
+  const [storageFiles, setStorageFiles] = useState<StorageFiles | null>(null)
+  const [storageLoading, setStorageLoading] = useState(false)
+
+  useEffect(() => {
+    if (!org?.id) return
+    setStorageLoading(true)
+    getOrgStorageFiles(org.id)
+      .then(setStorageFiles)
+      .finally(() => setStorageLoading(false))
+  }, [org?.id])
 
   const updateStep = (idx: number, partial: Partial<UploadStep>) =>
     setSteps((prev) => prev.map((s, i) => (i === idx ? { ...s, ...partial } : s)))
@@ -113,7 +212,7 @@ export default function UploadPage() {
 
   const allRequiredDone = () => steps.filter((s) => s.required).every((s) => s.status === 'loaded')
 
-  const handleAnalyze = () => {
+  const handleAnalyze = async () => {
     const salesData = steps[0].parsedData ?? []
     const metasData = steps[1].parsedData ?? []
     const inventoryData = steps[2].parsedData ?? []
@@ -126,40 +225,49 @@ export default function UploadPage() {
     })
 
     // Dejar que el overlay renderice antes de bloquear el hilo con setSales
-    setTimeout(() => {
-      // Auto-detectar el último mes en los datos para usarlo como período activo
-      if (salesData.length > 0) {
-        const lastDate = salesData.reduce((max: Date, s: any) => {
-          const d = new Date(s.fecha)
-          return d > max ? d : max
-        }, new Date(0))
-        if (lastDate.getFullYear() > 1970) {
-          setSelectedPeriod({ year: lastDate.getFullYear(), month: lastDate.getMonth() })
-        }
+    await new Promise(resolve => setTimeout(resolve, 50))
+
+    // Auto-detectar el último mes en los datos para usarlo como período activo
+    if (salesData.length > 0) {
+      const lastDate = salesData.reduce((max: Date, s: any) => {
+        const d = new Date(s.fecha)
+        return d > max ? d : max
+      }, new Date(0))
+      if (lastDate.getFullYear() > 1970) {
+        setSelectedPeriod({ year: lastDate.getFullYear(), month: lastDate.getMonth() })
       }
+    }
 
-      setIsProcessed(false)
-      setSales(salesData)
-      setMetas(metasData)
-      setInventory(inventoryData)
+    setIsProcessed(false)
+    setSales(salesData)
+    setMetas(metasData)
+    setInventory(inventoryData)
 
-      // Fire-and-forget: subir archivos al Storage de la org
-      if (org) {
-        steps.forEach((step) => {
-          if (step.status === 'loaded' && step.file) {
-            uploadOrgFile(org.id, step.id as 'ventas' | 'metas' | 'inventario', step.file)
-              .catch(console.warn)
-          }
-        })
+    // Subir archivos al Storage ANTES de navegar
+    if (org) {
+      setLoading({ title: 'Guardando en la nube...', subtitle: 'Subiendo archivos a tu organización', progress: 60 })
+
+      const toUpload = steps.filter(s => s.status === 'loaded' && s.file)
+      const results = await Promise.allSettled(
+        toUpload.map(s => uploadOrgFile(org.id, s.id as 'ventas' | 'metas' | 'inventario', s.file!))
+      )
+
+      const failed = results.filter(
+        r => r.status === 'rejected' || (r.status === 'fulfilled' && r.value.error)
+      ).length
+
+      if (failed > 0) {
+        toast.warning(
+          'Los datos se cargaron correctamente, pero no se pudieron guardar en la nube. Al cerrar sesión tendrás que subir los archivos de nuevo.',
+          { duration: 8000 }
+        )
       }
+    }
 
-      setLoading({ title: 'Iniciando análisis...', subtitle: 'Detectando patrones y riesgos comerciales', progress: 70 })
-
-      setTimeout(() => {
-        setLoading(null)
-        navigate('/dashboard')
-      }, 400)
-    }, 50)
+    setLoading({ title: 'Iniciando análisis...', subtitle: 'Detectando patrones y riesgos comerciales', progress: 90 })
+    await new Promise(resolve => setTimeout(resolve, 400))
+    setLoading(null)
+    navigate('/dashboard')
   }
 
   const handleLoadDemo = () => {
@@ -176,6 +284,16 @@ export default function UploadPage() {
         navigate('/dashboard')
       }, 400)
     }, 600)
+  }
+
+  const handleLimpiar = async () => {
+    resetAll()
+    setSteps(INITIAL_STEPS)
+    setCurrentStep(0)
+    setStorageFiles(null)
+    if (org?.id) {
+      await deleteOrgFiles(org.id)
+    }
   }
 
   const downloadTemplate = () => {
@@ -229,7 +347,6 @@ export default function UploadPage() {
 
   const step = steps[currentStep]
   const isLastStep = currentStep === steps.length - 1
-  const colInfo = COLUMN_INFO[step.id]
 
   return (
     <div className="max-w-3xl mx-auto space-y-8 pb-20 animate-in fade-in duration-700">
@@ -248,7 +365,7 @@ export default function UploadPage() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => { resetAll(); setSteps(INITIAL_STEPS); setCurrentStep(0) }}
+            onClick={handleLimpiar}
             className="flex items-center gap-1.5 text-xs font-medium text-zinc-500 hover:text-red-400 transition-colors"
           >
             <Trash2 className="w-3.5 h-3.5" />
@@ -283,6 +400,66 @@ export default function UploadPage() {
         </button>
       </div>
 
+      {/* Archivos existentes en Storage */}
+      {storageFiles && (
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Archivos en la nube
+            </p>
+            {storageLoading && (
+              <span className="text-xs text-zinc-600">Verificando...</span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
+            {([
+              { key: 'ventas',     label: 'Ventas',     required: true  },
+              { key: 'metas',      label: 'Metas',      required: false },
+              { key: 'inventario', label: 'Inventario', required: false },
+            ] as const).map(({ key, label, required }) => {
+              const file = storageFiles[key]
+              const fechaStr = file.updated_at
+                ? new Date(file.updated_at).toLocaleDateString('es', {
+                    day: '2-digit', month: 'short', year: 'numeric',
+                  })
+                : null
+              return (
+                <div
+                  key={key}
+                  className="rounded-lg border bg-zinc-950 p-3 flex flex-col gap-1"
+                  style={{ borderColor: file.exists ? 'rgb(39,39,42)' : 'rgb(28,28,30)' }}
+                >
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="text-[0.8125rem] font-medium text-zinc-200">{label}</span>
+                    <span className={`text-[0.625rem] font-semibold px-1.5 py-0.5 rounded-full ${
+                      file.exists
+                        ? 'bg-emerald-500/15 text-emerald-400'
+                        : 'bg-zinc-800 text-zinc-500'
+                    }`}>
+                      {file.exists ? '✓ Subido' : required ? 'Requerido' : 'Opcional'}
+                    </span>
+                  </div>
+                  <span className="text-xs text-zinc-600">
+                    {file.exists && fechaStr
+                      ? `Actualizado: ${fechaStr}`
+                      : file.exists
+                      ? 'En la nube'
+                      : 'No subido aún'}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+
+          {storageFiles.ventas.exists && (
+            <p className="text-xs text-zinc-600 pt-1 border-t border-zinc-800">
+              Puedes subir nuevos archivos para reemplazar los actuales. Los datos anteriores se sobreescribirán.
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Step indicator */}
       <div className="flex justify-center">
         <StepIndicator steps={steps} currentStepIndex={currentStep} />
@@ -305,26 +482,10 @@ export default function UploadPage() {
 
         {/* Column guide */}
         {step.status === 'pending' && (
-          <div className="space-y-3">
-            <div className="flex flex-wrap gap-2">
-              {colInfo.required.map((col) => (
-                <span key={col} className="px-2.5 py-1 bg-[#00B894]/10 border border-[#00B894]/20 rounded-lg text-[11px] font-bold text-[#00B894]">
-                  {col} <span className="opacity-60 font-normal">requerido</span>
-                </span>
-              ))}
-            </div>
-            {colInfo.optional.length > 0 && (
-              <div className="space-y-2">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-600">Columnas opcionales que desbloquean funciones</p>
-                {colInfo.optional.map(({ col, unlock }) => (
-                  <div key={col} className="flex items-start gap-2 text-xs">
-                    <span className="px-2 py-0.5 bg-zinc-800 border border-zinc-700 rounded text-zinc-400 font-mono shrink-0">{col}</span>
-                    <span className="text-zinc-500">{unlock}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <TablaEjemplo
+            headers={step.id === 'ventas' ? VENTAS_HEADERS : step.id === 'metas' ? METAS_HEADERS : INVENTARIO_HEADERS}
+            rows={step.id === 'ventas' ? VENTAS_ROWS : step.id === 'metas' ? METAS_ROWS : INVENTARIO_ROWS}
+          />
         )}
 
         <FileDropzone

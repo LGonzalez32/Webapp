@@ -428,122 +428,85 @@ export function parseFollowUps(content: string): {
   return { cleanContent, followUps }
 }
 
-// ─── sendDeepAnalysis ─────────────────────────────────────────────────────────
+// ─── Backend base URL ─────────────────────────────────────────────────────────
 
-export async function sendDeepAnalysis(
-  context: ChatContext,
-  apiKey: string
-): Promise<string> {
-  if (!apiKey || apiKey.trim() === '') {
-    throw new Error('CONFIG_MISSING')
-  }
+const BASE_URL = (import.meta.env.VITE_FORECAST_API_URL as string | undefined) ?? 'http://localhost:8000'
 
+async function callBackendChat(payload: Record<string, unknown>): Promise<string> {
+  let response: Response
   try {
-    const systemPrompt = buildSystemPrompt(context)
-
-    const apiMessages = [
-      { role: 'system', content: systemPrompt },
-      {
-        role: 'user',
-        content:
-          'Genera un diagnóstico completo del período actual usando ### para cada sección y bullets (-) para los datos. PROHIBIDO usar MAYÚSCULAS como encabezado sin ### delante.\n\n' +
-          '### Situación general\n' +
-          '[2-3 bullets con los números más importantes]\n\n' +
-          '### Causa raíz de los problemas\n' +
-          '[bullets con qué está causando los problemas, datos específicos]\n\n' +
-          '### Top 3 vendedores a intervenir hoy\n' +
-          '[un bullet por vendedor: nombre, problema, acción concreta]\n\n' +
-          '### Top 3 clientes en riesgo de perder\n' +
-          '[un bullet por cliente: nombre, días inactivo, valor, acción]\n\n' +
-          '### Oportunidades inmediatas\n' +
-          '[2-3 bullets con oportunidades concretas y nombres reales]\n\n' +
-          '### Proyección si no se actúa\n' +
-          '[bullets con qué pasa si no se hace nada esta semana]\n\n' +
-          'Usa solo datos reales. Sin introducciones. Sin conclusiones genéricas.',
-      },
-    ]
-
-    const response = await fetch('https://api.deepseek.com/chat/completions', {
+    response = await fetch(`${BASE_URL}/api/v1/chat`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey.trim()}`,
-      },
-      body: JSON.stringify({
-        model: 'deepseek-reasoner',
-        messages: apiMessages,
-        max_tokens: 2048,
-        stream: false,
-      }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     })
-
-    if (!response.ok) {
-      if (response.status === 401) throw new Error('INVALID_KEY')
-      if (response.status === 429) throw new Error('RATE_LIMIT')
-      const errBody = await response.text().catch(() => '')
-      console.error('[sendDeepAnalysis] HTTP', response.status, errBody)
-      throw new Error('API_ERROR')
-    }
-
-    const data = await response.json()
-    return data.choices[0].message.content as string
-  } catch (err: any) {
-    if (['CONFIG_MISSING', 'INVALID_KEY', 'RATE_LIMIT', 'API_ERROR'].includes(err.message)) throw err
-    console.error('[sendDeepAnalysis] unexpected error:', err)
+  } catch {
     throw new Error('API_ERROR')
   }
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'API_ERROR' }))
+    const code = (err as { detail?: string }).detail ?? 'API_ERROR'
+    if (['CONFIG_MISSING', 'INVALID_KEY', 'RATE_LIMIT', 'API_ERROR'].includes(code)) {
+      throw new Error(code)
+    }
+    throw new Error('API_ERROR')
+  }
+
+  const data = await response.json()
+  return (data as { content: string }).content
+}
+
+// ─── sendDeepAnalysis ─────────────────────────────────────────────────────────
+
+export async function sendDeepAnalysis(context: ChatContext): Promise<string> {
+  const systemPrompt = buildSystemPrompt(context)
+
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    {
+      role: 'user',
+      content:
+        'Genera un diagnóstico completo del período actual usando ### para cada sección y bullets (-) para los datos. PROHIBIDO usar MAYÚSCULAS como encabezado sin ### delante.\n\n' +
+        '### Situación general\n' +
+        '[2-3 bullets con los números más importantes]\n\n' +
+        '### Causa raíz de los problemas\n' +
+        '[bullets con qué está causando los problemas, datos específicos]\n\n' +
+        '### Top 3 vendedores a intervenir hoy\n' +
+        '[un bullet por vendedor: nombre, problema, acción concreta]\n\n' +
+        '### Top 3 clientes en riesgo de perder\n' +
+        '[un bullet por cliente: nombre, días inactivo, valor, acción]\n\n' +
+        '### Oportunidades inmediatas\n' +
+        '[2-3 bullets con oportunidades concretas y nombres reales]\n\n' +
+        '### Proyección si no se actúa\n' +
+        '[bullets con qué pasa si no se hace nada esta semana]\n\n' +
+        'Usa solo datos reales. Sin introducciones. Sin conclusiones genéricas.',
+    },
+  ]
+
+  return callBackendChat({ messages, model: 'deepseek-reasoner', max_tokens: 2048 })
 }
 
 // ─── sendChatMessage ──────────────────────────────────────────────────────────
 
 export async function sendChatMessage(
   messages: ChatMessage[],
-  ctx: ChatContext,
-  apiKey: string
+  ctx: ChatContext
 ): Promise<string> {
-  if (!apiKey || apiKey.trim() === '') {
-    throw new Error('CONFIG_MISSING')
-  }
+  const systemPrompt = buildSystemPrompt(ctx)
+  const recentMessages = messages.slice(-10)
 
-  try {
-    const systemPrompt = buildSystemPrompt(ctx)
-    const recentMessages = messages.slice(-10)
+  const apiMessages = [
+    { role: 'system', content: systemPrompt },
+    ...recentMessages.map((m) => ({ role: m.role, content: m.content })),
+  ]
 
-    const apiMessages = [
-      { role: 'system', content: systemPrompt },
-      ...recentMessages.map((m) => ({ role: m.role, content: m.content })),
-    ]
-
-    const response = await fetch('https://api.deepseek.com/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey.trim()}`,
-      },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        messages: apiMessages,
-        max_tokens: 1024,
-        temperature: 0.3,
-        top_p: 0.9,
-        frequency_penalty: 0.1,
-        stream: false,
-      }),
-    })
-
-    if (!response.ok) {
-      if (response.status === 401) throw new Error('INVALID_KEY')
-      if (response.status === 429) throw new Error('RATE_LIMIT')
-      const errBody = await response.text().catch(() => '')
-      console.error('[sendChatMessage] HTTP', response.status, errBody)
-      throw new Error('API_ERROR')
-    }
-
-    const data = await response.json()
-    return data.choices[0].message.content as string
-  } catch (err: any) {
-    if (['CONFIG_MISSING', 'INVALID_KEY', 'RATE_LIMIT', 'API_ERROR'].includes(err.message)) throw err
-    console.error('[sendChatMessage] unexpected error:', err)
-    throw new Error('API_ERROR')
-  }
+  return callBackendChat({
+    messages: apiMessages,
+    model: 'deepseek-chat',
+    max_tokens: 1024,
+    temperature: 0.3,
+    top_p: 0.9,
+    frequency_penalty: 0.1,
+  })
 }

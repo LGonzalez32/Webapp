@@ -15,6 +15,13 @@ export function useAutoLoad() {
   const location = useLocation()
   const ranRef = useRef(false)
 
+  // Resetear el guard cuando el análisis se invalida
+  useEffect(() => {
+    if (!isProcessed) {
+      ranRef.current = false
+    }
+  }, [isProcessed])
+
   useEffect(() => {
     // AuthCallbackPage maneja su propio redirect — no interferir
     if (location.pathname === '/auth/callback') return
