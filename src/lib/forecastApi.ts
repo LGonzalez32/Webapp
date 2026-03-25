@@ -1,6 +1,6 @@
 import type { SaleRecord } from '../types'
 
-const API_BASE_URL = import.meta.env.VITE_FORECAST_API_URL || 'http://localhost:8000'
+const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 
 interface MonthlyPoint {
   month: number
