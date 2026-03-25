@@ -1,5 +1,6 @@
 ﻿import { useEffect, useState, useMemo, useCallback, useDeferredValue } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { ResponsiveContainer, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
 import type { Insight, InsightTipo, InsightPrioridad, VendorAnalysis } from '../types'
@@ -1109,6 +1110,42 @@ export default function EstadoComercialPage() {
   const ytdVar  = teamStats.variacion_ytd_equipo
   const ytdAnno = maxDate.getFullYear()
 
+  // ── YTD chart data (mensual individual: año actual vs anterior) ──
+  const ytdChart = useMemo(() => {
+    const currentYear = selectedPeriod.year
+    const previousYear = currentYear - 1
+    const currentMonth = selectedPeriod.month // 0-based in store
+
+    const data: { month: string; actual: number; anterior: number }[] = []
+    let totalActual = 0
+    let totalAnterior = 0
+
+    for (let m = 0; m <= currentMonth; m++) {
+      const ventasActual = sales
+        .filter(s => { const d = new Date(s.fecha); return d.getFullYear() === currentYear && d.getMonth() === m })
+        .reduce((sum, s) => sum + s.unidades, 0)
+      const ventasAnterior = sales
+        .filter(s => { const d = new Date(s.fecha); return d.getFullYear() === previousYear && d.getMonth() === m })
+        .reduce((sum, s) => sum + s.unidades, 0)
+
+      totalActual += ventasActual
+      totalAnterior += ventasAnterior
+
+      data.push({
+        month: MESES_CORTO[m],
+        actual: ventasActual,
+        anterior: ventasAnterior,
+      })
+    }
+    return { data, totalActual, totalAnterior }
+  }, [sales, selectedPeriod.year, selectedPeriod.month])
+
+  const ytdDiff = ytdChart.totalActual - ytdChart.totalAnterior
+  const ytdChartUp = ytdDiff >= 0
+  const ytdChartPct = ytdChart.totalAnterior > 0
+    ? ((ytdDiff / ytdChart.totalAnterior) * 100)
+    : null
+
   const rawMesLabel = new Date(selectedPeriod.year, selectedPeriod.month, 1).toLocaleDateString('es-MX', { month: 'long', year: 'numeric' })
   const mesLabel = rawMesLabel.charAt(0).toUpperCase() + rawMesLabel.slice(1)
 
@@ -1184,78 +1221,77 @@ export default function EstadoComercialPage() {
 
       {/* â"€â"€ MOMENTO 1 — LA SITUACIÓN â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€ */}
       <div className="intel-fade" style={{ animationDelay: '80ms' }}>
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+        <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 280px' }}>
 
-          {/* Left card — Estado del mes (60%) */}
-          <div className="md:col-span-3 rounded-2xl p-6 flex flex-col gap-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
-            <p className="text-[11px] font-bold uppercase tracking-[0.15em]" style={{ color: 'var(--sf-t5)' }}>Estado del mes</p>
-
-            {/* Narrative phrase */}
-            <div className="space-y-0.5">
-              {estadoMes.estado === 'atrasado' && estadoMes.gap_pct !== null ? (
-                <>
-                  <p style={{ fontFamily: "'DM Mono', monospace", fontSize: '32px', lineHeight: '1.2', color: 'var(--sf-t1)', fontWeight: 400 }}>Vamos {Math.abs(estadoMes.gap_pct)}% abajo</p>
-                  <p style={{ fontFamily: "'DM Mono', monospace", fontSize: '32px', lineHeight: '1.2', color: 'var(--sf-t1)', fontWeight: 400 }}>del año pasado</p>
-                </>
-              ) : estadoMes.estado === 'adelantado' && estadoMes.gap_pct !== null ? (
-                <>
-                  <p style={{ fontFamily: "'DM Mono', monospace", fontSize: '32px', lineHeight: '1.2', color: 'var(--sf-t1)', fontWeight: 400 }}>{Math.abs(estadoMes.gap_pct)}% por encima</p>
-                  <p style={{ fontFamily: "'DM Mono', monospace", fontSize: '32px', lineHeight: '1.2', color: 'var(--sf-t1)', fontWeight: 400 }}>del año pasado</p>
-                </>
-              ) : estadoMes.estado === 'en_linea' ? (
-                <>
-                  <p style={{ fontFamily: "'DM Mono', monospace", fontSize: '32px', lineHeight: '1.2', color: 'var(--sf-t1)', fontWeight: 400 }}>Avanzando al ritmo</p>
-                  <p style={{ fontFamily: "'DM Mono', monospace", fontSize: '32px', lineHeight: '1.2', color: 'var(--sf-t1)', fontWeight: 400 }}>histórico del equipo</p>
-                </>
-              ) : (
-                <>
-                  <p style={{ fontFamily: "'DM Mono', monospace", fontSize: '32px', lineHeight: '1.2', color: 'var(--sf-t5)', fontWeight: 400 }}>Primer período</p>
-                  <p style={{ fontFamily: "'DM Mono', monospace", fontSize: '32px', lineHeight: '1.2', color: 'var(--sf-t5)', fontWeight: 400 }}>analizado</p>
-                </>
-              )}
+          {/* Chart card — ocupa espacio restante */}
+          <div className="rounded-2xl p-4 flex flex-col" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
+            {/* Header compacto */}
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-[11px] font-bold uppercase tracking-[0.15em]" style={{ color: 'var(--sf-t5)' }}>Evolución YTD</p>
+              <div className="flex items-center gap-4 text-xs">
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: '#22c55e' }} />
+                  <span style={{ color: 'var(--sf-t3)' }}>{selectedPeriod.year} sobre anterior</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: '#ef4444' }} />
+                  <span style={{ color: 'var(--sf-t3)' }}>{selectedPeriod.year} bajo anterior</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: 'var(--sf-t5, #b5ada4)', opacity: 0.4 }} />
+                  <span style={{ color: 'var(--sf-t4)' }}>{selectedPeriod.year - 1}</span>
+                </span>
+              </div>
             </div>
 
-            {/* Pill badge */}
-            {estadoMes.estado === 'atrasado' && (
-              <span className="self-start px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider" style={{ background: 'var(--sf-red-bg)', color: 'var(--sf-red)', border: '1px solid var(--sf-red-border)' }}>ATRASADO</span>
-            )}
-            {estadoMes.estado === 'en_linea' && (
-              <span className="self-start px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider" style={{ background: 'var(--sf-green-bg)', color: 'var(--sf-green)', border: '1px solid var(--sf-green-border)' }}>EN LÍNEA</span>
-            )}
-            {estadoMes.estado === 'adelantado' && (
-              <span className="self-start px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider" style={{ background: 'var(--sf-green-bg)', color: 'var(--sf-green)', border: '1px solid var(--sf-green-border)' }}>ADELANTADO</span>
-            )}
-            {estadoMes.estado === 'sin_base' && (
-              <span className="self-start px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider" style={{ background: 'var(--sf-overlay-medium)', color: 'var(--sf-t5)', border: '1px solid var(--sf-border-subtle)' }}>SIN HISTORIAL</span>
+            {/* Chart */}
+            {ytdChart.data.length > 0 ? (
+              <div className="flex-1" style={{ minHeight: 180 }}>
+                <ResponsiveContainer width="100%" height={180}>
+                  <BarChart data={ytdChart.data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }} barGap={2} barCategoryGap="20%">
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--sf-border, rgba(255,255,255,0.06))" vertical={false} />
+                    <XAxis dataKey="month" tick={{ fontSize: 11, fill: 'var(--sf-t4, #8c857d)' }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fontSize: 10, fill: 'var(--sf-t5, #b5ada4)' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)} width={40} />
+                    <Tooltip
+                      formatter={(value: number, name: string) => [
+                        `${Number(value).toLocaleString('es-SV')} uds`,
+                        name,
+                      ]}
+                      contentStyle={{ background: 'var(--sf-card, #1a1a2e)', border: '1px solid var(--sf-border, #e5e1db)', borderRadius: 8, fontSize: 12 }}
+                    />
+                    <Bar dataKey="anterior" name={String(selectedPeriod.year - 1)} fill="var(--sf-t5, #b5ada4)" fillOpacity={0.4} radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="actual" name={String(selectedPeriod.year)} radius={[4, 4, 0, 0]}>
+                      {ytdChart.data.map((entry, index) => (
+                        <Cell key={index} fill={entry.actual >= entry.anterior ? '#22c55e' : '#ef4444'} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <p className="text-[12px] italic flex-1 flex items-center" style={{ color: 'var(--sf-t5)' }}>Primer período analizado — sin historial comparable</p>
             )}
 
-            {/* Progress bar */}
-            {estadoMes.estado !== 'sin_base' && estadoMes.esperado_a_fecha > 0 ? (
-              <div className="space-y-2 mt-auto">
-                <div className="h-2 rounded-full overflow-hidden" style={{ background: 'var(--sf-inset)' }}>
-                  <div
-                    className="h-full rounded-full"
-                    style={{
-                      width: mounted ? `${Math.min(Math.round((estadoMes.actual / estadoMes.esperado_a_fecha) * 100), 100)}%` : '0%',
-                      background: estadoMes.estado === 'atrasado' ? 'var(--sf-red)' : estadoMes.estado === 'sin_base' ? 'var(--sf-inset)' : 'var(--sf-green)',
-                      transition: 'width 1.2s cubic-bezier(0.4, 0, 0.2, 1)',
-                    }}
-                  />
-                </div>
-                <p className="text-[11px]" style={{ color: 'var(--sf-t5)' }}>
-                  <span style={{ fontFamily: "'DM Mono', monospace" }}>{Math.round(estadoMes.actual).toLocaleString('es-SV')}</span> uds · Esperado: <span style={{ fontFamily: "'DM Mono', monospace" }}>{Math.round(estadoMes.esperado_a_fecha).toLocaleString('es-SV')}</span> uds
-                </p>
+            {/* Footer */}
+            {ytdChart.totalActual > 0 && (
+              <div className="flex items-center justify-between mt-2 text-xs">
+                <span style={{ color: 'var(--sf-t3)' }}>
+                  {ytdChart.totalActual.toLocaleString('es-SV')} uds acumuladas
+                </span>
+                {ytdChartPct !== null && (
+                  <span style={{ fontFamily: "'DM Mono', monospace", fontWeight: 600, color: ytdChartUp ? '#22c55e' : '#ef4444' }}>
+                    {ytdChartUp ? '+' : ''}{ytdChartPct.toFixed(1)}% vs {selectedPeriod.year - 1}
+                  </span>
+                )}
               </div>
-            ) : estadoMes.estado === 'sin_base' ? (
-              <p className="text-[12px] italic mt-auto" style={{ color: 'var(--sf-t5)' }}>Primer período analizado — sin historial comparable</p>
-            ) : null}
+            )}
           </div>
 
-          {/* Right cards (40%) */}
-          <div className="md:col-span-2 flex flex-col gap-4">
+          {/* KPIs stack — columna derecha 280px */}
+          <div className="flex flex-col gap-3">
             {/* Proyección cierre */}
-            <div className="flex-1 rounded-2xl p-5 flex flex-col gap-2" style={{ background: 'var(--sf-elevated)', border: '1px solid var(--sf-border)' }}>
-              <p className="text-[11px] font-bold uppercase tracking-[0.15em]" style={{ color: 'var(--sf-t5)' }}>Proyección cierre</p>
+            <div className="flex-1 rounded-2xl p-3 flex flex-col gap-1.5" style={{ background: 'var(--sf-elevated)', border: '1px solid var(--sf-border)' }}>
+              <p className="text-[10px] font-bold uppercase tracking-[0.15em]" style={{ color: 'var(--sf-t5)' }}>Proyección cierre</p>
               {dataAvailability.has_venta_neta ? (() => {
                 const refNeto = estadoMes.historico_neto
                 const color = estadoMes.anos_base > 0 && refNeto > 0
@@ -1263,13 +1299,13 @@ export default function EstadoComercialPage() {
                   : 'var(--sf-t1)'
                 return (
                   <>
-                    <p style={{ fontFamily: "'DM Mono', monospace", fontSize: '28px', fontWeight: 400, lineHeight: 1, color }}>
+                    <p style={{ fontFamily: "'DM Mono', monospace", fontSize: '22px', fontWeight: 400, lineHeight: 1, color }}>
                       {configuracion.moneda} {Math.round(proyeccion_neta).toLocaleString('es-SV')}
                     </p>
                     {estadoMes.anos_base > 0 && refNeto > 0 && (
                       <>
-                        <p className="text-[12px]" style={{ color: 'var(--sf-t5)' }}>vs {configuracion.moneda} {Math.round(refNeto).toLocaleString('es-SV')} año anterior</p>
-                        <p className="text-[13px] font-bold" style={{ color }}>
+                        <p className="text-[10px]" style={{ color: 'var(--sf-t5)' }}>vs {configuracion.moneda} {Math.round(refNeto).toLocaleString('es-SV')} año anterior</p>
+                        <p className="text-[12px] font-bold" style={{ color }}>
                           {proyeccion_neta >= refNeto ? '+' : ''}{Math.round(((proyeccion_neta - refNeto) / refNeto) * 100)}%
                         </p>
                       </>
@@ -1279,18 +1315,18 @@ export default function EstadoComercialPage() {
               })() : (
                 <>
                   <p style={{
-                    fontFamily: "'DM Mono', monospace", fontSize: '28px', fontWeight: 400, lineHeight: 1,
+                    fontFamily: "'DM Mono', monospace", fontSize: '22px', fontWeight: 400, lineHeight: 1,
                     color: estadoMes.anos_base > 0 && estadoMes.historico_mes > 0
                       ? estadoMes.proyeccion_cierre >= estadoMes.historico_mes ? 'var(--sf-green)' : 'var(--sf-red)'
                       : 'var(--sf-t1)',
                   }}>
                     {Math.round(estadoMes.proyeccion_cierre).toLocaleString('es-SV')}
-                    <span style={{ fontSize: '16px', color: 'var(--sf-t5)', marginLeft: '6px', fontWeight: 400 }}>uds</span>
+                    <span style={{ fontSize: '13px', color: 'var(--sf-t5)', marginLeft: '4px', fontWeight: 400 }}>uds</span>
                   </p>
                   {estadoMes.anos_base > 0 && estadoMes.historico_mes > 0 && (
                     <>
-                      <p className="text-[12px]" style={{ color: 'var(--sf-t5)' }}>vs {Math.round(estadoMes.historico_mes).toLocaleString('es-SV')} uds año anterior</p>
-                      <p className="text-[13px] font-bold" style={{ color: estadoMes.proyeccion_cierre >= estadoMes.historico_mes ? 'var(--sf-green)' : 'var(--sf-red)' }}>
+                      <p className="text-[10px]" style={{ color: 'var(--sf-t5)' }}>vs {Math.round(estadoMes.historico_mes).toLocaleString('es-SV')} uds año anterior</p>
+                      <p className="text-[12px] font-bold" style={{ color: estadoMes.proyeccion_cierre >= estadoMes.historico_mes ? 'var(--sf-green)' : 'var(--sf-red)' }}>
                         {estadoMes.proyeccion_cierre >= estadoMes.historico_mes ? '+' : ''}{Math.round(((estadoMes.proyeccion_cierre - estadoMes.historico_mes) / estadoMes.historico_mes) * 100)}%
                       </p>
                     </>
@@ -1300,15 +1336,15 @@ export default function EstadoComercialPage() {
             </div>
 
             {/* YTD */}
-            <div className="flex-1 rounded-2xl p-5 flex flex-col gap-2" style={{ background: 'var(--sf-elevated)', border: '1px solid var(--sf-border)' }}>
-              <p className="text-[11px] font-bold uppercase tracking-[0.15em]" style={{ color: 'var(--sf-t5)' }}>YTD {ytdAnno} vs {ytdAnno - 1}</p>
+            <div className="flex-1 rounded-2xl p-3 flex flex-col gap-1.5" style={{ background: 'var(--sf-elevated)', border: '1px solid var(--sf-border)' }}>
+              <p className="text-[10px] font-bold uppercase tracking-[0.15em]" style={{ color: 'var(--sf-t5)' }}>YTD {ytdAnno} vs {ytdAnno - 1}</p>
               <p style={{
-                fontFamily: "'DM Mono', monospace", fontSize: '28px', fontWeight: 400, lineHeight: 1,
+                fontFamily: "'DM Mono', monospace", fontSize: '22px', fontWeight: 400, lineHeight: 1,
                 color: ytdVar == null ? 'var(--sf-t5)' : ytdVar >= 0 ? 'var(--sf-green)' : 'var(--sf-red)',
               }}>
                 {ytdVar == null ? '—' : `${ytdVar >= 0 ? '+' : ''}${ytdVar.toFixed(1)}%`}
               </p>
-              <p className="text-[12px]" style={{ color: 'var(--sf-t5)' }}>
+              <p className="text-[10px]" style={{ color: 'var(--sf-t5)' }}>
                 {dataAvailability.has_venta_neta
                   ? `${configuracion.moneda} ${Math.round(ytd_neto).toLocaleString('es-SV')}`
                   : `${Math.round(teamStats.ytd_actual_equipo ?? 0).toLocaleString('es-SV')} uds`}
