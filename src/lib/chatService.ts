@@ -475,7 +475,7 @@ export function parseChartBlock(content: string): {
 
 // ─── Backend AI proxy ─────────────────────────────────────────────────────────
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:8000'
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? 'https://webapp-0yx8.onrender.com'
 
 export async function callAI(
   messages: { role: string; content: string }[],
