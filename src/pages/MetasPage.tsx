@@ -58,7 +58,7 @@ export default function MetasPage() {
       const va = vendorAnalysis.find((v) => v.vendedor === vendor)
       const monthData = histMonths.map(({ year, month }) => {
         const key = periodKey(year, month)
-        const metaRow = metas.find((m) => m.vendedor === vendor && m.mes_periodo === key)
+        const metaRow = metas.find((m) => m.vendedor === vendor && m.anio === year && m.mes === month + 1)
         const metaVal = metaRow?.meta ?? null
         const ventasSales = salesInPeriod(sales, year, month).filter((s) => s.vendedor === vendor)
         const realVal = ventasSales.reduce((a, s) => a + s.unidades, 0)
@@ -73,7 +73,7 @@ export default function MetasPage() {
 
   // Team totals for current month
   const teamMeta = metas
-    .filter((m) => m.mes_periodo === periodKey(currentYear, currentMonth))
+    .filter((m) => m.anio === currentYear && m.mes === currentMonth + 1)
     .reduce((a, m) => a + m.meta, 0)
 
   const teamReal = salesInPeriod(sales, currentYear, currentMonth)
@@ -250,7 +250,7 @@ export default function MetasPage() {
                 </td>
                 {histMonths.map(({ year, month }) => {
                   const key = periodKey(year, month)
-                  const metaTot = metas.filter((m) => m.mes_periodo === key).reduce((a, m) => a + m.meta, 0)
+                  const metaTot = metas.filter((m) => m.anio === year && m.mes === month + 1).reduce((a, m) => a + m.meta, 0)
                   const realTot = salesInPeriod(sales, year, month).reduce((a, s) => a + s.unidades, 0)
                   const pct = metaTot > 0 ? (realTot / metaTot) * 100 : null
                   const isCurr = year === currentYear && month === currentMonth

@@ -2,10 +2,12 @@ import { useState, useRef, useEffect, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
-import { sendChatMessage, sendDeepAnalysis, parseFollowUps } from '../lib/chatService'
+import { sendChatMessage, sendDeepAnalysis, parseFollowUps, parseChartBlock } from '../lib/chatService'
+import type { ChartData } from '../lib/chatService'
 import type { ChatMessage as BaseChatMessage } from '../types'
 import type { ChatContext } from '../lib/chatService'
-import { Bot, Send, User, Loader2, Zap, ArrowRight, ExternalLink, BrainCircuit } from 'lucide-react'
+import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
+import { Send, Loader2, Zap, ArrowRight, ExternalLink, BrainCircuit } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { format } from 'date-fns'
 
@@ -18,6 +20,7 @@ interface ChatMessage {
   navegacion?: { ruta: string; label: string }
   isDeepAnalysis?: boolean
   followUps?: string[]
+  chart?: ChartData | null
 }
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -81,13 +84,13 @@ function renderMarkdown(text: string): string {
   html = html.replace(
     /```(\w*)\n?([\s\S]*?)```/g,
     (_match, _lang, code: string) =>
-      `<pre style="background:#18181b;border:1px solid #27272a;border-radius:6px;padding:0.75rem;overflow-x:auto;font-family:ui-monospace,monospace;font-size:0.8125rem;margin:0.5rem 0"><code>${code.trim()}</code></pre>`
+      `<pre style="background:var(--sf-inset);border:1px solid var(--sf-border);border-radius:6px;padding:0.75rem;overflow-x:auto;font-family:ui-monospace,monospace;font-size:0.8125rem;margin:0.5rem 0;color:var(--sf-t2)"><code>${code.trim()}</code></pre>`
   )
 
   // Código inline (`code`)
   html = html.replace(
     /`([^`]+)`/g,
-    '<code style="background:#18181b;border:1px solid #27272a;border-radius:3px;padding:0.125rem 0.375rem;font-family:ui-monospace,monospace;font-size:0.85em">$1</code>'
+    '<code style="background:var(--sf-inset);border:1px solid var(--sf-border);border-radius:3px;padding:0.125rem 0.375rem;font-family:ui-monospace,monospace;font-size:0.85em;color:var(--sf-t2)">$1</code>'
   )
 
   // Tablas markdown
@@ -102,11 +105,11 @@ function renderMarkdown(text: string): string {
         if (row.match(/^[\|\s\-:]+$/)) { inHeader = false; continue }
         const cells = row.split('|').filter(c => c.trim())
         if (inHeader) {
-          const thStyle = 'padding:0.375rem 0.75rem;text-align:left;border-bottom:2px solid #3f3f46;font-weight:600;white-space:nowrap;color:#00B894;background:#18181b'
+          const thStyle = 'padding:0.375rem 0.75rem;text-align:left;border-bottom:2px solid var(--sf-border);font-weight:600;white-space:nowrap;color:#00B894;background:var(--sf-inset)'
           tableHtml += '<tr>' + cells.map(c => `<th style="${thStyle}">${c.trim()}</th>`).join('') + '</tr>'
         } else {
-          const bg = rowIndex % 2 === 1 ? 'background:#18181b;' : ''
-          const tdStyle = `padding:0.375rem 0.75rem;border-bottom:1px solid #27272a;color:#d4d4d8;${bg}`
+          const bg = rowIndex % 2 === 1 ? 'background:var(--sf-inset);' : ''
+          const tdStyle = `padding:0.375rem 0.75rem;border-bottom:1px solid var(--sf-border);color:var(--sf-t2);${bg}`
           tableHtml += '<tr>' + cells.map(c => `<td style="${tdStyle}">${c.trim()}</td>`).join('') + '</tr>'
           rowIndex++
         }
@@ -116,17 +119,17 @@ function renderMarkdown(text: string): string {
   )
 
   // Headers ### ## #
-  html = html.replace(/^### (.+)$/gm, '<p style="font-size:0.875rem;font-weight:600;color:#00B894;border-left:3px solid #00B894;padding-left:0.5rem;margin:1rem 0 0.375rem">$1</p>')
-  html = html.replace(/^## (.+)$/gm,  '<p style="font-size:0.9375rem;font-weight:600;color:#00B894;border-left:3px solid #00B894;padding-left:0.5rem;margin:1rem 0 0.375rem">$1</p>')
-  html = html.replace(/^# (.+)$/gm,   '<p style="font-size:1rem;font-weight:700;color:#00B894;border-left:3px solid #00B894;padding-left:0.5rem;margin:1rem 0 0.5rem">$1</p>')
+  html = html.replace(/^### (.+)$/gm, '<p style="font-size:0.875rem;font-weight:600;color:var(--sf-t1);border-left:3px solid #00B894;padding-left:0.5rem;margin:1rem 0 0.375rem">$1</p>')
+  html = html.replace(/^## (.+)$/gm,  '<p style="font-size:0.9375rem;font-weight:600;color:var(--sf-t1);border-left:3px solid #00B894;padding-left:0.5rem;margin:1rem 0 0.375rem">$1</p>')
+  html = html.replace(/^# (.+)$/gm,   '<p style="font-size:1rem;font-weight:700;color:var(--sf-t1);border-left:3px solid #00B894;padding-left:0.5rem;margin:1rem 0 0.5rem">$1</p>')
 
   // Bold **text** y __text__
-  html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong style="font-weight:600;color:#fafafa">$1</strong>')
-  html = html.replace(/__([^_\n]+)__/g,     '<strong style="font-weight:600;color:#fafafa">$1</strong>')
+  html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong style="font-weight:600;color:var(--sf-t1)">$1</strong>')
+  html = html.replace(/__([^_\n]+)__/g,     '<strong style="font-weight:600;color:var(--sf-t1)">$1</strong>')
 
   // Italic *text* y _text_
-  html = html.replace(/\*([^*\n]+)\*/g, '<em style="font-style:italic;color:#d4d4d8">$1</em>')
-  html = html.replace(/_([^_\n]+)_/g,   '<em style="font-style:italic;color:#d4d4d8">$1</em>')
+  html = html.replace(/\*([^*\n]+)\*/g, '<em style="font-style:italic;color:var(--sf-t2)">$1</em>')
+  html = html.replace(/_([^_\n]+)_/g,   '<em style="font-style:italic;color:var(--sf-t2)">$1</em>')
 
   // Listas ordenadas → tarjetas visuales con número en círculo
   html = html.replace(
@@ -140,17 +143,17 @@ function renderMarkdown(text: string): string {
         const hasRest = restLines.length > 0
         return (
           `<div style="display:flex;gap:0.625rem;padding:0.625rem 0.75rem;` +
-          `border-radius:8px;border:1px solid #27272a;background:#18181b;` +
+          `border-radius:8px;border:1px solid var(--sf-border);background:var(--sf-inset);` +
           `margin-bottom:0.375rem">` +
           `<span style="min-width:1.375rem;height:1.375rem;border-radius:50%;` +
-          `background:#3f3f46;display:inline-flex;align-items:center;` +
+          `background:var(--sf-hover);display:inline-flex;align-items:center;` +
           `justify-content:center;font-size:0.6875rem;font-weight:700;` +
-          `color:#a1a1aa;flex-shrink:0;margin-top:0.125rem">${i + 1}</span>` +
+          `color:var(--sf-t4);flex-shrink:0;margin-top:0.125rem">${i + 1}</span>` +
           `<div style="flex:1;min-width:0">` +
-          `<p style="font-size:0.875rem;font-weight:500;color:#e4e4e7;` +
+          `<p style="font-size:0.875rem;font-weight:500;color:var(--sf-t1);` +
           `margin:0${hasRest ? ' 0 0.25rem 0' : ''};line-height:1.4">${titleLine}</p>` +
           restLines.map(l =>
-            `<p style="font-size:0.8125rem;color:#71717a;margin:0;line-height:1.5">${l}</p>`
+            `<p style="font-size:0.8125rem;color:var(--sf-t3);margin:0;line-height:1.5">${l}</p>`
           ).join('') +
           `</div></div>`
         )
@@ -166,7 +169,7 @@ function renderMarkdown(text: string): string {
       const items = block.trim().split('\n').map(l => l.replace(/^[-*•] /, '').trim()).filter(Boolean)
       return '<ul style="margin:0.5rem 0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:0.5rem">' +
         items.map(i =>
-          `<li style="display:flex;align-items:flex-start;gap:0.5rem;font-size:0.8125rem;color:#d4d4d8;line-height:1.7">` +
+          `<li style="display:flex;align-items:flex-start;gap:0.5rem;font-size:0.8125rem;color:var(--sf-t2);line-height:1.7">` +
           `<span style="margin-top:0.5rem;width:0.375rem;height:0.375rem;border-radius:50%;flex-shrink:0;background:#00B894;display:inline-block"></span>${i}</li>`
         ).join('') +
         '</ul>'
@@ -174,7 +177,7 @@ function renderMarkdown(text: string): string {
   )
 
   // Líneas horizontales ---
-  html = html.replace(/^---+$/gm, '<hr style="border:none;border-top:1px solid #27272a;margin:0.75rem 0">')
+  html = html.replace(/^---+$/gm, '<hr style="border:none;border-top:1px solid var(--sf-border);margin:0.75rem 0">')
 
   // Doble salto de línea → separación de párrafo
   html = html.replace(/\n\n+/g, '</p><p style="margin:0.625rem 0">')
@@ -200,6 +203,109 @@ function getRouteFromText(
     return { ruta: '/rotacion', label: 'Ver rotación' }
   if (lower.includes('meta') || lower.includes('objetivo') || lower.includes('cierre'))
     return { ruta: '/rendimiento', label: 'Ver rendimiento' }
+  return null
+}
+
+// ─── InlineChart ──────────────────────────────────────────────────────────────
+
+const CHART_COLORS = {
+  green: '#22c55e',
+  red: '#ef4444',
+  blue: '#3b82f6',
+} as const
+
+function InlineChart({ chart }: { chart: ChartData }) {
+  const getFill = (entry: { value: number }) =>
+    chart.color === 'mixed'
+      ? entry.value >= 0 ? CHART_COLORS.green : CHART_COLORS.red
+      : CHART_COLORS[chart.color] || CHART_COLORS.blue
+
+  const tickStyle = { fontSize: 11, fill: 'var(--sf-t4)' }
+
+  if (chart.type === 'bar' || chart.type === 'horizontal_bar') {
+    const isHorizontal = chart.type === 'horizontal_bar'
+    return (
+      <div className="mt-3 p-3 rounded-xl" style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)' }}>
+        <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--sf-t4)' }}>{chart.title}</p>
+        <ResponsiveContainer width="100%" height={isHorizontal ? Math.max(180, chart.data.length * 32) : 200}>
+          <BarChart data={chart.data} layout={isHorizontal ? 'vertical' : 'horizontal'} margin={{ top: 4, right: 8, bottom: 4, left: isHorizontal ? 4 : 0 }}>
+            {isHorizontal ? (
+              <>
+                <YAxis dataKey="label" type="category" width={100} tick={tickStyle} axisLine={false} tickLine={false} />
+                <XAxis type="number" tick={tickStyle} axisLine={false} tickLine={false} />
+              </>
+            ) : (
+              <>
+                <XAxis dataKey="label" tick={tickStyle} axisLine={false} tickLine={false} />
+                <YAxis tick={tickStyle} axisLine={false} tickLine={false} />
+              </>
+            )}
+            <Tooltip
+              contentStyle={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderRadius: 8, fontSize: 12 }}
+              labelStyle={{ color: 'var(--sf-t2)' }}
+            />
+            <Bar dataKey="value" radius={isHorizontal ? [0, 4, 4, 0] : [4, 4, 0, 0]}>
+              {chart.data.map((entry, i) => (
+                <Cell key={i} fill={getFill(entry)} />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    )
+  }
+
+  if (chart.type === 'line') {
+    const color = chart.color === 'mixed' ? CHART_COLORS.blue : (CHART_COLORS[chart.color] || CHART_COLORS.blue)
+    return (
+      <div className="mt-3 p-3 rounded-xl" style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)' }}>
+        <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--sf-t4)' }}>{chart.title}</p>
+        <ResponsiveContainer width="100%" height={200}>
+          <LineChart data={chart.data} margin={{ top: 4, right: 8, bottom: 4, left: 0 }}>
+            <XAxis dataKey="label" tick={tickStyle} axisLine={false} tickLine={false} />
+            <YAxis tick={tickStyle} axisLine={false} tickLine={false} />
+            <Tooltip
+              contentStyle={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderRadius: 8, fontSize: 12 }}
+              labelStyle={{ color: 'var(--sf-t2)' }}
+            />
+            <Line type="monotone" dataKey="value" stroke={color} strokeWidth={2} dot={{ r: 3, fill: color }} activeDot={{ r: 5 }} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    )
+  }
+
+  if (chart.type === 'pie') {
+    const PIE_COLORS = ['#22c55e', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#06b6d4', '#6366f1']
+    return (
+      <div className="mt-3 p-3 rounded-xl" style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)' }}>
+        <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--sf-t4)' }}>{chart.title}</p>
+        <ResponsiveContainer width="100%" height={220}>
+          <PieChart>
+            <Pie
+              data={chart.data}
+              dataKey="value"
+              nameKey="label"
+              cx="50%"
+              cy="50%"
+              outerRadius={80}
+              label={({ label, percent }: { label: string; percent: number }) => `${label} ${(percent * 100).toFixed(0)}%`}
+              labelLine={false}
+              fontSize={11}
+            >
+              {chart.data.map((_entry, i) => (
+                <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+              ))}
+            </Pie>
+            <Tooltip
+              contentStyle={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderRadius: 8, fontSize: 12 }}
+            />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+    )
+  }
+
   return null
 }
 
@@ -378,8 +484,9 @@ export default function ChatPage() {
     }
     sendChatMessage(toApi([initMsg]), chatContext)
       .then((response) => {
-        const { cleanContent, followUps } = parseFollowUps(response)
-        setMessages([{ role: 'assistant', content: cleanContent, timestamp: new Date(), followUps }])
+        const { cleanContent: c1, chart } = parseChartBlock(response)
+        const { cleanContent, followUps } = parseFollowUps(c1)
+        setMessages([{ role: 'assistant', content: cleanContent, timestamp: new Date(), followUps, chart }])
       })
       .catch(() => { /* silencioso — el chat queda vacío con sugerencias */ })
       .finally(() => setIsLoading(false))
@@ -412,8 +519,9 @@ export default function ChatPage() {
     try {
       const allMessages = [...messages, userMsg]
       const response = await sendChatMessage(toApi(allMessages), ctx)
-      const { cleanContent, followUps } = parseFollowUps(response)
-      setMessages((prev) => [...prev, { role: 'assistant', content: cleanContent, timestamp: new Date(), followUps }])
+      const { cleanContent: c1, chart } = parseChartBlock(response)
+      const { cleanContent, followUps } = parseFollowUps(c1)
+      setMessages((prev) => [...prev, { role: 'assistant', content: cleanContent, timestamp: new Date(), followUps, chart }])
     } catch (error: any) {
       const msg = ERROR_MESSAGES[error.message] ?? ERROR_MESSAGES['API_ERROR']
       setMessages((prev) => [...prev, { role: 'assistant', content: `❌ ${msg}`, timestamp: new Date() }])
@@ -437,12 +545,14 @@ export default function ChatPage() {
     try {
       const allMessages = [...messages, userMsg]
       const response = await sendChatMessage(toApi(allMessages), buildCtxWithEntity(activeEntity))
-      const { cleanContent, followUps } = parseFollowUps(response)
+      const { cleanContent: c1, chart } = parseChartBlock(response)
+      const { cleanContent, followUps } = parseFollowUps(c1)
       setMessages((prev) => [...prev, {
         role: 'assistant',
         content: cleanContent,
         timestamp: new Date(),
         followUps,
+        chart,
         ...(nav ? { navegacion: nav } : {}),
       }])
     } catch (error: any) {
@@ -485,26 +595,31 @@ export default function ChatPage() {
   const showTodayButton = isProcessed
 
   return (
-    <div className="flex flex-col h-[calc(100vh-120px)] animate-in fade-in duration-500">
-      <div className="flex flex-col md:flex-row gap-4 h-full min-h-0">
+    <div className="flex flex-col md:flex-row gap-4 h-[calc(100vh-80px)] animate-in fade-in duration-500">
         {/* Chat area */}
-        <div className="flex-1 flex flex-col bg-zinc-900/50 border border-zinc-800 rounded-2xl overflow-hidden min-h-0">
-          {/* Header */}
-          <div className="px-5 py-3.5 border-b border-zinc-800 flex items-center gap-3 shrink-0">
-            <div className="w-8 h-8 rounded-lg bg-[#00B894]/10 flex items-center justify-center border border-[#00B894]/20">
-              <Bot className="w-5 h-5 text-[#00B894]" />
+        <div style={{
+          background: 'var(--sf-card)',
+          border: '1px solid var(--sf-border)',
+          borderRadius: '12px',
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+          flex: 1,
+        }}>
+          {/* Header compacto */}
+          <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--sf-border)] shrink-0">
+            <div className="w-6 h-6 rounded-md flex items-center justify-center" style={{ background: 'rgba(29,158,117,0.1)' }}>
+              <span className="text-xs" style={{ color: '#1D9E75' }}>✦</span>
             </div>
-            <div className="flex-1">
-              <p className="text-sm font-bold text-zinc-100">Asistente SalesFlow</p>
-              <div className="flex items-center gap-1.5">
-                <div className="w-1.5 h-1.5 rounded-full bg-[#00B894]" />
-                <span className="text-[10px] font-bold text-[#00B894]">DeepSeek conectado</span>
-              </div>
-            </div>
+            <span className="text-sm font-medium" style={{ color: 'var(--sf-t1)' }}>Asistente SalesFlow</span>
+            <span className="flex items-center gap-1 text-xs" style={{ color: 'var(--sf-t4)' }}>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+              conectado
+            </span>
           </div>
 
           {/* Messages */}
-          <div ref={scrollRef} className="flex-1 overflow-y-auto p-5 space-y-5 min-h-0">
+          <div ref={scrollRef} className="flex-1 overflow-y-auto p-5 space-y-5 min-h-0" style={{ background: 'transparent' }}>
             {messages.map((msg, idx) => {
               const isLastAsst = idx === lastAssistantMessageIndex
               const hasFollowUps = msg.role === 'assistant' && !!msg.followUps?.length
@@ -517,42 +632,46 @@ export default function ChatPage() {
               return (
                 <div key={idx} className="flex flex-col gap-1.5">
                   {/* Bubble row */}
-                  <div className={cn(
-                    'flex gap-3 max-w-[85%]',
-                    msg.role === 'user' ? 'ml-auto flex-row-reverse' : 'mr-auto'
-                  )}>
-                    <div className={cn(
-                      'w-7 h-7 rounded-lg flex items-center justify-center shrink-0 border',
-                      msg.role === 'user'
-                        ? 'bg-[#00B894] border-[#00B894]/80'
-                        : 'bg-zinc-800 border-zinc-700'
-                    )}>
-                      {msg.role === 'user'
-                        ? <User className="w-3.5 h-3.5 text-black" />
-                        : <Bot className="w-3.5 h-3.5 text-[#00B894]" />}
-                    </div>
-                    <div className="min-w-0">
+                  <div className="flex flex-col">
+                    <div className="min-w-0" style={{ alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
                       {msg.isDeepAnalysis && (
                         <div className="mb-1">
                           <span className="font-mono text-[10px] text-[#a78bfa]">🧠 deepseek-reasoner</span>
                         </div>
                       )}
                       <div
-                        className={cn(
-                          'p-3.5 rounded-xl text-sm',
-                          msg.role === 'user'
-                            ? 'bg-[#00B894] text-black font-medium rounded-tr-none'
-                            : 'bg-zinc-800 text-zinc-200 rounded-tl-none border border-zinc-700/50'
-                        )}
-                        style={msg.role === 'assistant' ? { lineHeight: '1.7' } : undefined}
+                        style={msg.role === 'user'
+                          ? {
+                              background: 'rgba(29,158,117,0.12)',
+                              border: '1px solid rgba(29,158,117,0.2)',
+                              borderRadius: '12px 12px 2px 12px',
+                              padding: '10px 14px',
+                              fontSize: '13px',
+                              color: 'var(--sf-t1)',
+                              maxWidth: '75%',
+                            }
+                          : {
+                              background: 'var(--sf-inset)',
+                              border: '1px solid var(--sf-border)',
+                              borderRadius: '2px 12px 12px 12px',
+                              padding: '10px 14px',
+                              fontSize: '13px',
+                              color: 'var(--sf-t1)',
+                              maxWidth: '85%',
+                              lineHeight: '1.7',
+                            }
+                        }
                       >
                         {msg.role === 'assistant' ? (
-                          <ParsedContent
-                            content={msg.content}
-                            isInteractive={idx === lastNumberedMessageIndex}
-                            profundizandoIndex={profundizandoIndex}
-                            onProfundizar={handleProfundizar}
-                          />
+                          <>
+                            <ParsedContent
+                              content={msg.content}
+                              isInteractive={idx === lastNumberedMessageIndex}
+                              profundizandoIndex={profundizandoIndex}
+                              onProfundizar={handleProfundizar}
+                            />
+                            {msg.chart && <InlineChart chart={msg.chart} />}
+                          </>
                         ) : (
                           <div className="whitespace-pre-wrap">{msg.content}</div>
                         )}
@@ -561,7 +680,7 @@ export default function ChatPage() {
                         <div className="flex justify-end mt-1.5">
                           <button
                             onClick={() => navigate(msg.navegacion!.ruta)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-[#00B894]/30 bg-[#00B894]/5 hover:bg-[#00B894]/10 text-zinc-400 hover:text-[#00B894] rounded-lg text-[12px] transition-all"
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-[#00B894]/30 bg-[#00B894]/5 hover:bg-[#00B894]/10 text-[var(--sf-t4)] hover:text-[#00B894] rounded-lg text-[12px] transition-all"
                           >
                             <ExternalLink className="w-3 h-3" />
                             {msg.navegacion.label}
@@ -569,7 +688,7 @@ export default function ChatPage() {
                         </div>
                       )}
                       <p className={cn(
-                        'text-[9px] text-zinc-700 mt-1',
+                        'text-[9px] text-[var(--sf-t5)] mt-1',
                         msg.role === 'user' ? 'text-right' : 'text-left'
                       )}>
                         {format(msg.timestamp, 'HH:mm')}
@@ -590,7 +709,7 @@ export default function ChatPage() {
                                 `Profundiza en: ${section}. Dame nombres específicos, números concretos y la acción recomendada.`
                               )}
                               disabled={isLoading || profundizandoIndex !== null}
-                              className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full border border-zinc-800 bg-zinc-900/80 text-zinc-500 hover:border-zinc-600 hover:text-zinc-300 disabled:opacity-40 transition-all"
+                              className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full border border-[var(--sf-border)] bg-[var(--sf-card)] text-[var(--sf-t5)] hover:border-[var(--sf-border)] hover:text-[var(--sf-t2)] disabled:opacity-40 transition-all"
                             >
                               <span className="text-[9px]">↓</span>
                               {section}
@@ -598,6 +717,7 @@ export default function ChatPage() {
                           ))}
                         </div>
                       )}
+
                       {/* Chips de seguimiento */}
                       {hasFollowUps && (
                         isLastAsst ? (
@@ -607,7 +727,7 @@ export default function ChatPage() {
                                 key={qi}
                                 onClick={() => handleSend(q)}
                                 disabled={isLoading || profundizandoIndex !== null}
-                                className="text-[11px] px-2.5 py-1 rounded-full border border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-[#00B894]/50 hover:text-[#00B894] hover:bg-[#00B894]/5 disabled:opacity-40 transition-all text-left"
+                                className="text-[11px] px-2.5 py-1 rounded-full border border-[var(--sf-border)] bg-[var(--sf-card)] text-[var(--sf-t4)] hover:border-[#00B894]/50 hover:text-[#00B894] hover:bg-[#00B894]/5 disabled:opacity-40 transition-all text-left"
                               >
                                 {q}
                               </button>
@@ -616,7 +736,7 @@ export default function ChatPage() {
                         ) : (
                           <div className="space-y-0.5">
                             {msg.followUps!.map((q, qi) => (
-                              <p key={qi} className="text-[10px] text-zinc-700 pl-1">· {q}</p>
+                              <p key={qi} className="text-[10px] text-[var(--sf-t5)] pl-1">· {q}</p>
                             ))}
                           </div>
                         )
@@ -627,14 +747,16 @@ export default function ChatPage() {
               )
             })}
             {isLoading && (
-              <div className="flex gap-3 max-w-[85%] mr-auto">
-                <div className="w-7 h-7 rounded-lg bg-zinc-800 border border-zinc-700 flex items-center justify-center">
-                  <Bot className="w-3.5 h-3.5 text-[#00B894]" />
-                </div>
-                <div className="bg-zinc-800 border border-zinc-700/50 p-3.5 rounded-xl rounded-tl-none flex items-center gap-1.5">
-                  <div className="w-1.5 h-1.5 bg-[#00B894] rounded-full animate-bounce [animation-delay:-0.3s]" />
-                  <div className="w-1.5 h-1.5 bg-[#00B894] rounded-full animate-bounce [animation-delay:-0.15s]" />
-                  <div className="w-1.5 h-1.5 bg-[#00B894] rounded-full animate-bounce" />
+              <div className="flex" style={{ alignSelf: 'flex-start' }}>
+                <div style={{
+                  background: 'var(--sf-inset)',
+                  border: '1px solid var(--sf-border)',
+                  borderRadius: '2px 12px 12px 12px',
+                  padding: '10px 14px',
+                }} className="flex items-center gap-1.5">
+                  <div className="w-1.5 h-1.5 bg-[#1D9E75] rounded-full animate-bounce [animation-delay:-0.3s]" />
+                  <div className="w-1.5 h-1.5 bg-[#1D9E75] rounded-full animate-bounce [animation-delay:-0.15s]" />
+                  <div className="w-1.5 h-1.5 bg-[#1D9E75] rounded-full animate-bounce" />
                 </div>
               </div>
             )}
@@ -643,85 +765,160 @@ export default function ChatPage() {
           {/* Sugerencias cuando no hay conversación */}
           {showEmptyState && (
             <div className="px-5 pb-3 shrink-0">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-600 mb-2">
+              <div style={{
+                fontSize: '10px',
+                textTransform: 'uppercase' as const,
+                letterSpacing: '0.08em',
+                color: 'var(--sf-t4)',
+                marginBottom: '10px',
+                padding: '0 4px',
+              }}>
                 Sugerencias
-              </p>
+              </div>
               <div className="grid grid-cols-2 gap-2">
                 {quickSuggestions.map((q, idx) => (
-                  <button
+                  <div
                     key={idx}
                     onClick={() => handleSend(q)}
-                    className="text-left px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-[#00B894]/30 hover:bg-[#00B894]/5 text-[11px] text-zinc-400 hover:text-[#00B894] font-medium transition-all"
+                    style={{
+                      background: 'var(--sf-card)',
+                      border: '1px solid var(--sf-border)',
+                      borderRadius: '10px',
+                      padding: '12px 16px',
+                      cursor: 'pointer',
+                      transition: 'all 150ms',
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--sf-hover)')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'var(--sf-card)')}
                   >
-                    {q}
-                  </button>
+                    <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--sf-t1)', marginBottom: '2px' }}>
+                      {q}
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>
           )}
 
-          {/* Input */}
-          <div className="p-4 border-t border-zinc-800 shrink-0">
+          {/* Input zone */}
+          <div className="shrink-0 border-t border-[var(--sf-border)]">
             {showTodayButton && (
-              <>
-                <button
-                  onClick={handleDeepAnalysis}
-                  disabled={isLoading || isDeepLoading || profundizandoIndex !== null}
-                  className="w-full mb-2 flex items-center gap-3 px-4 py-2.5 bg-[#a78bfa]/[0.08] hover:bg-[#a78bfa]/[0.15] disabled:opacity-40 border border-[#a78bfa]/25 rounded-xl transition-all text-left"
+              <div className="flex gap-2 px-4 pt-3">
+                <div
+                  onClick={() => { if (!isLoading && !isDeepLoading && profundizandoIndex === null) handleDeepAnalysis() }}
+                  className="flex-1 flex items-center gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer transition-colors"
+                  style={{
+                    background: 'var(--sf-card)',
+                    border: '1px solid var(--sf-border)',
+                    opacity: (isLoading || isDeepLoading || profundizandoIndex !== null) ? 0.4 : 1,
+                    cursor: (isLoading || isDeepLoading || profundizandoIndex !== null) ? 'not-allowed' : 'pointer',
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--sf-hover)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'var(--sf-card)')}
                 >
                   {isDeepLoading
                     ? <Loader2 className="w-4 h-4 text-[#a78bfa] shrink-0 animate-spin" />
                     : <BrainCircuit className="w-4 h-4 text-[#a78bfa] shrink-0" />}
-                  <div>
-                    <p className="text-xs font-medium text-zinc-100">
+                  <div className="min-w-0">
+                    <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--sf-t1)' }}>
                       {isDeepLoading ? 'Razonando...' : 'Análisis profundo'}
-                    </p>
-                    <p className="text-[11px] text-zinc-500">Diagnóstico completo · deepseek-reasoner · ~10s</p>
+                    </div>
+                    <div style={{ fontSize: '10px', color: 'var(--sf-t4)' }}>deepseek-reasoner · ~10s</div>
                   </div>
-                </button>
-                <button
-                  onClick={() => handleSend('3 acciones para hoy. Formato estricto:\n\n1. [NOMBRE REAL]: [acción en 10 palabras máx]\nPor qué hoy: [una razón, 10 palabras máx]\n\n2. [NOMBRE REAL]: [acción en 10 palabras máx]\nPor qué hoy: [una razón, 10 palabras máx]\n\n3. [NOMBRE REAL]: [acción en 10 palabras máx]\nPor qué hoy: [una razón, 10 palabras máx]\n\nSin introducción. Sin conclusión. Solo los 3 items.')}
-                  disabled={isLoading || isDeepLoading || profundizandoIndex !== null}
-                  className="w-full mb-3 flex items-center gap-3 px-4 py-2.5 bg-[#00B894]/5 hover:bg-[#00B894]/10 disabled:opacity-50 border border-[#00B894]/20 hover:border-[#00B894]/40 rounded-xl transition-all text-left"
+                </div>
+                <div
+                  onClick={() => {
+                    if (!isLoading && !isDeepLoading && profundizandoIndex === null)
+                      handleSend('3 acciones para hoy. Formato estricto:\n\n1. [NOMBRE REAL]: [acción en 10 palabras máx]\nPor qué hoy: [una razón, 10 palabras máx]\n\n2. [NOMBRE REAL]: [acción en 10 palabras máx]\nPor qué hoy: [una razón, 10 palabras máx]\n\n3. [NOMBRE REAL]: [acción en 10 palabras máx]\nPor qué hoy: [una razón, 10 palabras máx]\n\nSin introducción. Sin conclusión. Solo los 3 items.')
+                  }}
+                  className="flex-1 flex items-center gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer transition-colors"
+                  style={{
+                    background: 'var(--sf-card)',
+                    border: '1px solid var(--sf-border)',
+                    opacity: (isLoading || isDeepLoading || profundizandoIndex !== null) ? 0.4 : 1,
+                    cursor: (isLoading || isDeepLoading || profundizandoIndex !== null) ? 'not-allowed' : 'pointer',
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--sf-hover)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'var(--sf-card)')}
                 >
-                  <Zap className="w-4 h-4 text-[#00B894] shrink-0" />
-                  <div>
-                    <p className="text-xs font-bold text-[#00B894]">¿Qué debería hacer hoy?</p>
-                    <p className="text-[10px] text-zinc-500">3 acciones concretas basadas en tus datos de hoy</p>
+                  <Zap className="w-4 h-4 text-[#1D9E75] shrink-0" />
+                  <div className="min-w-0">
+                    <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--sf-t1)' }}>¿Qué hacer hoy?</div>
+                    <div style={{ fontSize: '10px', color: 'var(--sf-t4)' }}>3 acciones concretas</div>
                   </div>
-                </button>
-              </>
+                </div>
+              </div>
             )}
-            <div className="relative">
-              <textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(input) }
-                }}
-                placeholder="Pregunta sobre tus ventas..."
-                rows={1}
-                className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 pr-12 text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:border-[#00B894]/40 transition-all resize-none"
-                disabled={isLoading || profundizandoIndex !== null}
-              />
-              <button
-                onClick={() => handleSend(input)}
-                disabled={!input.trim() || isLoading || profundizandoIndex !== null}
-                className="absolute right-2.5 bottom-2.5 w-8 h-8 bg-[#00B894] hover:bg-[#00a884] disabled:bg-zinc-800 disabled:text-zinc-600 text-black rounded-lg flex items-center justify-center transition-all"
-              >
-                {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-              </button>
+            <div className="px-4 py-3">
+              <div style={{
+                background: 'var(--sf-elevated)',
+                border: '1px solid var(--sf-border)',
+                borderRadius: '10px',
+                padding: '8px 12px',
+                display: 'flex',
+                gap: '8px',
+                alignItems: 'center',
+              }}>
+                <textarea
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(input) }
+                  }}
+                  placeholder="Pregunta sobre tus ventas..."
+                  rows={1}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    outline: 'none',
+                    fontSize: '13px',
+                    color: 'var(--sf-t1)',
+                    flex: 1,
+                    resize: 'none',
+                  }}
+                  disabled={isLoading || profundizandoIndex !== null}
+                />
+                <button
+                  onClick={() => handleSend(input)}
+                  disabled={!input.trim() || isLoading || profundizandoIndex !== null}
+                  style={{
+                    background: 'rgba(29,158,117,0.15)',
+                    border: '1px solid rgba(29,158,117,0.3)',
+                    borderRadius: '6px',
+                    padding: '6px 10px',
+                    color: '#1D9E75',
+                    cursor: (!input.trim() || isLoading || profundizandoIndex !== null) ? 'not-allowed' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                </button>
+              </div>
             </div>
           </div>
         </div>
 
         {/* Sidebar — preguntas frecuentes */}
-        <div className="w-full md:w-64 flex flex-col gap-4">
-          <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-4">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-600 mb-3">
+        <div className="hidden md:flex w-56 flex-col gap-4 shrink-0">
+          <div style={{
+            background: 'var(--sf-card)',
+            border: '1px solid var(--sf-border)',
+            borderRadius: '12px',
+            padding: '12px',
+          }}>
+            <div style={{
+              fontSize: '10px',
+              textTransform: 'uppercase' as const,
+              letterSpacing: '0.08em',
+              color: 'var(--sf-t4)',
+              marginBottom: '8px',
+              padding: '0 4px',
+            }}>
               Preguntas frecuentes
-            </p>
-            <div className="space-y-1.5">
+            </div>
+            <div className="space-y-1">
               {[
                 '¿Qué está causando el atraso del mes?',
                 '¿Quién tiene el mayor riesgo hoy y por qué?',
@@ -737,7 +934,29 @@ export default function ChatPage() {
                 <button
                   key={idx}
                   onClick={() => handleSend(q)}
-                  className="w-full text-left px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-[#00B894]/30 hover:bg-[#00B894]/5 text-[11px] text-zinc-400 hover:text-[#00B894] font-medium transition-all"
+                  style={{
+                    width: '100%',
+                    textAlign: 'left' as const,
+                    background: 'var(--sf-inset)',
+                    border: '1px solid var(--sf-border)',
+                    borderRadius: '6px',
+                    padding: '7px 10px',
+                    fontSize: '11px',
+                    color: 'var(--sf-t4)',
+                    cursor: 'pointer',
+                    transition: 'all 150ms',
+                    lineHeight: '1.4',
+                  }}
+                  onMouseEnter={e => {
+                    e.currentTarget.style.background = 'rgba(29,158,117,0.08)'
+                    e.currentTarget.style.borderColor = 'rgba(29,158,117,0.2)'
+                    e.currentTarget.style.color = 'var(--sf-t1)'
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.background = 'var(--sf-inset)'
+                    e.currentTarget.style.borderColor = 'var(--sf-border)'
+                    e.currentTarget.style.color = 'var(--sf-t4)'
+                  }}
                 >
                   {q}
                 </button>
@@ -745,7 +964,6 @@ export default function ChatPage() {
             </div>
           </div>
         </div>
-      </div>
     </div>
   )
 }

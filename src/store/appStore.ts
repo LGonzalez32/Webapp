@@ -12,7 +12,12 @@ import type {
   DataAvailability,
   Configuracion,
   CategoriaInventario,
+  InventarioPorCategoria,
   ForecastData,
+  SupervisorAnalysis,
+  CategoriaAnalysis,
+  CanalAnalysis,
+  ChatClienteContext,
 } from '../types'
 
 const DEFAULT_CONFIG: Configuracion = {
@@ -21,11 +26,10 @@ const DEFAULT_CONFIG: Configuracion = {
   dias_dormido_threshold: 30,
   semanas_racha_threshold: 3,
   pct_concentracion_threshold: 50,
-  umbral_riesgo_quiebre: 5,
-  umbral_baja_cobertura: 15,
-  umbral_normal: 30,
+  umbral_riesgo_quiebre: 7,
+  umbral_baja_cobertura: 20,
+  umbral_normal: 60,
   tema: 'dark',
-  deepseek_api_key: '',
 }
 
 const DEFAULT_AVAILABILITY: DataAvailability = {
@@ -34,6 +38,7 @@ const DEFAULT_AVAILABILITY: DataAvailability = {
   has_venta_neta: false,
   has_categoria: false,
   has_canal: false,
+  has_supervisor: false,
   has_metas: false,
   has_inventario: false,
 }
@@ -51,7 +56,15 @@ interface AppState {
   clientesDormidos: ClienteDormido[]
   concentracionRiesgo: ConcentracionRiesgo[]
   categoriasInventario: CategoriaInventario[]
+  categoriasInventarioPorCategoria: InventarioPorCategoria[]
+  supervisorAnalysis:  SupervisorAnalysis[]
+  categoriaAnalysis:   CategoriaAnalysis[]
+  canalAnalysis:       CanalAnalysis[]
   dataAvailability: DataAvailability
+
+  // Contexto temporal para chat (no persistido)
+  chatContextVendedor: VendorAnalysis | null
+  chatContextCliente: ChatClienteContext | null
 
   // Forecast del backend
   forecastData: ForecastData | null
@@ -79,7 +92,11 @@ interface AppState {
   setInsights: (data: Insight[]) => void
   setClientesDormidos: (data: ClienteDormido[]) => void
   setConcentracionRiesgo: (data: ConcentracionRiesgo[]) => void
-  setCategoriasInventario: (data: CategoriaInventario[]) => void
+  setCategoriasInventario:  (data: CategoriaInventario[]) => void
+  setCategoriasInventarioPorCategoria: (data: InventarioPorCategoria[]) => void
+  setSupervisorAnalysis:    (data: SupervisorAnalysis[]) => void
+  setCategoriaAnalysis:     (data: CategoriaAnalysis[]) => void
+  setCanalAnalysis:         (data: CanalAnalysis[]) => void
   setDataAvailability: (data: DataAvailability) => void
 
   // Actions — control
@@ -88,6 +105,8 @@ interface AppState {
   setLoadingMessage: (msg: string) => void
   setSelectedPeriod: (period: { year: number; month: number }) => void
   setConfiguracion: (config: Partial<Configuracion>) => void
+  setChatContextVendedor: (v: VendorAnalysis | null) => void
+  setChatContextCliente: (c: ChatClienteContext | null) => void
   setForecastData: (data: ForecastData | null) => void
   setForecastLoading: (loading: boolean) => void
   setForecastChartLoading: (loading: boolean) => void
@@ -108,7 +127,13 @@ export const useAppStore = create<AppState>()(
       clientesDormidos: [],
       concentracionRiesgo: [],
       categoriasInventario: [],
+      categoriasInventarioPorCategoria: [],
+      supervisorAnalysis:  [],
+      categoriaAnalysis:   [],
+      canalAnalysis:       [],
       dataAvailability: DEFAULT_AVAILABILITY,
+      chatContextVendedor: null,
+      chatContextCliente: null,
       forecastData: null,
       forecastLoading: false,
       forecastChartLoading: false,
@@ -132,7 +157,11 @@ export const useAppStore = create<AppState>()(
       setInsights: (insights) => set({ insights }),
       setClientesDormidos: (clientesDormidos) => set({ clientesDormidos }),
       setConcentracionRiesgo: (concentracionRiesgo) => set({ concentracionRiesgo }),
-      setCategoriasInventario: (categoriasInventario) => set({ categoriasInventario }),
+      setCategoriasInventario:  (categoriasInventario)  => set({ categoriasInventario }),
+      setCategoriasInventarioPorCategoria: (categoriasInventarioPorCategoria) => set({ categoriasInventarioPorCategoria }),
+      setSupervisorAnalysis:    (supervisorAnalysis)    => set({ supervisorAnalysis }),
+      setCategoriaAnalysis:     (categoriaAnalysis)     => set({ categoriaAnalysis }),
+      setCanalAnalysis:         (canalAnalysis)         => set({ canalAnalysis }),
       setDataAvailability: (dataAvailability) => set({ dataAvailability }),
 
       setIsProcessed: (isProcessed) => set({ isProcessed }),
@@ -143,6 +172,8 @@ export const useAppStore = create<AppState>()(
         set((state) => ({
           configuracion: { ...state.configuracion, ...config },
         })),
+      setChatContextVendedor: (chatContextVendedor) => set({ chatContextVendedor }),
+      setChatContextCliente: (chatContextCliente) => set({ chatContextCliente }),
       setForecastData: (forecastData) => set({ forecastData }),
       setForecastLoading: (forecastLoading) => set({ forecastLoading }),
       setForecastChartLoading: (forecastChartLoading) => set({ forecastChartLoading }),
@@ -159,6 +190,10 @@ export const useAppStore = create<AppState>()(
           clientesDormidos: [],
           concentracionRiesgo: [],
           categoriasInventario: [],
+          categoriasInventarioPorCategoria: [],
+          supervisorAnalysis:  [],
+          categoriaAnalysis:   [],
+          canalAnalysis:       [],
           dataAvailability: DEFAULT_AVAILABILITY,
           forecastData: null,
           forecastLoading: false,
@@ -174,25 +209,16 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'salesflow-storage',
-      version: 3,
-      migrate: () => ({
-        sales: [],
-        metas: [],
-        inventory: [],
-        vendorAnalysis: [],
-        teamStats: null,
-        insights: [],
-        clientesDormidos: [],
-        concentracionRiesgo: [],
-        dataAvailability: DEFAULT_AVAILABILITY,
-        isProcessed: false,
-        isLoading: false,
-        orgId: '',
-        selectedPeriod: {
+      version: 5,
+      migrate: (persistedState: any) => ({
+        selectedPeriod: persistedState?.selectedPeriod ?? {
           year: new Date().getFullYear(),
           month: new Date().getMonth(),
         },
-        configuracion: DEFAULT_CONFIG,
+        configuracion: {
+          ...DEFAULT_CONFIG,
+        },
+        orgId: persistedState?.orgId ?? '',
       }) as any,
       // sales/metas/inventory NO se persisten: son muy grandes para localStorage
       // y bloquean el hilo principal al serializarse. El usuario vuelve a subir el archivo.

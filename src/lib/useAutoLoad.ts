@@ -56,7 +56,6 @@ export function useAutoLoad() {
         if (inventory && inventory.length > 0) setInventory(inventory)
         // useAnalysis se dispara automáticamente cuando sales cambia
       } catch (err) {
-        console.warn('Error en autoload:', err)
         navigate('/cargar', { replace: true })
       } finally {
         setIsLoading(false)

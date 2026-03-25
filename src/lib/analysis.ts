@@ -10,6 +10,10 @@ import type {
   RiesgoVendedor,
   CategoriaInventario,
   ClasificacionInventario,
+  InventarioPorCategoria,
+  SupervisorAnalysis,
+  CategoriaAnalysis,
+  CanalAnalysis,
 } from '../types'
 
 // ─── HELPERS DE FECHA ─────────────────────────────────────────────────────────
@@ -57,6 +61,7 @@ export interface SaleIndex {
   has_venta_neta: boolean
   has_categoria: boolean
   has_canal: boolean
+  has_supervisor: boolean
 }
 
 function appendToMap<K>(map: Map<K, SaleRecord[]>, key: K, s: SaleRecord): void {
@@ -72,22 +77,25 @@ export function buildSaleIndex(sales: SaleRecord[]): SaleIndex {
   const byClient = new Map<string, SaleRecord[]>()
   let fechaReferencia = new Date(0)
   let has_producto = false, has_cliente = false, has_venta_neta = false
-  let has_categoria = false, has_canal = false
+  let has_categoria = false, has_canal = false, has_supervisor = false
 
   for (const s of sales) {
     if (s.fecha > fechaReferencia) fechaReferencia = s.fecha
     appendToMap(byPeriod, periodKey(s.fecha.getFullYear(), s.fecha.getMonth()), s)
     if (s.vendedor) appendToMap(byVendor, s.vendedor, s)
-    if (s.producto) { appendToMap(byProduct, s.producto, s); has_producto = true }
-    if (s.cliente) { appendToMap(byClient, s.cliente, s); has_cliente = true }
+    const productoKey = s.producto ?? s.codigo_producto
+    if (productoKey) { appendToMap(byProduct, productoKey, s); has_producto = true }
+    const clienteKey = s.cliente ?? s.codigo_cliente
+    if (clienteKey) { appendToMap(byClient, clienteKey, s); has_cliente = true }
     if (!has_venta_neta && s.venta_neta != null && s.venta_neta > 0) has_venta_neta = true
     if (!has_categoria && s.categoria != null && s.categoria !== '') has_categoria = true
     if (!has_canal && s.canal != null && s.canal !== '') has_canal = true
+    if (!has_supervisor && s.supervisor != null && s.supervisor !== '') has_supervisor = true
   }
 
   return {
     byPeriod, byVendor, byProduct, byClient, fechaReferencia,
-    has_producto, has_cliente, has_venta_neta, has_categoria, has_canal,
+    has_producto, has_cliente, has_venta_neta, has_categoria, has_canal, has_supervisor,
   }
 }
 
@@ -180,6 +188,53 @@ function calcSemanasRachaFast(
   return { semanas: racha, promedioSemanal }
 }
 
+// ─── HELPERS DE NORMALIZACIÓN ─────────────────────────────────────────────────
+
+function normalizeStr(s: string): string {
+  return s.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+}
+
+// ─── METAS MULTI-DIMENSIONAL ──────────────────────────────────────────────────
+
+const META_DIMS = ['vendedor', 'cliente', 'producto', 'categoria', 'departamento', 'supervisor', 'canal'] as const
+type MetaDim = typeof META_DIMS[number]
+
+export function getMetaMultiDim(
+  metas: MetaRecord[],
+  filtros: { mes: number; anio: number } & Partial<Record<MetaDim, string>>,
+): number | null {
+  const periodMetas = metas.filter((m) => m.mes === filtros.mes && m.anio === filtros.anio)
+  if (periodMetas.length === 0) return null
+
+  // A meta matches if every dimension it defines matches the corresponding filtro
+  const matches = periodMetas
+    .filter((m) => {
+      for (const dim of META_DIMS) {
+        const mVal = m[dim]
+        if (mVal !== undefined && mVal !== null) {
+          const fVal = filtros[dim]
+          if (!fVal || normalizeStr(String(mVal)) !== normalizeStr(String(fVal))) return false
+        }
+      }
+      return true
+    })
+    .map((m) => ({
+      meta: m,
+      specificity: META_DIMS.filter((d) => m[d] !== undefined).length,
+    }))
+    .sort((a, b) => b.specificity - a.specificity)
+
+  return matches.length > 0 ? matches[0].meta.meta : null
+}
+
+// ─── UTILIDAD: VARIACIÓN SEGURA ───────────────────────────────────────────────
+
+const safePct = (num: number, den: number): number => {
+  if (!den || den === 0) return 0
+  const raw = ((num - den) / Math.abs(den)) * 100
+  return Math.max(-999, Math.min(999, raw))
+}
+
 // ─── ANÁLISIS POR VENDEDOR ────────────────────────────────────────────────────
 
 // ─── YTD HELPER ───────────────────────────────────────────────────────────────
@@ -187,26 +242,28 @@ function calcSemanasRachaFast(
 function computeYTD(
   sales: SaleRecord[],
   fechaReferencia: Date
-): { ytd_actual: number; ytd_anterior: number; variacion_ytd_pct: number | null } {
+): { ytd_actual: number; ytd_anterior: number; ytd_actual_neto?: number; ytd_anterior_neto?: number; variacion_ytd_pct: number | null } {
   const yearActual = fechaReferencia.getFullYear()
   const startActual = new Date(yearActual, 0, 1)
   const startAnterior = new Date(yearActual - 1, 0, 1)
   // Mismo día/mes del año anterior
   const endAnterior = new Date(yearActual - 1, fechaReferencia.getMonth(), fechaReferencia.getDate(), 23, 59, 59, 999)
 
-  const ytd_actual = sales
-    .filter((s) => s.fecha >= startActual && s.fecha <= fechaReferencia)
-    .reduce((a, s) => a + s.unidades, 0)
+  const salesActual   = sales.filter((s) => s.fecha >= startActual && s.fecha <= fechaReferencia)
+  const salesAnterior = sales.filter((s) => s.fecha >= startAnterior && s.fecha <= endAnterior)
 
-  const ytd_anterior = sales
-    .filter((s) => s.fecha >= startAnterior && s.fecha <= endAnterior)
-    .reduce((a, s) => a + s.unidades, 0)
+  const ytd_actual   = salesActual.reduce((a, s) => a + s.unidades, 0)
+  const ytd_anterior = salesAnterior.reduce((a, s) => a + s.unidades, 0)
 
-  const variacion_ytd_pct = ytd_anterior > 0
-    ? ((ytd_actual - ytd_anterior) / ytd_anterior) * 100
-    : null
+  const variacion_ytd_pct = ytd_anterior > 0 ? safePct(ytd_actual, ytd_anterior) : null
 
-  return { ytd_actual, ytd_anterior, variacion_ytd_pct }
+  // Neto: solo si hay registros con venta_neta
+  const hasNetoActual   = salesActual.some((s) => s.venta_neta != null && s.venta_neta > 0)
+  const hasNetoAnterior = salesAnterior.some((s) => s.venta_neta != null && s.venta_neta > 0)
+  const ytd_actual_neto   = hasNetoActual   ? salesActual.reduce((a, s) => a + (s.venta_neta ?? 0), 0)   : undefined
+  const ytd_anterior_neto = hasNetoAnterior ? salesAnterior.reduce((a, s) => a + (s.venta_neta ?? 0), 0) : undefined
+
+  return { ytd_actual, ytd_anterior, ytd_actual_neto, ytd_anterior_neto, variacion_ytd_pct }
 }
 
 // Accepts pre-grouped vendor sales (only this vendor's records)
@@ -223,6 +280,9 @@ function analyzeVendor(
   periodEnd: Date,
   prevStart: Date,
   prevEnd: Date,
+  has_cliente: boolean,
+  has_producto: boolean,
+  has_canal: boolean,
 ): VendorAnalysis {
   const { year, month } = selectedPeriod
 
@@ -231,27 +291,19 @@ function analyzeVendor(
 
   const ventas_periodo = periodSales.reduce((a, s) => a + s.unidades, 0)
   const ventas_mes_anterior = prevSales.reduce((a, s) => a + s.unidades, 0)
-  const variacion_pct =
-    ventas_mes_anterior > 0
-      ? ((ventas_periodo - ventas_mes_anterior) / ventas_mes_anterior) * 100
-      : null
+  const variacion_pct = ventas_mes_anterior > 0 ? safePct(ventas_periodo, ventas_mes_anterior) : null
 
   const promedioN = promedioUltimosN(vendorSales, year, month, 3)
   const variacion_vs_promedio_pct = promedioN.promedio > 0
-    ? Math.round(((ventas_periodo - promedioN.promedio) / promedioN.promedio) * 100)
+    ? Math.round(safePct(ventas_periodo, promedioN.promedio))
     : null
 
-  const ritmo_diario = diasTranscurridos > 0 ? ventas_periodo / diasTranscurridos : 0
+  const ritmo_diario = ventas_periodo / Math.max(1, diasTranscurridos)
   const proyeccion_cierre = Math.round(ritmo_diario * diasTotales)
 
-  // Meta del período
-  const pk = periodKey(year, month)
-  const metaRecord = metas.find(
-    (m) =>
-      m.mes_periodo === pk &&
-      m.vendedor.toLowerCase().trim() === vendedor.toLowerCase().trim()
-  )
-  const meta = metaRecord?.meta
+  // Meta del período (multi-dimensional)
+  const metaVal = getMetaMultiDim(metas, { mes: month + 1, anio: year, vendedor })
+  const meta = metaVal ?? undefined
   const cumplimiento_pct = meta ? (ventas_periodo / meta) * 100 : undefined
   const ritmo_necesario =
     meta && diasRestantes > 0
@@ -279,16 +331,83 @@ function analyzeVendor(
     month
   )
 
+  // YTD (necesario para clasificación de riesgo sin meta)
+  const ytd = computeYTD(vendorSales, fechaReferencia)
+
   // Clasificación de riesgo
   let riesgo: RiesgoVendedor = 'ok'
   if (meta) {
     if (proyeccion_cierre < meta * 0.7) riesgo = 'critico'
     else if (proyeccion_cierre < meta * 0.9) riesgo = 'riesgo'
     else if (proyeccion_cierre > meta * 1.05) riesgo = 'superando'
-  } else if (variacion_pct !== null) {
-    if (variacion_pct < -20) riesgo = 'critico'
-    else if (variacion_pct < -10) riesgo = 'riesgo'
-    else if (variacion_pct > 10) riesgo = 'superando'
+  } else {
+    const variacion_vs_anio = ytd.ytd_anterior > 0
+      ? ((ytd.ytd_actual - ytd.ytd_anterior) / ytd.ytd_anterior) * 100
+      : null
+    if (variacion_vs_anio !== null) {
+      if (variacion_vs_anio < -20) riesgo = 'critico'
+      else if (variacion_vs_anio < -10) riesgo = 'riesgo'
+      else if (variacion_vs_anio > 10) riesgo = 'superando'
+    }
+  }
+
+  // ── Top clientes del período ──
+  let top_clientes_periodo: VendorAnalysis['top_clientes_periodo'] = null
+  if (has_cliente) {
+    const clienteMap = new Map<string, { unidades: number; venta_neta: number }>()
+    for (const s of periodSales) {
+      if (!s.cliente) continue
+      const acc = clienteMap.get(s.cliente) ?? { unidades: 0, venta_neta: 0 }
+      acc.unidades += s.unidades
+      acc.venta_neta += s.venta_neta ?? 0
+      clienteMap.set(s.cliente, acc)
+    }
+    top_clientes_periodo = [...clienteMap.entries()]
+      .map(([cliente, { unidades, venta_neta }]) => ({
+        cliente,
+        unidades,
+        venta_neta: venta_neta > 0 ? venta_neta : null,
+      }))
+      .sort((a, b) => b.unidades - a.unidades)
+      .slice(0, 3)
+  }
+
+  // ── Productos ausentes (vendidos en PM3 pero no en período actual) ──
+  let productos_ausentes: VendorAnalysis['productos_ausentes'] = null
+  if (has_producto) {
+    const productosActuales = new Set<string>()
+    for (const s of periodSales) {
+      if (s.producto) productosActuales.add(s.producto)
+    }
+    let pm3Y = year, pm3M = month - 3
+    while (pm3M < 0) { pm3Y--; pm3M += 12 }
+    const pm3Start = new Date(pm3Y, pm3M, 1)
+    const lastSaleByProduct = new Map<string, Date>()
+    for (const s of vendorSales) {
+      if (!s.producto || productosActuales.has(s.producto)) continue
+      if (s.fecha < pm3Start || s.fecha >= periodStart) continue
+      const prev = lastSaleByProduct.get(s.producto)
+      if (!prev || s.fecha > prev) lastSaleByProduct.set(s.producto, s.fecha)
+    }
+    productos_ausentes = [...lastSaleByProduct.entries()]
+      .map(([producto, fecha]) => ({
+        producto,
+        dias_sin_venta: Math.floor((fechaReferencia.getTime() - fecha.getTime()) / 86_400_000),
+        ultimo_periodo: periodKey(fecha.getFullYear(), fecha.getMonth()),
+      }))
+      .sort((a, b) => b.dias_sin_venta - a.dias_sin_venta)
+  }
+
+  // ── Canal principal (historial completo) ──
+  let canal_principal: string | null = null
+  if (has_canal) {
+    const canalCount = new Map<string, number>()
+    for (const s of vendorSales) {
+      if (s.canal) canalCount.set(s.canal, (canalCount.get(s.canal) ?? 0) + 1)
+    }
+    if (canalCount.size > 0) {
+      canal_principal = [...canalCount.entries()].sort((a, b) => b[1] - a[1])[0][0]
+    }
   }
 
   return {
@@ -310,8 +429,45 @@ function analyzeVendor(
     variacion_vs_promedio_pct,
     periodos_base_promedio: promedioN.periodos_con_datos,
     riesgo,
-    ...computeYTD(vendorSales, fechaReferencia),
+    ...ytd,
+    top_clientes_periodo,
+    productos_ausentes,
+    canal_principal,
+    productos_lentos_con_historial: null, // enriched in computeCommercialAnalysis
   }
+}
+
+// ─── FRECUENCIA ESPERADA DE COMPRA ────────────────────────────────────────────
+
+function calcFrecuenciaEsperada(sortedAsc: SaleRecord[]): number | null {
+  if (sortedAsc.length < 3) return null
+
+  // Detect predominant canal
+  const canalCount: Record<string, number> = {}
+  for (const r of sortedAsc) {
+    if (r.canal) canalCount[r.canal] = (canalCount[r.canal] ?? 0) + 1
+  }
+
+  if (Object.keys(canalCount).length > 0) {
+    const predominant = Object.entries(canalCount).sort(([, a], [, b]) => b - a)[0][0]
+    const canalRecs = sortedAsc.filter((r) => r.canal === predominant)
+    if (canalRecs.length >= 3) {
+      const diffs: number[] = []
+      for (let i = 1; i < canalRecs.length; i++) {
+        const diff = (canalRecs[i].fecha.getTime() - canalRecs[i - 1].fecha.getTime()) / 86400000
+        if (diff > 0) diffs.push(diff)
+      }
+      if (diffs.length > 0) return diffs.reduce((a, b) => a + b, 0) / diffs.length
+    }
+  }
+
+  // Fallback: all history (>= 3 already checked)
+  const diffs: number[] = []
+  for (let i = 1; i < sortedAsc.length; i++) {
+    const diff = (sortedAsc[i].fecha.getTime() - sortedAsc[i - 1].fecha.getTime()) / 86400000
+    if (diff > 0) diffs.push(diff)
+  }
+  return diffs.length > 0 ? diffs.reduce((a, b) => a + b, 0) / diffs.length : null
 }
 
 // ─── CLIENTES DORMIDOS ────────────────────────────────────────────────────────
@@ -337,7 +493,8 @@ function computeClientesDormidos(
   type DormidoRaw = {
     cliente: string; vendedor: string; ultima_compra: Date; dias_sin_actividad: number
     valor_historico: number; compras_historicas: number
-    frecuencia_promedio: number; meses_distintos: number; meses_historial: number
+    frecuencia_promedio: number; frecuencia_esperada: number | null; threshold_efectivo: number
+    meses_distintos: number; meses_historial: number
   }
   const candidates: DormidoRaw[] = []
 
@@ -346,7 +503,15 @@ function computeClientesDormidos(
     const sortedAsc = [...records].sort((a, b) => a.fecha.getTime() - b.fecha.getTime())
     const ultima_compra = sortedAsc[sortedAsc.length - 1].fecha
     const dias_sin_actividad = Math.floor((today.getTime() - ultima_compra.getTime()) / 86400000)
-    if (dias_sin_actividad <= threshold) continue
+    if (dias_sin_actividad <= 0) continue
+
+    // Dynamic threshold per client
+    const frecuencia_esperada = calcFrecuenciaEsperada(sortedAsc)
+    const threshold_efectivo = frecuencia_esperada !== null
+      ? Math.round(frecuencia_esperada * 1.5)
+      : threshold
+
+    if (dias_sin_actividad <= threshold_efectivo) continue
 
     const vendedorCount: Record<string, number> = {}
     for (const r of records) {
@@ -375,7 +540,8 @@ function computeClientesDormidos(
     candidates.push({
       cliente, vendedor, ultima_compra, dias_sin_actividad,
       valor_historico, compras_historicas: records.length,
-      frecuencia_promedio, meses_distintos, meses_historial,
+      frecuencia_promedio, frecuencia_esperada, threshold_efectivo,
+      meses_distintos, meses_historial,
     })
   }
 
@@ -388,7 +554,8 @@ function computeClientesDormidos(
       ? 0.3
       : Math.max(0, 1 - (c.dias_sin_actividad / (c.frecuencia_promedio * 3)))
     const valor_score = maxValor > 0 ? c.valor_historico / maxValor : 0
-    const recencia_score = Math.max(0, 1 - (c.dias_sin_actividad / 180))
+    // recencia_score uses dynamic threshold instead of fixed 180
+    const recencia_score = Math.max(0, 1 - (c.dias_sin_actividad / (c.threshold_efectivo * 2)))
     const estabilidad_score = Math.min(1, c.meses_distintos / c.meses_historial)
 
     const raw = (frecuencia_score * 35) + (valor_score * 25) + (recencia_score * 20) + (estabilidad_score * 20)
@@ -414,6 +581,8 @@ function computeClientesDormidos(
       cliente: c.cliente, vendedor: c.vendedor, ultima_compra: c.ultima_compra,
       dias_sin_actividad: c.dias_sin_actividad, valor_historico: c.valor_historico,
       compras_historicas: c.compras_historicas, recovery_score, recovery_label, recovery_explicacion,
+      frecuencia_esperada_dias: c.frecuencia_esperada !== null ? Math.round(c.frecuencia_esperada) : null,
+      threshold_usado: c.threshold_efectivo,
     }
   })
 
@@ -503,21 +672,70 @@ export function computeCommercialAnalysis(
       v, idx.byVendor.get(v)!, metas, selectedPeriod,
       diasTranscurridos, diasTotales, diasRestantes, fechaReferencia,
       periodStart, periodEnd, prevStart, prevEnd,
+      idx.has_cliente, idx.has_producto, idx.has_canal,
     )
   )
+
+  // ── Enriquecer productos_lentos_con_historial ──
+  if (inventory.length > 0 && idx.has_producto) {
+    const pm3Inv: Record<string, number> = {}
+    for (let i = 1; i <= 3; i++) {
+      let y = year, m = month - i
+      while (m < 0) { y--; m += 12 }
+      getSalesByPeriod(idx, y, m).forEach((s) => {
+        if (s.producto) pm3Inv[s.producto] = (pm3Inv[s.producto] ?? 0) + s.unidades
+      })
+    }
+    Object.keys(pm3Inv).forEach((p) => { pm3Inv[p] = pm3Inv[p] / 3 })
+
+    const lentos = inventory.filter((item) => {
+      const pm3 = pm3Inv[item.producto] ?? 0
+      if (pm3 === 0) return true
+      return Math.round((item.unidades / pm3) * 30) > config.umbral_normal
+    })
+
+    if (lentos.length > 0) {
+      for (const va of vendorAnalysis) {
+        const vSales = idx.byVendor.get(va.vendedor) ?? []
+        const lastSale = new Map<string, Date>()
+        for (const s of vSales) {
+          if (!s.producto) continue
+          const prev = lastSale.get(s.producto)
+          if (!prev || s.fecha > prev) lastSale.set(s.producto, s.fecha)
+        }
+        const enriched = lentos
+          .filter((item) => lastSale.has(item.producto))
+          .map((item) => {
+            const lastDate = lastSale.get(item.producto)!
+            const pm3 = pm3Inv[item.producto] ?? 0
+            return {
+              producto: item.producto,
+              clasificacion_inventario: pm3 === 0 ? 'sin_movimiento' : 'lento_movimiento',
+              vendedor_vendio_antes: true,
+              dias_sin_vender: Math.floor((fechaReferencia.getTime() - lastDate.getTime()) / 86_400_000),
+            }
+          })
+          .sort((a, b) => b.dias_sin_vender - a.dias_sin_vender)
+          .slice(0, 3)
+        if (enriched.length > 0) va.productos_lentos_con_historial = enriched
+      }
+    }
+  }
 
   const periodSales = getSalesByPeriod(idx, year, month)
   const prevSales = getSalesByPeriod(idx, prev.year, prev.month)
   const total_ventas = periodSales.reduce((a, s) => a + s.unidades, 0)
   const prevTotal = prevSales.reduce((a, s) => a + s.unidades, 0)
-  const variacion_pct = prevTotal > 0 ? ((total_ventas - prevTotal) / prevTotal) * 100 : null
+  const variacion_pct = prevTotal > 0 ? safePct(total_ventas, prevTotal) : null
 
-  const pk = periodKey(year, month)
-  const metasDelPeriodo = metas.filter((m) => m.mes_periodo === pk)
+  const metasDelPeriodo = metas.filter((m) => m.mes === month + 1 && m.anio === year)
   const meta_equipo =
     metasDelPeriodo.length > 0
       ? metasDelPeriodo.reduce((a, m) => a + m.meta, 0)
       : undefined
+  const vendedorMetas = metasDelPeriodo.filter((m) => m.vendedor !== undefined)
+  const meta_equipo_total: number | null =
+    vendedorMetas.length > 0 ? vendedorMetas.reduce((a, m) => a + m.meta, 0) : null
 
   const proyeccion_equipo = vendorAnalysis.reduce(
     (a, v) => a + (v.proyeccion_cierre ?? 0),
@@ -577,6 +795,7 @@ export function computeCommercialAnalysis(
     total_unidades: total_ventas,
     variacion_pct,
     meta_equipo,
+    meta_equipo_total,
     cumplimiento_equipo,
     proyeccion_equipo,
     mejor_vendedor,
@@ -723,7 +942,14 @@ export function computeCategoriasInventario(
 
     let clasificacion: ClasificacionInventario
     if (pm3 === 0) {
-      clasificacion = ultimoMovMap[item.producto] ? 'lento_movimiento' : 'sin_movimiento'
+      if (!ultimoMovMap[item.producto]) {
+        clasificacion = 'sin_movimiento'
+      } else {
+        const daysSinceLastSale = Math.floor(
+          (idx.fechaReferencia.getTime() - ultimoMovMap[item.producto].getTime()) / (1000 * 60 * 60 * 24)
+        )
+        clasificacion = daysSinceLastSale > 120 ? 'sin_movimiento' : 'lento_movimiento'
+      }
     } else if (dias_inventario <= config.umbral_riesgo_quiebre) {
       clasificacion = 'riesgo_quiebre'
     } else if (dias_inventario <= config.umbral_baja_cobertura) {
@@ -744,4 +970,330 @@ export function computeCategoriasInventario(
       ultimo_movimiento: ultimoMovMap[item.producto],
     }
   })
+}
+
+// ─── MÓDULO SUPERVISOR ────────────────────────────────────────────────────────
+
+export function analyzeSupervisor(
+  vendorAnalysis: VendorAnalysis[],
+  metas: MetaRecord[],
+  selectedPeriod: { year: number; month: number },
+  index: SaleIndex,
+): SupervisorAnalysis[] {
+  const { year, month } = selectedPeriod
+  const fr = index.fechaReferencia
+  const ytdYear = fr.getFullYear()
+  const startYTDActual  = new Date(ytdYear, 0, 1)
+  const startYTDAnterior = new Date(ytdYear - 1, 0, 1)
+  const endYTDAnterior  = new Date(ytdYear - 1, fr.getMonth(), fr.getDate(), 23, 59, 59, 999)
+  const prevYearStart   = new Date(year - 1, month, 1)
+  const prevYearEnd     = new Date(year - 1, month + 1, 0, 23, 59, 59, 999)
+
+  // Predominant supervisor per vendor
+  const supervisorByVendor: Record<string, string> = {}
+  for (const [vendedor, records] of index.byVendor.entries()) {
+    const count: Record<string, number> = {}
+    for (const r of records) {
+      if (r.supervisor) count[r.supervisor] = (count[r.supervisor] ?? 0) + 1
+    }
+    const top = Object.entries(count).sort(([, a], [, b]) => b - a)[0]
+    if (top) supervisorByVendor[vendedor] = top[0]
+  }
+
+  // Group vendors by supervisor
+  const vendoresBySupervisor: Record<string, string[]> = {}
+  for (const [vendedor, supervisor] of Object.entries(supervisorByVendor)) {
+    if (!vendoresBySupervisor[supervisor]) vendoresBySupervisor[supervisor] = []
+    vendoresBySupervisor[supervisor].push(vendedor)
+  }
+
+  const result: SupervisorAnalysis[] = []
+
+  for (const [supervisor, vendores] of Object.entries(vendoresBySupervisor)) {
+    const vas = vendorAnalysis.filter((v) => vendores.includes(v.vendedor))
+    if (vas.length === 0) continue
+
+    const ventas_periodo    = vas.reduce((a, v) => a + v.ventas_periodo, 0)
+    const proyeccion_cierre = vas.reduce((a, v) => a + (v.proyeccion_cierre ?? 0), 0)
+
+    const supervisorSales = vendores.flatMap((v) => index.byVendor.get(v) ?? [])
+
+    const ytd_actual  = supervisorSales.filter((s) => s.fecha >= startYTDActual && s.fecha <= fr).reduce((a, s) => a + s.unidades, 0)
+    const ytd_anterior = supervisorSales.filter((s) => s.fecha >= startYTDAnterior && s.fecha <= endYTDAnterior).reduce((a, s) => a + s.unidades, 0)
+
+    const ventas_prev = supervisorSales.filter((s) => s.fecha >= prevYearStart && s.fecha <= prevYearEnd).reduce((a, s) => a + s.unidades, 0)
+    const variacion_pct = safePct(ventas_periodo, ventas_prev)
+
+    const meta_zona = getMetaMultiDim(metas, { mes: month + 1, anio: year, supervisor })
+    const cumplimiento_pct = meta_zona ? (proyeccion_cierre / meta_zona) * 100 : null
+
+    const vendedores_criticos  = vas.filter((v) => v.riesgo === 'critico').length
+    const vendedores_riesgo    = vas.filter((v) => v.riesgo === 'riesgo').length
+    const vendedores_ok        = vas.filter((v) => v.riesgo === 'ok').length
+    const vendedores_superando = vas.filter((v) => v.riesgo === 'superando').length
+
+    let riesgo_zona: SupervisorAnalysis['riesgo_zona'] = 'ok'
+    if (meta_zona) {
+      const ratio = proyeccion_cierre / meta_zona
+      if (ratio < 0.7)       riesgo_zona = 'critico'
+      else if (ratio < 0.9)  riesgo_zona = 'riesgo'
+      else if (ratio > 1.05) riesgo_zona = 'superando'
+    } else {
+      const total = vas.length
+      if (total > 0) {
+        const pctCritico       = vendedores_criticos / total
+        const pctCriticoRiesgo = (vendedores_criticos + vendedores_riesgo) / total
+        const pctSuperando     = vendedores_superando / total
+        if (pctCritico > 0.5)       riesgo_zona = 'critico'
+        else if (pctCriticoRiesgo > 0.5) riesgo_zona = 'riesgo'
+        else if (pctSuperando > 0.5)     riesgo_zona = 'superando'
+      }
+    }
+
+    result.push({
+      supervisor, vendedores: vendores, ventas_periodo, meta_zona, cumplimiento_pct,
+      proyeccion_cierre, variacion_pct,
+      vendedores_criticos, vendedores_riesgo, vendedores_ok, vendedores_superando,
+      riesgo_zona, ytd_actual, ytd_anterior,
+    })
+  }
+
+  return result.sort((a, b) => b.ventas_periodo - a.ventas_periodo)
+}
+
+// ─── MÓDULO CATEGORÍA ─────────────────────────────────────────────────────────
+
+export function analyzeCategoria(
+  metas: MetaRecord[],
+  selectedPeriod: { year: number; month: number },
+  index: SaleIndex,
+): CategoriaAnalysis[] {
+  const { year, month } = selectedPeriod
+  const periodSales  = getSalesByPeriod(index, year, month)
+  const total_periodo = periodSales.reduce((a, s) => a + s.unidades, 0)
+  if (total_periodo === 0) return []
+
+  const cats = new Set<string>()
+  periodSales.forEach((s) => { if (s.categoria) cats.add(s.categoria) })
+  if (cats.size === 0) return []
+
+  const prevYearSales = getSalesByPeriod(index, year - 1, month)
+
+  // Collect PM3 months
+  const pm3Months: SaleRecord[][] = []
+  for (let i = 1; i <= 3; i++) {
+    let y = year, m = month - i
+    while (m < 0) { y--; m += 12 }
+    pm3Months.push(getSalesByPeriod(index, y, m))
+  }
+
+  const result: CategoriaAnalysis[] = []
+
+  for (const categoria of cats) {
+    const catSales = periodSales.filter((s) => s.categoria === categoria)
+    const ventas_periodo = catSales.reduce((a, s) => a + s.unidades, 0)
+
+    const ventas_anterior = prevYearSales
+      .filter((s) => s.categoria === categoria)
+      .reduce((a, s) => a + s.unidades, 0)
+    const variacion_pct = safePct(ventas_periodo, ventas_anterior)
+
+    const pm3Vals = pm3Months
+      .map((ms) => ms.filter((s) => s.categoria === categoria).reduce((a, s) => a + s.unidades, 0))
+      .filter((v) => v > 0)
+    const pm3 = pm3Vals.length > 0 ? pm3Vals.reduce((a, b) => a + b, 0) / pm3Vals.length : 0
+
+    // Calcular variación vs PM3
+    let variacion_vs_pm3 = 0
+    let tendencia: CategoriaAnalysis['tendencia'] = 'estable'
+    if (pm3 === 0) {
+      variacion_vs_pm3 = 0
+      tendencia = 'estable'
+    } else {
+      variacion_vs_pm3 = safePct(ventas_periodo, pm3)
+      if (ventas_periodo === 0) {
+        tendencia = 'sin_datos'
+      } else if (variacion_vs_pm3 <= -40) {
+        tendencia = 'colapso'
+      } else if (variacion_vs_pm3 <= -10) {
+        tendencia = 'caida'
+      } else if (variacion_vs_pm3 > 15) {
+        tendencia = 'crecimiento'
+      } else {
+        tendencia = 'estable'
+      }
+    }
+
+    const participacion_pct = total_periodo > 0 ? (ventas_periodo / total_periodo) * 100 : 0
+
+    const meta_categoria = getMetaMultiDim(metas, { mes: month + 1, anio: year, categoria })
+    const cumplimiento_pct = meta_categoria ? (ventas_periodo / meta_categoria) * 100 : null
+
+    // Top vendedores
+    const vendedorVol: Record<string, number> = {}
+    catSales.forEach((s) => { if (s.vendedor) vendedorVol[s.vendedor] = (vendedorVol[s.vendedor] ?? 0) + s.unidades })
+    const top_vendedores = Object.entries(vendedorVol).sort(([, a], [, b]) => b - a).slice(0, 3).map(([v]) => v)
+
+    // Top clientes
+    const clienteVol: Record<string, number> = {}
+    catSales.forEach((s) => {
+      const c = s.cliente ?? s.codigo_cliente
+      if (c) clienteVol[c] = (clienteVol[c] ?? 0) + s.unidades
+    })
+    const top_clientes = Object.entries(clienteVol).sort(([, a], [, b]) => b - a).slice(0, 3).map(([c]) => c)
+
+    result.push({
+      categoria, ventas_periodo, ventas_anterior, variacion_pct,
+      pm3, variacion_vs_pm3, meta_categoria, cumplimiento_pct,
+      top_vendedores, top_clientes, tendencia, participacion_pct,
+    })
+  }
+
+  return result.sort((a, b) => b.ventas_periodo - a.ventas_periodo)
+}
+
+// ─── MÓDULO CANAL ─────────────────────────────────────────────────────────────
+
+export function analyzeCanal(
+  selectedPeriod: { year: number; month: number },
+  index: SaleIndex,
+): CanalAnalysis[] {
+  const { year, month } = selectedPeriod
+  const periodSales  = getSalesByPeriod(index, year, month)
+  const total_periodo = periodSales.reduce((a, s) => a + s.unidades, 0)
+
+  // Canales activos en período actual
+  const activePeriod = new Set<string>()
+  periodSales.forEach((s) => { if (s.canal) activePeriod.add(s.canal) })
+
+  // Canales activos en los 3 meses anteriores
+  const pm3Months: SaleRecord[][] = []
+  for (let i = 1; i <= 3; i++) {
+    let y = year, m = month - i
+    while (m < 0) { y--; m += 12 }
+    pm3Months.push(getSalesByPeriod(index, y, m))
+  }
+  const activeAnterior = new Set<string>()
+  pm3Months.forEach((ms) => ms.forEach((s) => { if (s.canal) activeAnterior.add(s.canal) }))
+
+  const allCanales = new Set([...activePeriod, ...activeAnterior])
+  if (allCanales.size === 0) return []
+
+  const prevYearSales = getSalesByPeriod(index, year - 1, month)
+
+  const result: CanalAnalysis[] = []
+
+  for (const canal of allCanales) {
+    const canalSales = periodSales.filter((s) => s.canal === canal)
+    const ventas_periodo = canalSales.reduce((a, s) => a + s.unidades, 0)
+
+    const ventas_anterior = prevYearSales
+      .filter((s) => s.canal === canal)
+      .reduce((a, s) => a + s.unidades, 0)
+    const variacion_pct = safePct(ventas_periodo, ventas_anterior)
+
+    const pm3Vals = pm3Months
+      .map((ms) => ms.filter((s) => s.canal === canal).reduce((a, s) => a + s.unidades, 0))
+      .filter((v) => v > 0)
+    const pm3 = pm3Vals.length > 0 ? pm3Vals.reduce((a, b) => a + b, 0) / pm3Vals.length : 0
+
+    const participacion_pct = total_periodo > 0 ? (ventas_periodo / total_periodo) * 100 : 0
+
+    const vendedorVol: Record<string, number> = {}
+    canalSales.forEach((s) => { if (s.vendedor) vendedorVol[s.vendedor] = (vendedorVol[s.vendedor] ?? 0) + s.unidades })
+    const top_vendedor = Object.entries(vendedorVol).sort(([, a], [, b]) => b - a)[0]?.[0] ?? null
+
+    const clienteVol: Record<string, number> = {}
+    canalSales.forEach((s) => {
+      const c = s.cliente ?? s.codigo_cliente
+      if (c) clienteVol[c] = (clienteVol[c] ?? 0) + s.unidades
+    })
+    const top_cliente = Object.entries(clienteVol).sort(([, a], [, b]) => b - a)[0]?.[0] ?? null
+
+    const activo_periodo  = activePeriod.has(canal)
+    const activo_anterior = activeAnterior.has(canal)
+
+    const tendencia: CanalAnalysis['tendencia'] =
+      activo_anterior && !activo_periodo ? 'desaparecido'
+      : variacion_pct > 15               ? 'crecimiento'
+      : variacion_pct > -10              ? 'estable'
+      : 'caida'
+
+    result.push({
+      canal, ventas_periodo, ventas_anterior, variacion_pct, pm3,
+      participacion_pct, top_vendedor, top_cliente,
+      activo_periodo, activo_anterior, tendencia,
+    })
+  }
+
+  return result.sort((a, b) => b.ventas_periodo - a.ventas_periodo)
+}
+
+// ─── INVENTARIO AGRUPADO POR CATEGORÍA ───────────────────────────────────────
+
+export function computeCategoriasInventarioPorCategoria(
+  categoriasInventario: CategoriaInventario[],
+  config: Configuracion,
+): InventarioPorCategoria[] {
+  if (categoriasInventario.length === 0) return []
+
+  const unidadesTotalesEmpresa = categoriasInventario.reduce((a, c) => a + c.unidades_actuales, 0)
+
+  const catMap = new Map<string, CategoriaInventario[]>()
+  for (const item of categoriasInventario) {
+    const cat = item.categoria ?? 'Sin categoría'
+    const arr = catMap.get(cat) ?? []
+    arr.push(item)
+    catMap.set(cat, arr)
+  }
+
+  const result: InventarioPorCategoria[] = []
+  for (const [categoria, items] of catMap.entries()) {
+    const productos_total = items.length
+    const unidades_totales = items.reduce((a, c) => a + c.unidades_actuales, 0)
+    const pm3_total = items.reduce((a, c) => a + c.pm3, 0)
+
+    // Weighted average of dias_inventario (by pm3 — higher rotation = more weight)
+    const pm3Sum = items.reduce((a, c) => a + c.pm3, 0)
+    const dias_real = items.map((c) => (c.dias_inventario === 9999 ? 0 : c.dias_inventario))
+    const dias_inventario_promedio = pm3Sum > 0
+      ? Math.round(items.reduce((a, c, i) => a + dias_real[i] * c.pm3, 0) / pm3Sum)
+      : Math.round(dias_real.reduce((a, d) => a + d, 0) / items.length)
+
+    const capital_inmovilizado_pct = unidadesTotalesEmpresa > 0
+      ? (unidades_totales / unidadesTotalesEmpresa) * 100
+      : 0
+
+    const productos_quiebre = items.filter((c) => c.clasificacion === 'riesgo_quiebre').length
+    const productos_baja_cobertura = items.filter((c) => c.clasificacion === 'baja_cobertura').length
+    const productos_lento = items.filter((c) => c.clasificacion === 'lento_movimiento').length
+    const productos_sin_movimiento = items.filter((c) => c.clasificacion === 'sin_movimiento').length
+
+    let clasificacion_categoria: InventarioPorCategoria['clasificacion_categoria']
+    if (productos_quiebre > 0 && productos_quiebre / productos_total > 0.3) {
+      clasificacion_categoria = 'critica'
+    } else if (dias_inventario_promedio < config.umbral_baja_cobertura) {
+      clasificacion_categoria = 'riesgo'
+    } else if (dias_inventario_promedio > config.umbral_normal * 2) {
+      clasificacion_categoria = 'sobrestock'
+    } else {
+      clasificacion_categoria = 'normal'
+    }
+
+    result.push({
+      categoria,
+      productos_total,
+      unidades_totales,
+      pm3_total,
+      dias_inventario_promedio,
+      capital_inmovilizado_pct,
+      productos_quiebre,
+      productos_baja_cobertura,
+      productos_lento,
+      productos_sin_movimiento,
+      clasificacion_categoria,
+    })
+  }
+
+  return result.sort((a, b) => b.unidades_totales - a.unidades_totales)
 }

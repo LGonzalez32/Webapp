@@ -78,7 +78,6 @@ export default function AuthPage() {
     const redirectTo = joinOrgId
       ? `${window.location.origin}/auth/callback?join=${joinOrgId}`
       : `${window.location.origin}/auth/callback`
-    console.log('OAuth redirectTo:', redirectTo)
     await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: { redirectTo },

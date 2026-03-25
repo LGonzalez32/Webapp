@@ -66,6 +66,7 @@ interface AnnualPerformanceResponse {
   seller: string
   kpis: AnnualKPIs
   series: AnnualSeries
+  model_used: string | null
   error: string | null
 }
 
@@ -204,6 +205,7 @@ export async function getAnnualPerformance(
         forecast: [],
         meta: [],
       },
+      model_used: null,
       error: message,
     }
   }

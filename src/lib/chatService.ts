@@ -382,6 +382,22 @@ FORMATO DE RESPUESTA — sigue EXACTAMENTE este patrón:
 - ¿Pregunta específica 3?
 [/SEGUIMIENTO]
 
+VISUALIZACIONES:
+Cuando el usuario pregunte algo que se beneficie de una visualización (comparaciones, tendencias, rankings, distribuciones), incluye UN bloque de datos al final de tu respuesta en este formato exacto:
+
+:::chart
+{"type":"bar","title":"Título","data":[{"label":"Cat1","value":1234}],"color":"blue"}
+:::
+
+Reglas para charts:
+- Solo UN chart por respuesta
+- Máximo 10 items en data
+- type: "bar" para comparaciones, "line" para tendencias, "pie" para distribuciones, "horizontal_bar" para rankings
+- color: "green" | "red" | "blue" | "mixed" ("mixed" colorea positivos en verde y negativos en rojo)
+- Los values deben ser números, no strings
+- NO inventes datos — solo grafica datos que tienes en el contexto
+- El bloque :::chart debe ir DESPUÉS de todo el texto y ANTES de [SEGUIMIENTO]
+
 PROHIBIDO:
 - Escribir "PROBLEMA 1 —" o "PUNTO 1 —" o "SITUACIÓN GENERAL" como encabezado
 - Párrafos largos sin bullets
@@ -428,33 +444,65 @@ export function parseFollowUps(content: string): {
   return { cleanContent, followUps }
 }
 
-// ─── Backend base URL ─────────────────────────────────────────────────────────
+// ─── parseChartBlock ─────────────────────────────────────────────────────────
 
-const BASE_URL = (import.meta.env.VITE_FORECAST_API_URL as string | undefined) ?? 'http://localhost:8000'
+export interface ChartData {
+  type: 'bar' | 'line' | 'pie' | 'horizontal_bar'
+  title: string
+  data: { label: string; value: number }[]
+  color: 'green' | 'red' | 'blue' | 'mixed'
+}
 
-async function callBackendChat(payload: Record<string, unknown>): Promise<string> {
-  let response: Response
+export function parseChartBlock(content: string): {
+  cleanContent: string
+  chart: ChartData | null
+} {
+  const match = content.match(/:::chart\n([\s\S]*?)\n:::/)
+  if (!match) return { cleanContent: content, chart: null }
+
   try {
-    response = await fetch(`${BASE_URL}/api/v1/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-  } catch {
-    throw new Error('API_ERROR')
-  }
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ detail: 'API_ERROR' }))
-    const code = (err as { detail?: string }).detail ?? 'API_ERROR'
-    if (['CONFIG_MISSING', 'INVALID_KEY', 'RATE_LIMIT', 'API_ERROR'].includes(code)) {
-      throw new Error(code)
+    const chart = JSON.parse(match[1]) as ChartData
+    // Validate basic shape
+    if (!chart.type || !chart.title || !Array.isArray(chart.data) || chart.data.length === 0) {
+      return { cleanContent: content, chart: null }
     }
-    throw new Error('API_ERROR')
+    const cleanContent = content.replace(/:::chart\n[\s\S]*?\n:::/, '').trim()
+    return { cleanContent, chart }
+  } catch {
+    return { cleanContent: content, chart: null }
   }
+}
 
-  const data = await response.json()
-  return (data as { content: string }).content
+// ─── Backend AI proxy ─────────────────────────────────────────────────────────
+
+const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL as string | undefined) || 'http://localhost:8000'
+
+export async function callAI(
+  messages: { role: string; content: string }[],
+  options?: { max_tokens?: number; temperature?: number; model?: string; top_p?: number; frequency_penalty?: number },
+): Promise<{ choices: { message: { content: string } }[] }> {
+  const response = await fetch(`${BACKEND_URL}/api/v1/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messages,
+      model: options?.model || 'deepseek-chat',
+      max_tokens: options?.max_tokens || 1024,
+      temperature: options?.temperature ?? 0.3,
+      ...(options?.top_p != null && { top_p: options.top_p }),
+      ...(options?.frequency_penalty != null && { frequency_penalty: options.frequency_penalty }),
+    }),
+  })
+  if (response.status === 401) throw new Error('INVALID_KEY')
+  if (response.status === 429) throw new Error('RATE_LIMIT')
+  if (!response.ok) throw new Error('API_ERROR')
+  return response.json() as Promise<{ choices: { message: { content: string } }[] }>
+}
+
+async function callDeepSeek(_storeKey: string, payload: Record<string, unknown>): Promise<string> {
+  const { messages, ...rest } = payload as { messages: { role: string; content: string }[]; [k: string]: unknown }
+  const data = await callAI(messages, rest as { max_tokens?: number; temperature?: number; model?: string; top_p?: number; frequency_penalty?: number })
+  return data.choices[0].message.content
 }
 
 // ─── sendDeepAnalysis ─────────────────────────────────────────────────────────
@@ -484,7 +532,7 @@ export async function sendDeepAnalysis(context: ChatContext): Promise<string> {
     },
   ]
 
-  return callBackendChat({ messages, model: 'deepseek-reasoner', max_tokens: 2048 })
+  return callDeepSeek('', { messages, model: 'deepseek-reasoner', max_tokens: 2048 })
 }
 
 // ─── sendChatMessage ──────────────────────────────────────────────────────────
@@ -501,7 +549,7 @@ export async function sendChatMessage(
     ...recentMessages.map((m) => ({ role: m.role, content: m.content })),
   ]
 
-  return callBackendChat({
+  return callDeepSeek('', {
     messages: apiMessages,
     model: 'deepseek-chat',
     max_tokens: 1024,

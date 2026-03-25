@@ -1,5 +1,4 @@
 import { supabase } from './supabaseClient'
-import { parseSalesFile, parseMetasFile, parseInventoryFile } from './fileParser'
 import type { Organization, OrgMember, OrgRole, SaleRecord, MetaRecord, InventoryItem } from '../types'
 
 const BUCKET = 'org-data'
@@ -164,11 +163,9 @@ export async function uploadOrgFile(
   return { error: error?.message ?? null }
 }
 
-// parseSalesFile/etc. devuelven { data: T[], ... } — extraemos solo .data
 async function downloadAndParse<T>(
   orgId: string,
-  type: FileType,
-  parser: (file: File) => Promise<{ data: T[] }>
+  type: FileType
 ): Promise<T[] | null> {
   const { data: files } = await supabase.storage.from(BUCKET).list(orgId)
   const match = (files ?? []).find((f) => f.name.startsWith(type))
@@ -180,13 +177,32 @@ async function downloadAndParse<T>(
 
   if (error || !data) return null
 
-  const file = new File([data], match.name, { type: data.type })
-  try {
-    const result = await parser(file)
-    return result.data.length > 0 ? result.data : null
-  } catch {
-    return null
-  }
+  // Get raw bytes — do NOT parse on main thread
+  const buffer = await data.arrayBuffer()
+
+  return new Promise((resolve) => {
+    const worker = new Worker(
+      new URL('../workers/parseWorker.ts', import.meta.url),
+      { type: 'module' }
+    )
+
+    worker.onmessage = (e: MessageEvent<{ ok: boolean; data?: T[]; error?: string }>) => {
+      worker.terminate()
+      if (e.data.ok && e.data.data && e.data.data.length > 0) {
+        resolve(e.data.data)
+      } else {
+        resolve(null)
+      }
+    }
+
+    worker.onerror = () => {
+      worker.terminate()
+      resolve(null)
+    }
+
+    // Transfer the buffer — zero-copy, no serialization cost
+    worker.postMessage({ type, buffer, filename: match.name }, [buffer])
+  })
 }
 
 export async function loadOrgData(orgId: string): Promise<{
@@ -195,9 +211,9 @@ export async function loadOrgData(orgId: string): Promise<{
   inventory: InventoryItem[] | null
 }> {
   const [sales, metas, inventory] = await Promise.all([
-    downloadAndParse<SaleRecord>(orgId, 'ventas', parseSalesFile),
-    downloadAndParse<MetaRecord>(orgId, 'metas', parseMetasFile),
-    downloadAndParse<InventoryItem>(orgId, 'inventario', parseInventoryFile),
+    downloadAndParse<SaleRecord>(orgId, 'ventas'),
+    downloadAndParse<MetaRecord>(orgId, 'metas'),
+    downloadAndParse<InventoryItem>(orgId, 'inventario'),
   ])
   return { sales, metas, inventory }
 }

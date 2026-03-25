@@ -15,7 +15,10 @@ app = FastAPI(
     version="1.0.0",
 )
 
-_allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")
+_allowed_origins = os.getenv(
+    "ALLOWED_ORIGINS",
+    "https://data-solutions-hub.com,http://localhost:5173,http://localhost:3000"
+).split(",")
 
 app.add_middleware(
     CORSMiddleware,

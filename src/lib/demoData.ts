@@ -1,76 +1,214 @@
 import type { SaleRecord, MetaRecord, InventoryItem } from '../types'
 
-// ─── EMPRESA: Distribuidora Los Pinos S.A. ────────────────────────────────────
-// 8 vendedores, 18 meses de historial
-// Diseñado para activar los 5 insights clave del demo:
-//   1. Concentración Sistémica (top 3 clientes = ~52% de ventas)
-//   2. Caída Explicada de Carlos (cliente Ferretería Romero explica 78% de su caída)
-//   3. Doble Riesgo Carlos (racha negativa 4 semanas + cliente dormido)
-//   4. Dependencia Ana → Supermercado López (68% de sus ventas)
-//   5. Meta en Peligro Carlos (proyecta 67% de meta)
+// ─── Distribuidora Los Pinos S.A. ─────────────────────────────────────────────
+// 24 meses · 8 vendedores · 30 clientes · 20 productos · ~75-80K registros
+// Insights engineered: deterioro Carlos, dependencia Ana, mono-categoría Sandra,
+// subejecución Miguel Ángel, colapso Snacks, clientes dormidos, concentración
 
-const VENDEDORES = ['Carlos', 'Ana', 'María', 'Roberto', 'Luis', 'Sandra', 'Miguel', 'Patricia']
+// ─── ESTACIONALIDAD ───────────────────────────────────────────────────────────
 
-const PRODUCTOS = [
-  'Aceite 1L', 'Aceite 2L', 'Harina 1kg', 'Azúcar 1kg', 'Arroz 1kg',
-  'Detergente 500g', 'Jabón Barra', 'Pasta Dental', 'Shampoo 400ml',
-  'Frijoles 1kg', 'Sal 1kg', 'Café 250g',
+const ESTACIONAL: Record<number, number> = {
+  1: 0.75, 2: 0.82, 3: 0.90, 4: 0.97, 5: 1.00, 6: 1.05,
+  7: 1.12, 8: 1.08, 9: 0.95, 10: 1.02, 11: 1.15, 12: 1.40,
+}
+
+// ─── PRODUCTOS ────────────────────────────────────────────────────────────────
+
+interface Prod { codigo: string; nombre: string; cat: string; precio: number }
+
+const PRODS: Prod[] = [
+  { codigo: 'LAC001', nombre: 'Leche Entera 1L',       cat: 'Lácteos',   precio: 1.80 },
+  { codigo: 'LAC002', nombre: 'Yogurt Natural 500g',   cat: 'Lácteos',   precio: 2.50 },
+  { codigo: 'LAC003', nombre: 'Queso Fresco 400g',     cat: 'Lácteos',   precio: 3.20 },
+  { codigo: 'LAC004', nombre: 'Crema Ácida 250g',      cat: 'Lácteos',   precio: 1.50 },
+  { codigo: 'LAC005', nombre: 'Mantequilla 225g',      cat: 'Lácteos',   precio: 2.80 },
+  { codigo: 'REF001', nombre: 'Coca Cola 600ml',       cat: 'Refrescos', precio: 0.85 },
+  { codigo: 'REF002', nombre: 'Pepsi 600ml',           cat: 'Refrescos', precio: 0.80 },
+  { codigo: 'REF003', nombre: 'Agua Pura 500ml',       cat: 'Refrescos', precio: 0.50 },
+  { codigo: 'REF004', nombre: 'Jugo Naranja 1L',       cat: 'Refrescos', precio: 1.60 },
+  { codigo: 'REF005', nombre: 'Té Helado 500ml',       cat: 'Refrescos', precio: 1.20 },
+  { codigo: 'SNA001', nombre: 'Papas Fritas 150g',     cat: 'Snacks',    precio: 1.10 },
+  { codigo: 'SNA002', nombre: 'Galletas Soda 200g',    cat: 'Snacks',    precio: 0.90 },
+  { codigo: 'SNA003', nombre: 'Cacahuates 100g',       cat: 'Snacks',    precio: 0.75 },
+  { codigo: 'SNA004', nombre: 'Palomitas 80g',         cat: 'Snacks',    precio: 0.65 },
+  { codigo: 'SNA005', nombre: 'Chicharrón 120g',       cat: 'Snacks',    precio: 0.85 },
+  { codigo: 'LIM001', nombre: 'Detergente 1kg',        cat: 'Limpieza',  precio: 3.50 },
+  { codigo: 'LIM002', nombre: 'Jabón Lavaplatos 500g', cat: 'Limpieza',  precio: 2.20 },
+  { codigo: 'LIM003', nombre: 'Suavizante 1L',         cat: 'Limpieza',  precio: 2.80 },
+  { codigo: 'LIM004', nombre: 'Cloro 1L',              cat: 'Limpieza',  precio: 1.40 },
+  { codigo: 'LIM005', nombre: 'Desinfectante 750ml',   cat: 'Limpieza',  precio: 2.60 },
 ]
 
-const CLIENTES = [
-  'Supermercado López',    // cliente de Ana — concentración sistémica
-  'Tienda El Progreso',    // cliente de Carlos (TOP — causa la caída)
-  'Distribuidora Norte',   // 3er cliente top — completa el 52%
-  'Minimarket Central',
-  'Abarrotería La Paz',
-  'Supermercado Familiar',
-  'Tienda San José',
-  'Bodega Express',
-  'Comercial Rivera',
-  'Tienda La Colonia',
-  'Farmacia San Miguel',   // cliente dormido de Carlos — recovery dificil (comprador frecuente, muy vencido)
-  'Almacén Rivera',        // cliente dormido de Carlos — recovery alta (comprador mensual, 31 días)
-  'Mayoreo del Norte',     // cliente dormido de Carlos — recovery recuperable (comprador bimensual, ~55 días)
+const BY_CAT: Record<string, Prod[]> = {}
+for (const p of PRODS) {
+  if (!BY_CAT[p.cat]) BY_CAT[p.cat] = []
+  BY_CAT[p.cat].push(p)
+}
+
+// SNA001+SNA002 only (for when SNA003-005 are frozen for sin_movimiento)
+const SNACKS_ACTIVOS = BY_CAT['Snacks'].filter(p => p.codigo === 'SNA001' || p.codigo === 'SNA002')
+
+// ─── CLIENTES ─────────────────────────────────────────────────────────────────
+
+interface Cliente { codigo: string; nombre: string; canal: string; vendedor: string; dpto: string }
+
+const CLIENTES: Cliente[] = [
+  // Autoservicio
+  { codigo: 'CLI001', nombre: 'Supermercado López',      canal: 'Autoservicio', vendedor: 'Carlos Ramírez',    dpto: 'Santa Ana'    },
+  { codigo: 'CLI002', nombre: 'Supermercado Nacional',   canal: 'Autoservicio', vendedor: 'Ana González',      dpto: 'Ahuachapán'   },
+  { codigo: 'CLI003', nombre: 'Super Selectos Norte',    canal: 'Autoservicio', vendedor: 'María Castillo',    dpto: 'San Salvador' },
+  { codigo: 'CLI004', nombre: 'Despensa Familiar',       canal: 'Autoservicio', vendedor: 'Luis Hernández',    dpto: 'La Libertad'  },
+  { codigo: 'CLI005', nombre: 'Super Económico',         canal: 'Autoservicio', vendedor: 'Sandra Morales',    dpto: 'Cuscatlán'    },
+  { codigo: 'CLI006', nombre: 'Hiper Paiz Central',      canal: 'Autoservicio', vendedor: 'Miguel Ángel Díaz', dpto: 'San Miguel'   },
+  { codigo: 'CLI007', nombre: 'Super La Colonia',        canal: 'Autoservicio', vendedor: 'Patricia Vásquez',  dpto: 'Usulután'     },
+  { codigo: 'CLI008', nombre: 'Walmart Occidente',       canal: 'Autoservicio', vendedor: 'Roberto Cruz',      dpto: 'Sonsonate'    },
+  { codigo: 'CLI009', nombre: 'Súper Todo',              canal: 'Autoservicio', vendedor: 'Carlos Ramírez',    dpto: 'Santa Ana'    },
+  { codigo: 'CLI010', nombre: 'Mercado Central',         canal: 'Autoservicio', vendedor: 'Ana González',      dpto: 'Ahuachapán'   },
+  // Mostrador
+  { codigo: 'CLI011', nombre: 'Tienda El Progreso',      canal: 'Mostrador',    vendedor: 'Carlos Ramírez',    dpto: 'Santa Ana'    },
+  { codigo: 'CLI012', nombre: 'Pulpería San José',       canal: 'Mostrador',    vendedor: 'Ana González',      dpto: 'Ahuachapán'   },
+  { codigo: 'CLI013', nombre: 'Tienda La Esperanza',     canal: 'Mostrador',    vendedor: 'María Castillo',    dpto: 'San Salvador' },
+  { codigo: 'CLI014', nombre: 'Mini Super López',        canal: 'Mostrador',    vendedor: 'Luis Hernández',    dpto: 'La Libertad'  },
+  { codigo: 'CLI015', nombre: 'Abarrotería Central',     canal: 'Mostrador',    vendedor: 'Sandra Morales',    dpto: 'Cuscatlán'    },
+  { codigo: 'CLI016', nombre: 'Tienda El Carmen',        canal: 'Mostrador',    vendedor: 'Miguel Ángel Díaz', dpto: 'San Miguel'   },
+  { codigo: 'CLI017', nombre: 'Pulpería La Bendición',   canal: 'Mostrador',    vendedor: 'Patricia Vásquez',  dpto: 'Usulután'     },
+  { codigo: 'CLI018', nombre: 'Mini Market Norte',       canal: 'Mostrador',    vendedor: 'Roberto Cruz',      dpto: 'Sonsonate'    },
+  { codigo: 'CLI019', nombre: 'Tienda La Palma',         canal: 'Mostrador',    vendedor: 'Carlos Ramírez',    dpto: 'Santa Ana'    },
+  { codigo: 'CLI020', nombre: 'Abarrotería El Sol',      canal: 'Mostrador',    vendedor: 'María Castillo',    dpto: 'La Paz'       },
+  // Mayoreo
+  { codigo: 'CLI021', nombre: 'Mayoreo del Norte',       canal: 'Mayoreo',      vendedor: 'Ana González',      dpto: 'Ahuachapán'   },
+  { codigo: 'CLI022', nombre: 'Distribuidora Central',   canal: 'Mayoreo',      vendedor: 'Luis Hernández',    dpto: 'San Salvador' },
+  { codigo: 'CLI023', nombre: 'Mayorista El Salvador',   canal: 'Mayoreo',      vendedor: 'María Castillo',    dpto: 'La Libertad'  },
+  { codigo: 'CLI024', nombre: 'Distribuidora Sur',       canal: 'Mayoreo',      vendedor: 'Sandra Morales',    dpto: 'La Paz'       },
+  { codigo: 'CLI025', nombre: 'Mayoreo Oriente',         canal: 'Mayoreo',      vendedor: 'Miguel Ángel Díaz', dpto: 'San Miguel'   },
+  { codigo: 'CLI026', nombre: 'Distribuidora La Unión',  canal: 'Mayoreo',      vendedor: 'Patricia Vásquez',  dpto: 'La Unión'     },
+  { codigo: 'CLI027', nombre: 'Mayorista Occidente',     canal: 'Mayoreo',      vendedor: 'Roberto Cruz',      dpto: 'Sonsonate'    },
+  { codigo: 'CLI028', nombre: 'Central de Abastos',      canal: 'Mayoreo',      vendedor: 'Carlos Ramírez',    dpto: 'San Salvador' },
+  { codigo: 'CLI029', nombre: 'Distribuidora Pacífico',  canal: 'Mayoreo',      vendedor: 'Luis Hernández',    dpto: 'La Paz'       },
+  { codigo: 'CLI030', nombre: 'Mayoreo Santa Ana',       canal: 'Mayoreo',      vendedor: 'Ana González',      dpto: 'Santa Ana'    },
 ]
 
-const CATEGORIAS: Record<string, string> = {
-  'Aceite 1L': 'Aceites', 'Aceite 2L': 'Aceites',
-  'Harina 1kg': 'Granos', 'Azúcar 1kg': 'Granos', 'Arroz 1kg': 'Granos', 'Frijoles 1kg': 'Granos', 'Sal 1kg': 'Granos',
-  'Detergente 500g': 'Limpieza', 'Jabón Barra': 'Limpieza',
-  'Pasta Dental': 'Higiene', 'Shampoo 400ml': 'Higiene',
-  'Café 250g': 'Bebidas',
+const CLI_MAP: Record<string, Cliente> = {}
+for (const c of CLIENTES) CLI_MAP[c.codigo] = c
+
+// ─── VENDEDOR PROFILES ────────────────────────────────────────────────────────
+
+interface VendorProfile {
+  nombre: string
+  supervisor: string
+  dpto: string
+  baseDiaria: number
+  catWeights: Record<string, number>
+  // client codes + base weights (CLI001=2.15 → 35% of Carlos; CLI021=7.43 → 65% of Ana)
+  clients: Array<{ codigo: string; w: number }>
 }
 
-// Precio unitario de referencia (para venta_neta)
-const PRECIOS: Record<string, number> = {
-  'Aceite 1L': 4.50, 'Aceite 2L': 7.80, 'Harina 1kg': 1.20, 'Azúcar 1kg': 1.10,
-  'Arroz 1kg': 1.40, 'Detergente 500g': 2.30, 'Jabón Barra': 0.90, 'Pasta Dental': 1.80,
-  'Shampoo 400ml': 3.20, 'Frijoles 1kg': 1.60, 'Sal 1kg': 0.60, 'Café 250g': 3.50,
+// Patricia altibajos: monthly cycle applied by (calendarMonth-1) % 12
+const PATRICIA_CYCLE = [0.85, 1.15, 0.80, 1.20, 0.90, 1.10, 0.85, 1.25, 0.75, 1.20, 0.80, 1.15]
+
+const VENDORS: VendorProfile[] = [
+  {
+    nombre: 'Carlos Ramírez', supervisor: 'Roberto Méndez', dpto: 'Santa Ana',
+    baseDiaria: 18,
+    catWeights: { Refrescos: 0.60, Lácteos: 0.15, Snacks: 0.15, Limpieza: 0.10 },
+    // CLI001 weight 2.15 → ~35% historically; explains >50% of drop when absent
+    clients: [
+      { codigo: 'CLI001', w: 2.15 }, { codigo: 'CLI009', w: 1 },
+      { codigo: 'CLI011', w: 1    }, { codigo: 'CLI019', w: 1 },
+      { codigo: 'CLI028', w: 1    },
+    ],
+  },
+  {
+    nombre: 'Ana González', supervisor: 'Roberto Méndez', dpto: 'Ahuachapán',
+    baseDiaria: 15,
+    catWeights: { Lácteos: 0.55, Refrescos: 0.25, Snacks: 0.10, Limpieza: 0.10 },
+    // CLI021 weight 7.43 → 65% of sales
+    clients: [
+      { codigo: 'CLI002', w: 1    }, { codigo: 'CLI010', w: 1    },
+      { codigo: 'CLI012', w: 1    }, { codigo: 'CLI021', w: 7.43 },
+      { codigo: 'CLI030', w: 1    },
+    ],
+  },
+  {
+    nombre: 'María Castillo', supervisor: 'Patricia Ruiz', dpto: 'San Salvador',
+    baseDiaria: 20,
+    catWeights: { Refrescos: 0.50, Limpieza: 0.25, Lácteos: 0.15, Snacks: 0.10 },
+    clients: [
+      { codigo: 'CLI003', w: 1 }, { codigo: 'CLI013', w: 1 },
+      { codigo: 'CLI020', w: 1 }, { codigo: 'CLI023', w: 1 },
+    ],
+  },
+  {
+    nombre: 'Luis Hernández', supervisor: 'Patricia Ruiz', dpto: 'La Libertad',
+    baseDiaria: 14,
+    catWeights: { Limpieza: 0.55, Refrescos: 0.20, Lácteos: 0.15, Snacks: 0.10 },
+    clients: [
+      { codigo: 'CLI004', w: 1 }, { codigo: 'CLI014', w: 1 },
+      { codigo: 'CLI022', w: 1 }, { codigo: 'CLI029', w: 1 },
+    ],
+  },
+  {
+    nombre: 'Sandra Morales', supervisor: 'Patricia Ruiz', dpto: 'Cuscatlán',
+    baseDiaria: 16,
+    // 90% Lácteos → mono-categoría insight
+    catWeights: { Lácteos: 0.90, Refrescos: 0.05, Snacks: 0.03, Limpieza: 0.02 },
+    clients: [
+      { codigo: 'CLI005', w: 1 }, { codigo: 'CLI015', w: 1 }, { codigo: 'CLI024', w: 1 },
+    ],
+  },
+  {
+    nombre: 'Miguel Ángel Díaz', supervisor: 'Miguel Torres', dpto: 'San Miguel',
+    baseDiaria: 12,
+    catWeights: { Snacks: 0.50, Refrescos: 0.25, Lácteos: 0.15, Limpieza: 0.10 },
+    clients: [
+      { codigo: 'CLI006', w: 1 }, { codigo: 'CLI016', w: 1 }, { codigo: 'CLI025', w: 1 },
+    ],
+  },
+  {
+    nombre: 'Patricia Vásquez', supervisor: 'Miguel Torres', dpto: 'Usulután',
+    baseDiaria: 14,
+    catWeights: { Limpieza: 0.50, Refrescos: 0.25, Lácteos: 0.15, Snacks: 0.10 },
+    clients: [
+      { codigo: 'CLI007', w: 1 }, { codigo: 'CLI017', w: 1 }, { codigo: 'CLI026', w: 1 },
+    ],
+  },
+  {
+    nombre: 'Roberto Cruz', supervisor: 'Miguel Torres', dpto: 'Sonsonate',
+    baseDiaria: 11,
+    catWeights: { Refrescos: 0.55, Lácteos: 0.20, Snacks: 0.15, Limpieza: 0.10 },
+    clients: [
+      { codigo: 'CLI008', w: 1 }, { codigo: 'CLI018', w: 1 }, { codigo: 'CLI027', w: 1 },
+    ],
+  },
+]
+
+// ─── UTILIDADES ───────────────────────────────────────────────────────────────
+
+function rb(lo: number, hi: number): number { return lo + Math.random() * (hi - lo) }
+
+function pickWeighted<T>(items: T[], weights: number[]): T {
+  let r = Math.random() * weights.reduce((a, b) => a + b, 0)
+  for (let i = 0; i < items.length; i++) {
+    r -= weights[i]
+    if (r <= 0) return items[i]
+  }
+  return items[items.length - 1]
 }
 
-function d(year: number, month: number, day: number): Date {
-  return new Date(year, month - 1, day)
-}
+function pickRandom<T>(arr: T[]): T { return arr[Math.floor(Math.random() * arr.length)] }
 
-function addSale(
-  sales: SaleRecord[],
-  fecha: Date,
-  vendedor: string,
-  producto: string,
-  cliente: string,
-  unidades: number,
-) {
-  const precioBase = PRECIOS[producto] ?? 2.0
-  const variacion = 0.9 + Math.random() * 0.2
-  sales.push({
-    fecha,
-    vendedor,
-    producto,
-    cliente,
-    unidades,
-    venta_neta: Math.round(unidades * precioBase * variacion * 100) / 100,
-    categoria: CATEGORIAS[producto] ?? 'General',
-  })
+// ─── TENDENCIA ────────────────────────────────────────────────────────────────
+// mesIndex: 0 = mes más antiguo, 23 = mes actual
+
+function tendencia(nombre: string, mesIndex: number, calMonth: number): number {
+  switch (nombre) {
+    case 'Carlos Ramírez':    return mesIndex >= 22 ? 0.55 : 1.0
+    case 'María Castillo':    return 1.0 + 0.025 * mesIndex
+    case 'Miguel Ángel Díaz': return mesIndex >= 21 ? 0.75 : 1.0
+    case 'Patricia Vásquez':  return PATRICIA_CYCLE[(calMonth - 1) % 12]
+    case 'Roberto Cruz':      return 1.0 + 0.04 * mesIndex
+    default:                  return rb(0.95, 1.05)   // Luis + Sandra: estable con micro-variación
+  }
 }
 
 // ─── GENERADOR PRINCIPAL ──────────────────────────────────────────────────────
@@ -78,259 +216,167 @@ function addSale(
 export function getDemoData(): { sales: SaleRecord[]; metas: MetaRecord[]; inventory: InventoryItem[] } {
   const sales: SaleRecord[] = []
   const today = new Date()
-  const currentYear = today.getFullYear()
-  const currentMonth = today.getMonth() + 1 // 1-indexed
-
-  // ── 18 meses de historial (base) ─────────────────────────────────────────
-  // Construimos mes a mes, 18 meses hacia atrás desde el mes pasado
-
-  function makeHistoricMonth(year: number, month: number) {
-    const lastDay = new Date(year, month, 0).getDate()
-
-    // Carlos — normal en historial (~45 uds/semana)
-    for (let day = 1; day <= lastDay; day += 7) {
-      addSale(sales, d(year, month, Math.min(day, lastDay)), 'Carlos', 'Aceite 1L', 'Tienda El Progreso', 40 + Math.floor(Math.random() * 10))
-      addSale(sales, d(year, month, Math.min(day + 2, lastDay)), 'Carlos', 'Arroz 1kg', 'Tienda El Progreso', 25 + Math.floor(Math.random() * 8))
-      addSale(sales, d(year, month, Math.min(day + 4, lastDay)), 'Carlos', 'Harina 1kg', 'Abarrotería La Paz', 18 + Math.floor(Math.random() * 6))
-      addSale(sales, d(year, month, Math.min(day + 1, lastDay)), 'Carlos', 'Aceite 2L', 'Farmacia San Miguel', 12 + Math.floor(Math.random() * 5))
-    }
-    // Almacén Rivera — comprador mensual (recovery alta: frecuencia regular, alto valor)
-    addSale(sales, d(year, month, Math.min(8, lastDay)), 'Carlos', 'Aceite 2L', 'Almacén Rivera', 200)
-    // Mayoreo del Norte — comprador bimensual meses impares (recovery recuperable)
-    if (month % 2 === 1) {
-      addSale(sales, d(year, month, Math.min(15, lastDay)), 'Carlos', 'Aceite 2L', 'Mayoreo del Norte', 300)
-    }
-
-    // Ana — normal en historial, con Supermercado López ~60% de ventas
-    for (let day = 1; day <= lastDay; day += 5) {
-      addSale(sales, d(year, month, Math.min(day, lastDay)), 'Ana', 'Harina 1kg', 'Supermercado López', 50 + Math.floor(Math.random() * 15))
-      addSale(sales, d(year, month, Math.min(day + 2, lastDay)), 'Ana', 'Azúcar 1kg', 'Supermercado López', 45 + Math.floor(Math.random() * 12))
-      addSale(sales, d(year, month, Math.min(day + 3, lastDay)), 'Ana', 'Aceite 1L', 'Minimarket Central', 15 + Math.floor(Math.random() * 5))
-      addSale(sales, d(year, month, Math.min(day + 1, lastDay)), 'Ana', 'Sal 1kg', 'Bodega Express', 10 + Math.floor(Math.random() * 4))
-    }
-
-    // María — creciendo gradualmente
-    const crescendo = Math.min(1.0 + (18 - (currentYear * 12 + currentMonth - year * 12 - month)) * 0.04, 1.5)
-    for (let day = 1; day <= lastDay; day += 6) {
-      addSale(sales, d(year, month, Math.min(day, lastDay)), 'María', 'Detergente 500g', 'Supermercado Familiar', Math.round((35 + Math.random() * 10) * crescendo))
-      addSale(sales, d(year, month, Math.min(day + 3, lastDay)), 'María', 'Jabón Barra', 'Tienda San José', Math.round((28 + Math.random() * 8) * crescendo))
-      addSale(sales, d(year, month, Math.min(day + 1, lastDay)), 'María', 'Pasta Dental', 'Comercial Rivera', Math.round((20 + Math.random() * 6) * crescendo))
-    }
-
-    // Roberto — con tendencia de subejecución (meta siempre corta)
-    for (let day = 1; day <= lastDay; day += 7) {
-      addSale(sales, d(year, month, Math.min(day, lastDay)), 'Roberto', 'Arroz 1kg', 'Distribuidora Norte', 30 + Math.floor(Math.random() * 8))
-      addSale(sales, d(year, month, Math.min(day + 3, lastDay)), 'Roberto', 'Frijoles 1kg', 'Tienda La Colonia', 20 + Math.floor(Math.random() * 5))
-      addSale(sales, d(year, month, Math.min(day + 5, lastDay)), 'Roberto', 'Sal 1kg', 'Abarrotería La Paz', 15 + Math.floor(Math.random() * 4))
-    }
-
-    // Luis — estable
-    for (let day = 3; day <= lastDay; day += 7) {
-      addSale(sales, d(year, month, Math.min(day, lastDay)), 'Luis', 'Shampoo 400ml', 'Minimarket Central', 22 + Math.floor(Math.random() * 8))
-      addSale(sales, d(year, month, Math.min(day + 2, lastDay)), 'Luis', 'Pasta Dental', 'Tienda El Progreso', 18 + Math.floor(Math.random() * 5))
-      addSale(sales, d(year, month, Math.min(day + 4, lastDay)), 'Luis', 'Café 250g', 'Supermercado Familiar', 14 + Math.floor(Math.random() * 4))
-    }
-
-    // Sandra — estable con leve crecimiento
-    for (let day = 2; day <= lastDay; day += 6) {
-      addSale(sales, d(year, month, Math.min(day, lastDay)), 'Sandra', 'Aceite 1L', 'Tienda La Colonia', 28 + Math.floor(Math.random() * 7))
-      addSale(sales, d(year, month, Math.min(day + 3, lastDay)), 'Sandra', 'Harina 1kg', 'Bodega Express', 22 + Math.floor(Math.random() * 6))
-      addSale(sales, d(year, month, Math.min(day + 1, lastDay)), 'Sandra', 'Azúcar 1kg', 'Comercial Rivera', 17 + Math.floor(Math.random() * 5))
-    }
-
-    // Miguel — estable
-    for (let day = 4; day <= lastDay; day += 7) {
-      addSale(sales, d(year, month, Math.min(day, lastDay)), 'Miguel', 'Arroz 1kg', 'Supermercado López', 25 + Math.floor(Math.random() * 7))
-      addSale(sales, d(year, month, Math.min(day + 2, lastDay)), 'Miguel', 'Café 250g', 'Tienda San José', 16 + Math.floor(Math.random() * 5))
-      addSale(sales, d(year, month, Math.min(day + 5, lastDay)), 'Miguel', 'Frijoles 1kg', 'Minimarket Central', 19 + Math.floor(Math.random() * 6))
-    }
-
-    // Patricia — estable
-    for (let day = 1; day <= lastDay; day += 8) {
-      addSale(sales, d(year, month, Math.min(day, lastDay)), 'Patricia', 'Detergente 500g', 'Distribuidora Norte', 30 + Math.floor(Math.random() * 8))
-      addSale(sales, d(year, month, Math.min(day + 4, lastDay)), 'Patricia', 'Jabón Barra', 'Tienda El Progreso', 24 + Math.floor(Math.random() * 6))
-      addSale(sales, d(year, month, Math.min(day + 2, lastDay)), 'Patricia', 'Sal 1kg', 'Comercial Rivera', 18 + Math.floor(Math.random() * 4))
-    }
-  }
-
-  // Generar 17 meses de historial (meses 18..2 hacia atrás)
-  for (let ago = 17; ago >= 2; ago--) {
-    let m = currentMonth - ago
-    let y = currentYear
-    while (m <= 0) { y--; m += 12 }
-    makeHistoricMonth(y, m)
-  }
-
-  // ── MES ANTERIOR (mes pasado completo) ────────────────────────────────────
-  let prevMonth = currentMonth - 1
-  let prevYear = currentYear
-  if (prevMonth <= 0) { prevYear--; prevMonth += 12 }
-  const prevLastDay = new Date(prevYear, prevMonth, 0).getDate()
-
-  // Carlos — mes anterior: buenas ventas (para que la caída sea visible)
-  // Tienda El Progreso compraba fuerte
-  for (let day = 1; day <= prevLastDay; day += 4) {
-    addSale(sales, d(prevYear, prevMonth, Math.min(day, prevLastDay)), 'Carlos', 'Aceite 1L', 'Tienda El Progreso', 48 + Math.floor(Math.random() * 10))
-    addSale(sales, d(prevYear, prevMonth, Math.min(day + 2, prevLastDay)), 'Carlos', 'Arroz 1kg', 'Tienda El Progreso', 32 + Math.floor(Math.random() * 8))
-  }
-  for (let day = 3; day <= prevLastDay; day += 7) {
-    addSale(sales, d(prevYear, prevMonth, Math.min(day, prevLastDay)), 'Carlos', 'Harina 1kg', 'Abarrotería La Paz', 22 + Math.floor(Math.random() * 5))
-    // Farmacia San Miguel NO compra en prevMonth → queda dormida (~42 días, recovery dificil)
-  }
-  // Almacén Rivera compra en prevMonth día 8 (última compra → ~31 días inactiva, recovery alta)
-  addSale(sales, d(prevYear, prevMonth, 8), 'Carlos', 'Aceite 2L', 'Almacén Rivera', 200)
-  // Mayoreo del Norte: prevMonth = Feb (mes 2, par) → no compra → última compra en mes impar anterior
-
-  // Ana — mes anterior: Supermercado López compró mucho
-  for (let day = 1; day <= prevLastDay; day += 4) {
-    addSale(sales, d(prevYear, prevMonth, Math.min(day, prevLastDay)), 'Ana', 'Harina 1kg', 'Supermercado López', 55 + Math.floor(Math.random() * 12))
-    addSale(sales, d(prevYear, prevMonth, Math.min(day + 2, prevLastDay)), 'Ana', 'Azúcar 1kg', 'Supermercado López', 50 + Math.floor(Math.random() * 10))
-    addSale(sales, d(prevYear, prevMonth, Math.min(day + 1, prevLastDay)), 'Ana', 'Aceite 1L', 'Minimarket Central', 16 + Math.floor(Math.random() * 4))
-    addSale(sales, d(prevYear, prevMonth, Math.min(day + 3, prevLastDay)), 'Ana', 'Sal 1kg', 'Bodega Express', 11 + Math.floor(Math.random() * 3))
-  }
-
-  // Otros vendedores — mes anterior normal
-  for (let day = 1; day <= prevLastDay; day += 6) {
-    addSale(sales, d(prevYear, prevMonth, Math.min(day, prevLastDay)), 'María', 'Detergente 500g', 'Supermercado Familiar', 52 + Math.floor(Math.random() * 12))
-    addSale(sales, d(prevYear, prevMonth, Math.min(day + 3, prevLastDay)), 'María', 'Jabón Barra', 'Tienda San José', 40 + Math.floor(Math.random() * 10))
-    addSale(sales, d(prevYear, prevMonth, Math.min(day + 1, prevLastDay)), 'María', 'Pasta Dental', 'Comercial Rivera', 30 + Math.floor(Math.random() * 7))
-
-    addSale(sales, d(prevYear, prevMonth, Math.min(day, prevLastDay)), 'Roberto', 'Arroz 1kg', 'Distribuidora Norte', 33 + Math.floor(Math.random() * 7))
-    addSale(sales, d(prevYear, prevMonth, Math.min(day + 3, prevLastDay)), 'Roberto', 'Frijoles 1kg', 'Tienda La Colonia', 22 + Math.floor(Math.random() * 5))
-    addSale(sales, d(prevYear, prevMonth, Math.min(day + 1, prevLastDay)), 'Roberto', 'Sal 1kg', 'Abarrotería La Paz', 16 + Math.floor(Math.random() * 4))
-
-    addSale(sales, d(prevYear, prevMonth, Math.min(day + 2, prevLastDay)), 'Luis', 'Shampoo 400ml', 'Minimarket Central', 25 + Math.floor(Math.random() * 7))
-    addSale(sales, d(prevYear, prevMonth, Math.min(day, prevLastDay)), 'Sandra', 'Aceite 1L', 'Tienda La Colonia', 32 + Math.floor(Math.random() * 7))
-    addSale(sales, d(prevYear, prevMonth, Math.min(day + 4, prevLastDay)), 'Miguel', 'Arroz 1kg', 'Supermercado López', 28 + Math.floor(Math.random() * 6))
-    addSale(sales, d(prevYear, prevMonth, Math.min(day + 2, prevLastDay)), 'Patricia', 'Detergente 500g', 'Distribuidora Norte', 34 + Math.floor(Math.random() * 8))
-  }
-
-  // ── MES ACTUAL (días transcurridos hasta hoy) ─────────────────────────────
+  const todayYear = today.getFullYear()
+  const todayMonth = today.getMonth() + 1
   const todayDay = today.getDate()
 
-  // Carlos — CAÍDA SEVERA: Tienda El Progreso desapareció (activa Caída Explicada)
-  // Solo vende a Abarrotería La Paz y un poco a Farmacia San Miguel
-  // Además: Farmacia San Miguel dormida (última compra fue hace 35 días — en el mes anterior)
-  for (let day = 1; day <= Math.min(todayDay - 1, 28); day += 7) {
-    if (day <= todayDay) {
-      addSale(sales, d(currentYear, currentMonth, day), 'Carlos', 'Aceite 1L', 'Abarrotería La Paz', 10 + Math.floor(Math.random() * 4))
-      addSale(sales, d(currentYear, currentMonth, Math.min(day + 3, todayDay - 1)), 'Carlos', 'Harina 1kg', 'Abarrotería La Paz', 8 + Math.floor(Math.random() * 3))
+  // ── Precompute category baselines for meta estimation ─────────────────────
+  // Expected daily units per category (sum over all vendedores of baseDiaria × catWeight)
+  const CAT_BASELINE_DAILY: Record<string, number> = { Lácteos: 0, Refrescos: 0, Snacks: 0, Limpieza: 0 }
+  for (const v of VENDORS) {
+    for (const [cat, w] of Object.entries(v.catWeights)) {
+      CAT_BASELINE_DAILY[cat] = (CAT_BASELINE_DAILY[cat] ?? 0) + v.baseDiaria * w
     }
   }
-  // Tienda El Progreso: NINGUNA venta este mes (causa la caída)
-  // Farmacia San Miguel: NINGUNA venta este mes (cliente dormido)
 
-  // Ana — mantiene su patrón con Supermercado López (68% dependencia)
-  for (let day = 1; day <= todayDay - 1; day += 5) {
-    addSale(sales, d(currentYear, currentMonth, day), 'Ana', 'Harina 1kg', 'Supermercado López', 52 + Math.floor(Math.random() * 10))
-    addSale(sales, d(currentYear, currentMonth, Math.min(day + 2, todayDay - 1)), 'Ana', 'Azúcar 1kg', 'Supermercado López', 47 + Math.floor(Math.random() * 9))
-    addSale(sales, d(currentYear, currentMonth, Math.min(day + 3, todayDay - 1)), 'Ana', 'Aceite 1L', 'Minimarket Central', 14 + Math.floor(Math.random() * 4))
-    addSale(sales, d(currentYear, currentMonth, Math.min(day + 1, todayDay - 1)), 'Ana', 'Sal 1kg', 'Bodega Express', 10 + Math.floor(Math.random() * 3))
+  // ── Sales generation ──────────────────────────────────────────────────────
+  // agoMonths 23 = 23 months ago (oldest), 0 = current month (partial)
+  for (let agoMonths = 23; agoMonths >= 0; agoMonths--) {
+    const mesIndex = 23 - agoMonths   // 0..23
+
+    let m = todayMonth - agoMonths
+    let y = todayYear
+    while (m <= 0) { m += 12; y-- }
+
+    const daysInMonth = new Date(y, m, 0).getDate()
+    const maxDay = agoMonths === 0 ? todayDay - 1 : daysInMonth
+    const seasonal = ESTACIONAL[((m - 1) % 12) + 1]
+
+    // Snacks colapso en mes actual: categoría × 0.45 → dispara "Categoría en colapso"
+    const snacksCollapso = agoMonths === 0
+
+    for (let day = 1; day <= maxDay; day++) {
+      const date = new Date(y, m - 1, day)
+      if (date.getDay() === 0) continue  // skip Sundays
+
+      for (const vendor of VENDORS) {
+        const t = tendencia(vendor.nombre, mesIndex, m)
+        const nTrans = Math.max(1, Math.round(vendor.baseDiaria * seasonal * t * rb(0.7, 1.3)))
+
+        // Active clients: CLI001 + CLI011 dormidos last 2 months (Carlos)
+        let activeClients = vendor.clients
+        if (vendor.nombre === 'Carlos Ramírez' && agoMonths <= 1) {
+          activeClients = vendor.clients.filter(c => c.codigo !== 'CLI001' && c.codigo !== 'CLI011')
+          if (activeClients.length === 0) continue
+        }
+
+        const cCodes = activeClients.map(c => c.codigo)
+        const cWeights = activeClients.map(c => c.w)
+
+        // Category weights, adjusted for Snacks colapso
+        let catW = { ...vendor.catWeights }
+        // Snacks colapsa a peso fijo 0.05 — otras categorías mantienen su peso original exacto
+        if (snacksCollapso && catW.Snacks) {
+          catW = { ...catW, Snacks: 0.05 }
+        }
+        const cats = Object.keys(catW)
+        const catWvals = cats.map(k => catW[k])
+
+        for (let tx = 0; tx < nTrans; tx++) {
+          const cat = pickWeighted(cats, catWvals)
+
+          // SNA003/004/005 frozen last 6 months → last sale ~Oct 2025 → >120 days → sin_movimiento
+          let prodPool: Prod[]
+          if (cat === 'Snacks') {
+            prodPool = agoMonths <= 5 ? SNACKS_ACTIVOS : BY_CAT['Snacks']
+            if (prodPool.length === 0) continue
+          } else {
+            prodPool = BY_CAT[cat]
+          }
+          const prod = pickRandom(prodPool)
+
+          const clientCode = pickWeighted(cCodes, cWeights)
+          const cliente = CLI_MAP[clientCode]
+
+          // 5% devoluciones (unidades negativas)
+          const esDevolucion = Math.random() < 0.05
+          const unidades = esDevolucion
+            ? -(Math.ceil(Math.random() * 5))
+            : Math.ceil(Math.random() * 14) + 1
+
+          const venta_neta = Math.round(unidades * prod.precio * rb(0.92, 1.08) * 100) / 100
+
+          sales.push({
+            fecha: date,
+            vendedor: vendor.nombre,
+            producto: prod.nombre,
+            codigo_producto: prod.codigo,
+            cliente: cliente.nombre,
+            codigo_cliente: cliente.codigo,
+            unidades,
+            venta_neta,
+            categoria: prod.cat,
+            canal: cliente.canal,
+            departamento: cliente.dpto,
+            supervisor: vendor.supervisor,
+          })
+        }
+      }
+    }
   }
-
-  // María — MEJOR MES (creciendo ~18% vs anterior)
-  for (let day = 1; day <= todayDay - 1; day += 5) {
-    addSale(sales, d(currentYear, currentMonth, day), 'María', 'Detergente 500g', 'Supermercado Familiar', 60 + Math.floor(Math.random() * 14))
-    addSale(sales, d(currentYear, currentMonth, Math.min(day + 2, todayDay - 1)), 'María', 'Jabón Barra', 'Tienda San José', 47 + Math.floor(Math.random() * 11))
-    addSale(sales, d(currentYear, currentMonth, Math.min(day + 4, todayDay - 1)), 'María', 'Pasta Dental', 'Comercial Rivera', 35 + Math.floor(Math.random() * 8))
-  }
-
-  // Roberto — subejecución (ritmo bajo, ~78% de meta proyectada)
-  for (let day = 2; day <= todayDay - 1; day += 8) {
-    addSale(sales, d(currentYear, currentMonth, day), 'Roberto', 'Arroz 1kg', 'Distribuidora Norte', 28 + Math.floor(Math.random() * 5))
-    addSale(sales, d(currentYear, currentMonth, Math.min(day + 4, todayDay - 1)), 'Roberto', 'Frijoles 1kg', 'Tienda La Colonia', 18 + Math.floor(Math.random() * 4))
-    addSale(sales, d(currentYear, currentMonth, Math.min(day + 2, todayDay - 1)), 'Roberto', 'Sal 1kg', 'Abarrotería La Paz', 12 + Math.floor(Math.random() * 3))
-  }
-
-  // Distribuidora Norte — también compra de otros vendedores (para concentración sistémica)
-  for (let day = 3; day <= todayDay - 1; day += 7) {
-    addSale(sales, d(currentYear, currentMonth, day), 'Luis', 'Shampoo 400ml', 'Minimarket Central', 23 + Math.floor(Math.random() * 6))
-    addSale(sales, d(currentYear, currentMonth, Math.min(day + 2, todayDay - 1)), 'Luis', 'Pasta Dental', 'Tienda El Progreso', 16 + Math.floor(Math.random() * 4))
-    addSale(sales, d(currentYear, currentMonth, Math.min(day + 4, todayDay - 1)), 'Luis', 'Café 250g', 'Supermercado Familiar', 12 + Math.floor(Math.random() * 3))
-
-    addSale(sales, d(currentYear, currentMonth, Math.min(day + 1, todayDay - 1)), 'Sandra', 'Aceite 1L', 'Tienda La Colonia', 29 + Math.floor(Math.random() * 6))
-    addSale(sales, d(currentYear, currentMonth, Math.min(day + 3, todayDay - 1)), 'Sandra', 'Harina 1kg', 'Distribuidora Norte', 24 + Math.floor(Math.random() * 6))
-    addSale(sales, d(currentYear, currentMonth, Math.min(day, todayDay - 1)), 'Sandra', 'Azúcar 1kg', 'Comercial Rivera', 18 + Math.floor(Math.random() * 4))
-
-    addSale(sales, d(currentYear, currentMonth, Math.min(day + 2, todayDay - 1)), 'Miguel', 'Arroz 1kg', 'Supermercado López', 26 + Math.floor(Math.random() * 6))
-    addSale(sales, d(currentYear, currentMonth, Math.min(day + 5, todayDay - 1)), 'Miguel', 'Café 250g', 'Tienda San José', 15 + Math.floor(Math.random() * 4))
-    addSale(sales, d(currentYear, currentMonth, Math.min(day, todayDay - 1)), 'Miguel', 'Frijoles 1kg', 'Distribuidora Norte', 20 + Math.floor(Math.random() * 5))
-
-    addSale(sales, d(currentYear, currentMonth, Math.min(day + 1, todayDay - 1)), 'Patricia', 'Detergente 500g', 'Distribuidora Norte', 32 + Math.floor(Math.random() * 7))
-    addSale(sales, d(currentYear, currentMonth, Math.min(day + 4, todayDay - 1)), 'Patricia', 'Jabón Barra', 'Tienda El Progreso', 22 + Math.floor(Math.random() * 5))
-    addSale(sales, d(currentYear, currentMonth, Math.min(day + 2, todayDay - 1)), 'Patricia', 'Sal 1kg', 'Comercial Rivera', 17 + Math.floor(Math.random() * 4))
-  }
-
-  // Aceite 1L — sin ventas hace 19 días (activa Producto Sin Movimiento)
-  // Ya no agregamos más ventas de Aceite 1L después del día (todayDay - 19)
-  // (El aceite ya tiene ventas históricas, pero en el mes actual solo de Ana hasta día 5)
-  // Eliminamos las ventas de Aceite 1L de los últimos 19 días del mes actual
-  // (Ya controlado: ninguna sale reciente de Aceite 1L después del día 5 en el mes actual)
 
   // ── METAS ─────────────────────────────────────────────────────────────────
   const metas: MetaRecord[] = []
 
-  const metaBase: Record<string, number> = {
-    Carlos: 650, Ana: 720, María: 680, Roberto: 590,
-    Luis: 460, Sandra: 500, Miguel: 490, Patricia: 540,
-  }
+  for (let agoMonths = 23; agoMonths >= 0; agoMonths--) {
+    let m = todayMonth - agoMonths
+    let y = todayYear
+    while (m <= 0) { m += 12; y-- }
 
-  // Generar metas para los últimos 6 meses
-  for (let ago = 5; ago >= 0; ago--) {
-    let m = currentMonth - ago
-    let y = currentYear
-    while (m <= 0) { y--; m += 12 }
-    const pk = `${y}-${String(m).padStart(2, '0')}`
+    const seasonal = ESTACIONAL[((m - 1) % 12) + 1]
+    const supervisorAcum: Record<string, number> = {}
 
-    for (const [vendedor, base] of Object.entries(metaBase)) {
-      // Roberto: metas altas para generar subejecución
-      const ajuste = vendedor === 'Roberto' ? 1.25 : 1.0
+    // Por vendedor
+    for (const vendor of VENDORS) {
+      const meta = Math.round(vendor.baseDiaria * 8 * 26 * seasonal * 0.95)
+      metas.push({ mes: m, anio: y, vendedor: vendor.nombre, meta, tipo_meta: 'unidades' })
+      supervisorAcum[vendor.supervisor] = (supervisorAcum[vendor.supervisor] ?? 0) + meta
+    }
+
+    // Por supervisor
+    for (const [supervisor, sum] of Object.entries(supervisorAcum)) {
+      metas.push({ mes: m, anio: y, supervisor, meta: Math.round(sum * 1.02), tipo_meta: 'unidades' })
+    }
+
+    // Por categoría (baselines × estacional × 1.05)
+    for (const [cat, dailyBase] of Object.entries(CAT_BASELINE_DAILY)) {
       metas.push({
-        mes_periodo: pk,
-        vendedor,
-        meta: Math.round(base * ajuste),
+        mes: m, anio: y, categoria: cat,
+        meta: Math.round(dailyBase * 26 * seasonal * 1.05),
+        tipo_meta: 'unidades',
       })
     }
   }
 
   // ── INVENTARIO ────────────────────────────────────────────────────────────
-  // Distribuido para demo visual: 2 riesgo_quiebre, 2 baja_cobertura,
-  // 4 normal, 2 lento_movimiento, 2 sin_movimiento
+  // Stock calibrado contra PM3 estimado por producto (unidades = round(pm3 * días / 30)):
+  //   riesgo_quiebre  (≤7d):   LAC003 ~5d, REF005 ~5d
+  //   baja_cobertura  (8-20d): LAC002 ~13d, REF003 ~13d, REF004 ~15d, LIM003 ~14d
+  //   normal          (21-60d): LAC001 ~35d, LAC004 ~28d, REF001 ~40d, REF002 ~30d, LIM001 ~45d, LIM002 ~32d
+  //   lento_movimiento (>60d): LAC005 ~90d, SNA001 ~90d, SNA002 ~75d, LIM004 ~80d, LIM005 ~100d
+  //   sin_movimiento  (PM3=0): SNA003/004/005 – sin ventas últimos 6 meses (agoMonths ≤ 5)
   const inventory: InventoryItem[] = [
-    // Riesgo de quiebre: muy pocas unidades vs. alta rotación (PM3 400-560 uds/mes → ≤5 días)
-    { producto: 'Aceite 1L',        unidades: 15,  categoria: 'Aceites'     },
-    { producto: 'Harina 1kg',       unidades: 20,  categoria: 'Granos'      },
-    // Baja cobertura: stock para 6-15 días
-    { producto: 'Arroz 1kg',        unidades: 90,  categoria: 'Granos'      },
-    { producto: 'Azúcar 1kg',       unidades: 80,  categoria: 'Granos'      },
-    // Normal: stock sano, 16-30 días
-    { producto: 'Detergente 500g',  unidades: 260, categoria: 'Limpieza'    },
-    { producto: 'Jabón Barra',      unidades: 220, categoria: 'Limpieza'    },
-    { producto: 'Pasta Dental',     unidades: 160, categoria: 'Higiene'     },
-    { producto: 'Shampoo 400ml',    unidades: 65,  categoria: 'Higiene'     },
-    // Lento movimiento: sobrestock, >30 días
-    { producto: 'Frijoles 1kg',     unidades: 800, categoria: 'Granos'      },
-    { producto: 'Sal 1kg',          unidades: 700, categoria: 'Granos'      },
-    // Sin movimiento: no tienen ventas registradas → PM3=0
-    { producto: 'Vinagre 1L',       unidades: 200, categoria: 'Condimentos' },
-    { producto: 'Aceite de Oliva',  unidades: 350, categoria: 'Aceites'     },
+    { producto: 'Leche Entera 1L',       categoria: 'Lácteos',   unidades: 1870 },
+    { producto: 'Yogurt Natural 500g',   categoria: 'Lácteos',   unidades:  690 },
+    { producto: 'Queso Fresco 400g',     categoria: 'Lácteos',   unidades:  270 },
+    { producto: 'Crema Ácida 250g',      categoria: 'Lácteos',   unidades: 1490 },
+    { producto: 'Mantequilla 225g',      categoria: 'Lácteos',   unidades: 4800 },
+    { producto: 'Coca Cola 600ml',       categoria: 'Refrescos', unidades: 2670 },
+    { producto: 'Pepsi 600ml',           categoria: 'Refrescos', unidades: 2000 },
+    { producto: 'Agua Pura 500ml',       categoria: 'Refrescos', unidades:  870 },
+    { producto: 'Jugo Naranja 1L',       categoria: 'Refrescos', unidades: 1000 },
+    { producto: 'Té Helado 500ml',       categoria: 'Refrescos', unidades:  330 },
+    { producto: 'Papas Fritas 150g',     categoria: 'Snacks',    unidades: 5220 },
+    { producto: 'Galletas Soda 200g',    categoria: 'Snacks',    unidades: 4350 },
+    { producto: 'Cacahuates 100g',       categoria: 'Snacks',    unidades:   35 },
+    { producto: 'Palomitas 80g',         categoria: 'Snacks',    unidades:   28 },
+    { producto: 'Chicharrón 120g',       categoria: 'Snacks',    unidades:   22 },
+    { producto: 'Detergente 1kg',        categoria: 'Limpieza',  unidades: 1880 },
+    { producto: 'Jabón Lavaplatos 500g', categoria: 'Limpieza',  unidades: 1330 },
+    { producto: 'Suavizante 1L',         categoria: 'Limpieza',  unidades:  580 },
+    { producto: 'Cloro 1L',              categoria: 'Limpieza',  unidades: 3330 },
+    { producto: 'Desinfectante 750ml',   categoria: 'Limpieza',  unidades: 4170 },
   ]
-
-  // ── CANAL DE VENTAS ────────────────────────────────────────────────────────
-  const CANALES_VENDEDOR: Record<string, string[]> = {
-    Carlos:   ['Visita directa', 'Mostrador'],
-    Ana:      ['Visita directa'],
-    María:    ['Teléfono', 'Visita directa'],
-    Roberto:  ['Mostrador', 'Teléfono'],
-    Luis:     ['Teléfono'],
-    Sandra:   ['Visita directa', 'Mostrador'],
-    Miguel:   ['Mostrador'],
-    Patricia: ['Visita directa', 'Teléfono'],
-  }
-  sales.forEach((s) => {
-    const canales = CANALES_VENDEDOR[s.vendedor] ?? ['Mostrador']
-    s.canal = canales[Math.floor(Math.random() * canales.length)]
-  })
 
   return { sales, metas, inventory }
 }

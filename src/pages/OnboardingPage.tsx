@@ -1,12 +1,32 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Zap, Loader2, Building2, Link as LinkIcon } from 'lucide-react'
+import { Zap, Loader2, Building2, Link as LinkIcon, CheckCircle2, ShieldCheck, Eye } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
 import { useOrgStore } from '../store/orgStore'
-import { createOrg, getUserOrg } from '../lib/orgService'
+import { createOrg, getUserOrg, getOrgPublicInfo } from '../lib/orgService'
 import { supabase } from '../lib/supabaseClient'
+import type { ReactNode } from 'react'
+import type { OrgRole } from '../types'
 
 type Tab = 'create' | 'join'
+
+const ROLE_META: Record<OrgRole, { label: string; description: string; icon: ReactNode }> = {
+  owner: {
+    label: 'Administrador',
+    description: 'Puedes cargar datos, gestionar miembros y configurar la organización.',
+    icon: <ShieldCheck className="w-4 h-4" />,
+  },
+  editor: {
+    label: 'Editor',
+    description: 'Puedes cargar datos y ver todos los análisis de la organización.',
+    icon: <Building2 className="w-4 h-4" />,
+  },
+  viewer: {
+    label: 'Visor',
+    description: 'Puedes ver los análisis. El administrador puede darte acceso de edición.',
+    icon: <Eye className="w-4 h-4" />,
+  },
+}
 
 export default function OnboardingPage() {
   const navigate = useNavigate()
@@ -14,15 +34,13 @@ export default function OnboardingPage() {
   const { setOrg, setCurrentRole } = useOrgStore()
 
   const [tab, setTab] = useState<Tab>('create')
-
-  // Crear org
   const [orgName, setOrgName] = useState('')
-
-  // Unirse con token
   const [inviteInput, setInviteInput] = useState('')
-
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Pantalla de bienvenida intermedia
+  const [welcome, setWelcome] = useState<{ orgName: string; role: OrgRole } | null>(null)
 
   const extractOrgId = (input: string): string => {
     const trimmed = input.trim()
@@ -52,7 +70,8 @@ export default function OnboardingPage() {
 
     setOrg(org)
     setCurrentRole('owner')
-    navigate('/cargar', { replace: true })
+    setWelcome({ orgName: org.name, role: 'owner' })
+    setLoading(false)
   }
 
   const handleJoin = async () => {
@@ -66,6 +85,19 @@ export default function OnboardingPage() {
     setError(null)
 
     const orgId = extractOrgId(inviteInput)
+
+    const orgInfo = await getOrgPublicInfo(orgId)
+    if (!orgInfo) {
+      setError('Link inválido. No se encontró la organización.')
+      setLoading(false)
+      return
+    }
+    if (!orgInfo.allow_open_join) {
+      setError('Esta organización no acepta nuevas incorporaciones. Contacta al administrador.')
+      setLoading(false)
+      return
+    }
+
     const { error: insertError } = await supabase
       .from('organization_members')
       .insert({ org_id: orgId, user_id: user.id, role: 'viewer' })
@@ -80,13 +112,59 @@ export default function OnboardingPage() {
     if (org) {
       setOrg(org)
       setCurrentRole(role)
-      navigate('/cargar', { replace: true })
+      setWelcome({ orgName: org.name, role: role ?? 'viewer' })
+      setLoading(false)
     } else {
       setError('No se pudo cargar la organización. Intenta de nuevo.')
       setLoading(false)
     }
   }
 
+  // ── Pantalla de bienvenida ─────────────────────────────────────────────────
+  if (welcome) {
+    const meta = ROLE_META[welcome.role]
+    return (
+      <div className="min-h-screen bg-zinc-950 flex items-center justify-center px-4">
+        <div className="w-full max-w-[440px]">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 flex flex-col items-center text-center gap-6">
+
+            {/* Ícono de éxito */}
+            <div className="w-16 h-16 rounded-2xl bg-[#00B894]/10 border border-[#00B894]/20 flex items-center justify-center">
+              <CheckCircle2 className="w-8 h-8 text-[#00B894]" />
+            </div>
+
+            {/* Título */}
+            <div>
+              <h2 className="text-xl font-black text-zinc-100 mb-1">¡Bienvenido a SalesFlow!</h2>
+              <p className="text-sm text-zinc-400">Ya eres parte de</p>
+              <p className="text-base font-bold text-zinc-100 mt-0.5">{welcome.orgName}</p>
+            </div>
+
+            {/* Badge de rol */}
+            <div className="w-full bg-zinc-800/60 border border-zinc-700/50 rounded-xl px-4 py-3 flex items-start gap-3 text-left">
+              <div className="mt-0.5 text-[#00B894]">{meta.icon}</div>
+              <div>
+                <p className="text-xs font-semibold text-[#00B894] uppercase tracking-wide mb-0.5">
+                  {meta.label}
+                </p>
+                <p className="text-sm text-zinc-400 leading-snug">{meta.description}</p>
+              </div>
+            </div>
+
+            {/* CTA */}
+            <button
+              onClick={() => navigate('/cargar', { replace: true })}
+              className="w-full bg-[#00B894] hover:bg-[#00a884] text-black font-bold py-2.5 rounded-xl text-sm transition-colors"
+            >
+              Comenzar
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Formulario ─────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-zinc-950 flex items-center justify-center px-4">
       <div className="w-full max-w-[440px]">

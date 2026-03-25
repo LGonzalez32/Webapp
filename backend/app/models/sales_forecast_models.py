@@ -9,7 +9,7 @@ class SalesForecastRequest(BaseModel):
     year: int = Field(default=2026, ge=2020, le=2030)
     vendedor: str = "all"
     metric: Literal["units", "revenue"] = "units"
-    horizon_months: int = Field(default=12, ge=1, le=24)
+    horizon_months: int = Field(default=12, ge=1, le=12)
 
 
 class MonthlyDataPoint(BaseModel):
@@ -86,6 +86,7 @@ class AnnualPerformanceResponse(BaseModel):
     seller: str
     kpis: AnnualPerformanceKPIs
     series: AnnualPerformanceSeries
+    model_used: str | None = None
     error: str | None = None
 
 

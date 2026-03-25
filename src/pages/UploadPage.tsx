@@ -1,25 +1,30 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { toast } from 'sonner'
 import { useNavigate } from 'react-router-dom'
 import * as XLSX from 'xlsx'
 import { useAppStore } from '../store/appStore'
 import { useOrgStore } from '../store/orgStore'
 import { getDemoData, DEMO_EMPRESA } from '../lib/demoData'
-import { parseSalesFile, parseMetasFile, parseInventoryFile, parseRawFile } from '../lib/fileParser'
+import { parseSalesFile, parseMetasFile, parseInventoryFile } from '../lib/fileParser'
 import { uploadOrgFile, getOrgStorageFiles, deleteOrgFiles } from '../lib/orgService'
 import LoadingOverlay from '../components/ui/LoadingOverlay'
 import StepIndicator from '../components/upload/StepIndicator'
 import FileDropzone from '../components/upload/FileDropzone'
 import DataPreview from '../components/upload/DataPreview'
 import { cn } from '../lib/utils'
-import { Sparkles, FileDown, Trash2, ChevronRight, ChevronLeft, ShieldOff } from 'lucide-react'
-import type { UploadStep } from '../types'
+import { FileDown, Trash2, ChevronRight, ChevronLeft, ShieldOff, Check, Plus, AlertTriangle, X } from 'lucide-react'
+import type { UploadStep, ParseResult, ParseError, DiscardedRow } from '../types'
+
+/** Type guard: estrecha ParseResult<T> al branch de error */
+function parseErr<T>(r: ParseResult<T>): r is { success: false; error: ParseError } {
+  return r.success === false
+}
 
 const INITIAL_STEPS: UploadStep[] = [
   {
     id: 'ventas',
     label: 'Datos de Ventas',
-    description: 'El archivo base. Con solo fecha + vendedor + unidades el sistema detecta rachas, proyecciones y riesgos de meta.',
+    description: 'Las columnas Fecha, Vendedor y Unidades son obligatorias. Producto, cliente, canal y categoría son opcionales.',
     required: true,
     status: 'pending',
   },
@@ -48,18 +53,22 @@ const VENTAS_HEADERS = [
   { col: 'cliente',    req: false },
   { col: 'producto',   req: false },
   { col: 'venta_neta', req: false },
-  { col: 'canal',      req: false },
-  { col: 'categoria',  req: false },
+  { col: 'canal',            req: false },
+  { col: 'categoria',        req: false },
+  { col: 'departamento',     req: false },
+  { col: 'supervisor',       req: false },
+  { col: 'codigo_producto',  req: false },
+  { col: 'codigo_cliente',   req: false },
 ]
 const VENTAS_ROWS = [
-  ['2026-03-01','ANA MARIA LOPEZ','24','SUPER SELECTOS S.A.','ACEITE CORONA 1L','142.80','RUTEO','ALIMENTOS'],
-  ['2026-03-01','CARLOS MENDOZA','15','DISTRIBUIDORA NORTE','DETERGENTE ARIEL 2KG','89.25','MAYOREO','LIMPIEZA'],
-  ['2026-03-02','ANA MARIA LOPEZ','8','TIENDA LA UNION','ACEITE CORONA 1L','47.60','RUTEO','ALIMENTOS'],
-  ['2026-03-03','ROBERTO CHAVEZ','31','SUPER SELECTOS S.A.','SHAMPOO PANTENE 400ML','198.40','MODERNO','CUIDADO PERSONAL'],
-  ['2026-03-04','MARIA GONZALEZ','19','MERCADO CENTRAL','DETERGENTE ARIEL 2KG','113.05','RUTEO','LIMPIEZA'],
-  ['2026-03-05','CARLOS MENDOZA','42','DISTRIBUIDORA NORTE','ACEITE CORONA 1L','249.90','MAYOREO','ALIMENTOS'],
-  ['2026-03-06','ROBERTO CHAVEZ','7','TIENDA EL SOL','SHAMPOO PANTENE 400ML','44.80','RUTEO','CUIDADO PERSONAL'],
-  ['2026-03-07','ANA MARIA LOPEZ','28','SUPER SELECTOS S.A.','DETERGENTE ARIEL 2KG','166.60','MODERNO','LIMPIEZA'],
+  ['2026-03-01','ANA MARIA LOPEZ','24','SUPER SELECTOS S.A.','ACEITE CORONA 1L','142.80','RUTEO','ALIMENTOS','CENTRAL','CARLOS HERNANDEZ','ACE-001','CLI-0234'],
+  ['2026-03-01','CARLOS MENDOZA','15','DISTRIBUIDORA NORTE','DETERGENTE ARIEL 2KG','89.25','MAYOREO','LIMPIEZA','NORTE','MARIA SANTOS','DET-002','CLI-0891'],
+  ['2026-03-02','ANA MARIA LOPEZ','8','TIENDA LA UNION','ACEITE CORONA 1L','47.60','RUTEO','ALIMENTOS','CENTRAL','CARLOS HERNANDEZ','ACE-001','CLI-0156'],
+  ['2026-03-03','ROBERTO CHAVEZ','31','SUPER SELECTOS S.A.','SHAMPOO PANTENE 400ML','198.40','MODERNO','CUIDADO PERSONAL','SUR','PEDRO MOLINA','SHA-003','CLI-0234'],
+  ['2026-03-04','MARIA GONZALEZ','19','MERCADO CENTRAL','DETERGENTE ARIEL 2KG','113.05','RUTEO','LIMPIEZA','CENTRAL','CARLOS HERNANDEZ','DET-002','CLI-0445'],
+  ['2026-03-05','CARLOS MENDOZA','42','DISTRIBUIDORA NORTE','ACEITE CORONA 1L','249.90','MAYOREO','ALIMENTOS','NORTE','MARIA SANTOS','ACE-001','CLI-0891'],
+  ['2026-03-06','ROBERTO CHAVEZ','7','TIENDA EL SOL','SHAMPOO PANTENE 400ML','44.80','RUTEO','CUIDADO PERSONAL','SUR','PEDRO MOLINA','SHA-003','CLI-0778'],
+  ['2026-03-07','ANA MARIA LOPEZ','28','SUPER SELECTOS S.A.','DETERGENTE ARIEL 2KG','166.60','MODERNO','LIMPIEZA','CENTRAL','CARLOS HERNANDEZ','DET-002','CLI-0234'],
 ]
 
 const METAS_HEADERS = [
@@ -92,40 +101,55 @@ const INVENTARIO_ROWS = [
   ['SUAVITEL 850ML','156','LIMPIEZA','COLGATE'],
 ]
 
+// ── Validación de columnas ───────────────────────────────────────────────────
+
+const REQUIRED_COLS: Record<string, string[]> = {
+  ventas:     ['fecha', 'vendedor', 'unidades'],
+  metas:      ['mes_periodo', 'vendedor', 'meta'],
+  inventario: ['producto', 'unidades'],
+}
+
+const OPTIONAL_COLS: Record<string, string[]> = {
+  ventas:     ['cliente', 'producto', 'venta_neta', 'canal', 'categoria', 'departamento', 'supervisor', 'codigo_producto', 'codigo_cliente'],
+  metas:      ['canal'],
+  inventario: ['categoria', 'proveedor'],
+}
+
+const COL_FEATURES: Record<string, string> = {
+  cliente:          'Análisis de clientes dormidos',
+  producto:         'Rotación de inventario',
+  venta_neta:       'Proyecciones en $',
+  canal:            'Análisis por canal',
+  categoria:        'Análisis por categoría',
+  departamento:     'Mapa de calor geográfico',
+  supervisor:       'Análisis por zona',
+  codigo_producto:  'Cruce de inventario',
+  codigo_cliente:   'Identificación única de clientes',
+  proveedor:        'Análisis por proveedor',
+}
+
+
 // ── Tabla de ejemplo ──────────────────────────────────────────────────────────
 
 function TablaEjemplo({ headers, rows }: { headers: { col: string; req: boolean }[]; rows: string[][] }) {
   return (
-    <div style={{ overflowX: 'auto', marginTop: '1rem' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.72rem' }}>
+    <div className="overflow-x-auto mt-3 rounded-lg border border-[var(--sf-border)]">
+      <table className="w-full text-[0.72rem] border-collapse">
         <thead>
           <tr>
             {headers.map(({ col, req }) => (
-              <th key={col} style={{
-                padding: '0.35rem 0.625rem',
-                textAlign: 'left',
-                borderBottom: '2px solid #3f3f46',
-                background: '#18181b',
-                color: '#a1a1aa',
-                fontWeight: 500,
-                whiteSpace: 'nowrap',
-              }}>
+              <th key={col} className="px-2.5 py-1.5 text-left border-b-2 border-[var(--sf-border)] text-[var(--sf-t2)] font-medium whitespace-nowrap" style={{ background: 'var(--sf-inset)' }}>
                 {col}
-                {req && <span style={{ marginLeft: '0.25rem', color: '#10b981', fontSize: '0.625rem', fontWeight: 700 }}>*</span>}
+                {req && <span className="ml-1 text-emerald-500 text-[0.625rem] font-bold">*</span>}
               </th>
             ))}
           </tr>
         </thead>
         <tbody>
           {rows.map((row, i) => (
-            <tr key={i} style={{ background: i % 2 === 0 ? 'transparent' : '#18181b' }}>
+            <tr key={i} style={i % 2 === 1 ? { background: 'var(--sf-inset)' } : undefined}>
               {row.map((cell, j) => (
-                <td key={j} style={{
-                  padding: '0.3rem 0.625rem',
-                  borderBottom: '1px solid #27272a',
-                  color: '#d4d4d8',
-                  whiteSpace: 'nowrap',
-                }}>
+                <td key={j} className="px-2.5 py-1.5 border-b border-[var(--sf-border)] text-[var(--sf-t3)] whitespace-nowrap">
                   {cell}
                 </td>
               ))}
@@ -133,8 +157,8 @@ function TablaEjemplo({ headers, rows }: { headers: { col: string; req: boolean 
           ))}
         </tbody>
       </table>
-      <p style={{ fontSize: '0.6875rem', color: '#71717a', marginTop: '0.375rem' }}>
-        * Requerido — las demás columnas son opcionales y activan funciones adicionales.
+      <p className="text-[0.6875rem] text-[var(--sf-t4)] px-2.5 py-1.5 border-t border-[var(--sf-border)]" style={{ background: 'var(--sf-inset)' }}>
+        <span className="text-emerald-500">*</span> Requerido — las demás columnas son opcionales y activan funciones adicionales.
       </p>
     </div>
   )
@@ -150,21 +174,28 @@ export default function UploadPage() {
   const [currentStep, setCurrentStep] = useState(0)
   const [processingStep, setProcessingStep] = useState<number | null>(null)
   const [loading, setLoading] = useState<{ title: string; subtitle: string; progress: number } | null>(null)
+  const [detectedCols, setDetectedCols] = useState<Record<string, string[]>>({})
+  const [showExample, setShowExample] = useState(false)
+  const [discardedRowsMap, setDiscardedRowsMap] = useState<Record<string, DiscardedRow[]>>({})
+  const [showDiscarded, setShowDiscarded] = useState(false)
+  const [showSuccess, setShowSuccess] = useState(false)
+
+  const currentStepStatus = steps[currentStep]?.status
+  useEffect(() => {
+    setShowExample(false)
+    setShowDiscarded(false)
+  }, [currentStep, currentStepStatus])
 
   type StorageFiles = {
     ventas:     { exists: boolean; name: string | null; updated_at: string | null }
     metas:      { exists: boolean; name: string | null; updated_at: string | null }
     inventario: { exists: boolean; name: string | null; updated_at: string | null }
   }
-  const [storageFiles, setStorageFiles] = useState<StorageFiles | null>(null)
-  const [storageLoading, setStorageLoading] = useState(false)
+  const [, setStorageFiles] = useState<StorageFiles | null>(null)
 
   useEffect(() => {
     if (!org?.id) return
-    setStorageLoading(true)
-    getOrgStorageFiles(org.id)
-      .then(setStorageFiles)
-      .finally(() => setStorageLoading(false))
+    getOrgStorageFiles(org.id).then(setStorageFiles)
   }, [org?.id])
 
   const updateStep = (idx: number, partial: Partial<UploadStep>) =>
@@ -172,29 +203,34 @@ export default function UploadPage() {
 
   const handleFileSelect = async (idx: number, file: File) => {
     setProcessingStep(idx)
-    updateStep(idx, { file, status: 'pending', parsedData: undefined })
+    updateStep(idx, { file, status: 'pending', parsedData: undefined, parseError: undefined })
 
+    const stepId = steps[idx].id
     try {
-      const stepId = steps[idx].id
-      let parsed: any[] = []
-
       if (stepId === 'ventas') {
-        const res = await parseSalesFile(file)
-        parsed = res.data
+        const r = await parseSalesFile(file)
+        if (parseErr(r)) { updateStep(idx, { status: 'error', parseError: r.error }); return }
+        setDetectedCols(prev => ({ ...prev, [stepId]: r.columns }))
+        if (r.discardedRows?.length) setDiscardedRowsMap(prev => ({ ...prev, [stepId]: r.discardedRows! }))
+        updateStep(idx, { parsedData: r.data, status: 'loaded', parseError: undefined })
       } else if (stepId === 'metas') {
-        const res = await parseMetasFile(file)
-        parsed = res.data
+        const r = await parseMetasFile(file)
+        if (parseErr(r)) { updateStep(idx, { status: 'error', parseError: r.error }); return }
+        setDetectedCols(prev => ({ ...prev, [stepId]: r.columns }))
+        if (r.discardedRows?.length) setDiscardedRowsMap(prev => ({ ...prev, [stepId]: r.discardedRows! }))
+        updateStep(idx, { parsedData: r.data, status: 'loaded', parseError: undefined })
       } else {
-        const res = await parseInventoryFile(file)
-        parsed = res.data
+        const r = await parseInventoryFile(file)
+        if (parseErr(r)) { updateStep(idx, { status: 'error', parseError: r.error }); return }
+        setDetectedCols(prev => ({ ...prev, [stepId]: r.columns }))
+        if (r.discardedRows?.length) setDiscardedRowsMap(prev => ({ ...prev, [stepId]: r.discardedRows! }))
+        updateStep(idx, { parsedData: r.data, status: 'loaded', parseError: undefined })
       }
-
+    } catch (e) {
       updateStep(idx, {
-        parsedData: parsed,
-        status: parsed.length > 0 ? 'loaded' : 'error',
+        status: 'error',
+        parseError: { code: 'UNKNOWN', message: e instanceof Error ? e.message : 'Error inesperado al leer el archivo.' },
       })
-    } catch {
-      updateStep(idx, { status: 'error' })
     } finally {
       setProcessingStep(null)
     }
@@ -212,22 +248,51 @@ export default function UploadPage() {
 
   const allRequiredDone = () => steps.filter((s) => s.required).every((s) => s.status === 'loaded')
 
+  // Build detected items for the success screen
+  const detectedItems = useMemo(() => {
+    const salesData = steps[0].parsedData ?? []
+    if (salesData.length === 0) return []
+    const items: { icon: string; label: string }[] = []
+
+    const vendedores = new Set(salesData.map((s: any) => s.vendedor).filter(Boolean))
+    if (vendedores.size > 0) items.push({ icon: '\u{1F465}', label: `${vendedores.size} vendedores` })
+
+    const cols = detectedCols['ventas'] ?? []
+    if (cols.includes('departamento')) {
+      const deptos = new Set(salesData.map((s: any) => s.departamento).filter(Boolean))
+      if (deptos.size > 0) items.push({ icon: '\u{1F3E2}', label: `${deptos.size} departamentos` })
+    }
+    if (cols.includes('producto')) {
+      const productos = new Set(salesData.map((s: any) => s.producto).filter(Boolean))
+      if (productos.size > 0) items.push({ icon: '\u{1F4E6}', label: `${productos.size} productos` })
+    }
+    if (cols.includes('cliente')) {
+      const clientes = new Set(salesData.map((s: any) => s.cliente).filter(Boolean))
+      if (clientes.size > 0) items.push({ icon: '\u{1F3EA}', label: `${clientes.size} clientes` })
+    }
+    if (cols.includes('canal')) {
+      const canales = new Set(salesData.map((s: any) => s.canal).filter(Boolean))
+      if (canales.size > 0) items.push({ icon: '\u{1F4CA}', label: `${canales.size} canales` })
+    }
+    if (steps[1].status === 'loaded') items.push({ icon: '\u{1F3AF}', label: 'Metas cargadas' })
+    if (steps[2].status === 'loaded') items.push({ icon: '\u{1F4E5}', label: 'Inventario cargado' })
+
+    return items
+  }, [steps, detectedCols])
+
   const handleAnalyze = async () => {
     const salesData = steps[0].parsedData ?? []
     const metasData = steps[1].parsedData ?? []
     const inventoryData = steps[2].parsedData ?? []
 
-    // Mostrar overlay inmediatamente para dar feedback visual
     setLoading({
-      title: 'Cargando datos...',
+      title: 'Subiendo archivo...',
       subtitle: `Procesando ${salesData.length.toLocaleString()} registros de ventas`,
       progress: 30,
     })
 
-    // Dejar que el overlay renderice antes de bloquear el hilo con setSales
     await new Promise(resolve => setTimeout(resolve, 50))
 
-    // Auto-detectar el último mes en los datos para usarlo como período activo
     if (salesData.length > 0) {
       const lastDate = salesData.reduce((max: Date, s: any) => {
         const d = new Date(s.fecha)
@@ -243,7 +308,6 @@ export default function UploadPage() {
     setMetas(metasData)
     setInventory(inventoryData)
 
-    // Subir archivos al Storage ANTES de navegar
     if (org) {
       setLoading({ title: 'Guardando en la nube...', subtitle: 'Subiendo archivos a tu organización', progress: 60 })
 
@@ -264,10 +328,12 @@ export default function UploadPage() {
       }
     }
 
-    setLoading({ title: 'Iniciando análisis...', subtitle: 'Detectando patrones y riesgos comerciales', progress: 90 })
+    setLoading({ title: 'Analizando tus datos...', subtitle: 'Detectando vendedores, productos, patrones', progress: 90 })
     await new Promise(resolve => setTimeout(resolve, 400))
     setLoading(null)
-    navigate('/dashboard')
+
+    // Show success screen instead of navigating immediately
+    setShowSuccess(true)
   }
 
   const handleLoadDemo = () => {
@@ -278,7 +344,7 @@ export default function UploadPage() {
       setMetas(metas)
       setInventory(inventory)
       setConfiguracion({ empresa: DEMO_EMPRESA })
-      setLoading({ title: '¡Listo!', subtitle: 'Redirigiendo al dashboard', progress: 100 })
+      setLoading({ title: '\u00A1Listo!', subtitle: 'Redirigiendo al dashboard', progress: 100 })
       setTimeout(() => {
         setLoading(null)
         navigate('/dashboard')
@@ -291,6 +357,9 @@ export default function UploadPage() {
     setSteps(INITIAL_STEPS)
     setCurrentStep(0)
     setStorageFiles(null)
+    setDetectedCols({})
+    setDiscardedRowsMap({})
+    setShowSuccess(false)
     if (org?.id) {
       await deleteOrgFiles(org.id)
     }
@@ -336,11 +405,82 @@ export default function UploadPage() {
   if (!canEdit) {
     return (
       <div className="max-w-3xl mx-auto flex flex-col items-center justify-center py-24 space-y-4">
-        <ShieldOff className="w-10 h-10 text-zinc-600" />
-        <h2 className="text-lg font-bold text-zinc-300">Sin permiso para cargar archivos</h2>
-        <p className="text-sm text-zinc-500 text-center max-w-sm">
+        <ShieldOff className="w-10 h-10 text-[var(--sf-t4)]" />
+        <h2 className="text-lg font-bold text-[var(--sf-t1)]">Sin permiso para cargar archivos</h2>
+        <p className="text-sm text-[var(--sf-t3)] text-center max-w-sm">
           Solo el propietario o un editor puede cargar archivos. Contacta al propietario de la organización.
         </p>
+      </div>
+    )
+  }
+
+  // ── Success screen ────────────────────────────────────────────────────────
+  if (showSuccess) {
+    const totalRegistros = steps[0].parsedData?.length ?? 0
+    return (
+      <div className="max-w-3xl mx-auto pb-20 animate-in fade-in duration-700">
+        <style>{`@keyframes fadeInUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}`}</style>
+        <div className="text-center py-16">
+          {/* Check icon */}
+          <div
+            className="w-16 h-16 mx-auto mb-5 rounded-2xl bg-emerald-500 flex items-center justify-center text-white"
+            style={{ animation: 'fadeInUp 0.3s ease forwards' }}
+          >
+            <Check className="w-8 h-8" strokeWidth={3} />
+          </div>
+
+          {/* Headline */}
+          <h2
+            className="text-2xl font-bold text-[var(--sf-t1)] mb-1 opacity-0"
+            style={{ animation: 'fadeInUp 0.3s ease 0.1s forwards' }}
+          >
+            {totalRegistros.toLocaleString()} registros cargados
+          </h2>
+          <p
+            className="text-sm text-[var(--sf-t3)] mb-8 opacity-0"
+            style={{ animation: 'fadeInUp 0.3s ease 0.2s forwards' }}
+          >
+            Tu monitor comercial está activo
+          </p>
+
+          {/* Detected items */}
+          <div className="flex flex-wrap gap-2 justify-center mb-10">
+            {detectedItems.map((item, i) => (
+              <div
+                key={i}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--sf-border)] text-sm font-medium text-[var(--sf-t1)] opacity-0"
+                style={{
+                  background: 'var(--sf-elevated)',
+                  animation: `fadeInUp 0.3s ease ${0.3 + i * 0.08}s forwards`,
+                }}
+              >
+                <span>{item.icon}</span>
+                {item.label}
+              </div>
+            ))}
+          </div>
+
+          {/* CTAs */}
+          <div
+            className="flex gap-3 justify-center opacity-0"
+            style={{ animation: 'fadeInUp 0.3s ease 0.8s forwards' }}
+          >
+            <button
+              onClick={() => navigate('/dashboard')}
+              className="px-6 py-3 rounded-xl bg-emerald-500 text-white text-sm font-semibold hover:bg-emerald-600 transition-colors"
+            >
+              Ir a Estado Comercial →
+            </button>
+            {steps[1].status !== 'loaded' && (
+              <button
+                onClick={() => { setShowSuccess(false); setCurrentStep(1) }}
+                className="px-6 py-3 rounded-xl border border-[var(--sf-border)] text-[var(--sf-t2)] text-sm font-medium hover:bg-[var(--sf-hover)] transition-colors"
+              >
+                Subir metas (opcional)
+              </button>
+            )}
+          </div>
+        </div>
       </div>
     )
   }
@@ -360,20 +500,20 @@ export default function UploadPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-zinc-50 tracking-tight">Cargar Datos</h1>
-          <p className="text-zinc-500 mt-1">Sube tus ventas y activa el monitor de riesgo comercial.</p>
+          <h1 className="text-3xl font-bold text-[var(--sf-t1)] tracking-tight">Cargar Datos</h1>
+          <p className="text-[var(--sf-t3)] mt-1">Sube tus ventas y activa el monitor de riesgo comercial.</p>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={handleLimpiar}
-            className="flex items-center gap-1.5 text-xs font-medium text-zinc-500 hover:text-red-400 transition-colors"
+            className="flex items-center gap-1.5 text-xs font-medium text-[var(--sf-t4)] hover:text-red-500 transition-colors"
           >
             <Trash2 className="w-3.5 h-3.5" />
             Limpiar
           </button>
           <button
             onClick={downloadTemplate}
-            className="flex items-center gap-2 px-3 py-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-lg text-xs font-bold text-zinc-300 transition-all"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-[var(--sf-border)] bg-[var(--sf-elevated)] text-[var(--sf-t2)] text-sm font-medium hover:bg-[var(--sf-hover)] transition-colors"
           >
             <FileDown className="w-3.5 h-3.5" />
             Plantilla Excel
@@ -382,112 +522,163 @@ export default function UploadPage() {
       </div>
 
       {/* Demo banner */}
-      <div className="bg-[#00B894]/5 border border-[#00B894]/15 rounded-2xl p-6 flex items-center gap-4">
-        <div className="bg-[#00B894]/20 p-2 rounded-lg shrink-0">
-          <Sparkles className="w-5 h-5 text-[#00B894]" />
-        </div>
+      <div className="flex items-center gap-4 p-4 rounded-xl bg-[var(--sf-green-bg)] border border-[var(--sf-green-border)]">
+        <span className="text-xl shrink-0">{'\u{1F9EA}'}</span>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-bold text-zinc-200">Explorar con datos demo</p>
-          <p className="text-xs text-zinc-500">
-            Distribuidora Los Pinos · 8 vendedores · 18 meses · activa los 5 insights críticos
+          <p className="text-sm font-semibold text-[var(--sf-t1)]">{'\u00BF'}Primera vez? Prueba con datos demo</p>
+          <p className="text-xs text-[var(--sf-t3)] mt-0.5">
+            Distribuidora Los Pinos · 8 vendedores · 18 meses de historial
           </p>
         </div>
         <button
           onClick={handleLoadDemo}
-          className="shrink-0 px-4 py-2 bg-[#00B894] hover:bg-[#00a884] text-black rounded-lg text-xs font-bold transition-all"
+          className="shrink-0 px-4 py-2 rounded-lg bg-emerald-500 text-white text-sm font-semibold hover:bg-emerald-600 transition-colors"
         >
           Cargar demo
         </button>
       </div>
 
-      {/* Archivos existentes en Storage */}
-      {storageFiles && (
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
-              Archivos en la nube
-            </p>
-            {storageLoading && (
-              <span className="text-xs text-zinc-600">Verificando...</span>
-            )}
-          </div>
-
-          <div className="grid grid-cols-3 gap-3">
-            {([
-              { key: 'ventas',     label: 'Ventas',     required: true  },
-              { key: 'metas',      label: 'Metas',      required: false },
-              { key: 'inventario', label: 'Inventario', required: false },
-            ] as const).map(({ key, label, required }) => {
-              const file = storageFiles[key]
-              const fechaStr = file.updated_at
-                ? new Date(file.updated_at).toLocaleDateString('es', {
-                    day: '2-digit', month: 'short', year: 'numeric',
-                  })
-                : null
-              return (
-                <div
-                  key={key}
-                  className="rounded-lg border bg-zinc-950 p-3 flex flex-col gap-1"
-                  style={{ borderColor: file.exists ? 'rgb(39,39,42)' : 'rgb(28,28,30)' }}
-                >
-                  <div className="flex items-center justify-between gap-1">
-                    <span className="text-[0.8125rem] font-medium text-zinc-200">{label}</span>
-                    <span className={`text-[0.625rem] font-semibold px-1.5 py-0.5 rounded-full ${
-                      file.exists
-                        ? 'bg-emerald-500/15 text-emerald-400'
-                        : 'bg-zinc-800 text-zinc-500'
-                    }`}>
-                      {file.exists ? '✓ Subido' : required ? 'Requerido' : 'Opcional'}
-                    </span>
-                  </div>
-                  <span className="text-xs text-zinc-600">
-                    {file.exists && fechaStr
-                      ? `Actualizado: ${fechaStr}`
-                      : file.exists
-                      ? 'En la nube'
-                      : 'No subido aún'}
-                  </span>
-                </div>
-              )
-            })}
-          </div>
-
-          {storageFiles.ventas.exists && (
-            <p className="text-xs text-zinc-600 pt-1 border-t border-zinc-800">
-              Puedes subir nuevos archivos para reemplazar los actuales. Los datos anteriores se sobreescribirán.
-            </p>
-          )}
-        </div>
-      )}
-
       {/* Step indicator */}
       <div className="flex justify-center">
-        <StepIndicator steps={steps} currentStepIndex={currentStep} />
+        <StepIndicator
+          steps={steps}
+          currentStepIndex={currentStep}
+          onStepClick={(idx) => setCurrentStep(idx)}
+        />
       </div>
 
       {/* Step card */}
-      <div className="bg-zinc-900/40 border border-zinc-800 rounded-2xl p-8 space-y-6">
+      <div className="rounded-2xl p-8 space-y-6" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <span className="text-xs font-bold uppercase tracking-wider text-zinc-600">
+            <span className="text-xs font-bold uppercase tracking-wider text-[var(--sf-t4)]">
               Paso {currentStep + 1} de {steps.length}
             </span>
             {!step.required && (
-              <span className="px-1.5 py-0.5 bg-zinc-800 rounded text-[9px] font-bold text-zinc-500 uppercase">opcional</span>
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold text-[var(--sf-t4)] uppercase tracking-wider" style={{ background: 'var(--sf-inset)' }}>opcional</span>
             )}
           </div>
-          <h2 className="text-xl font-bold text-zinc-100">{step.label}</h2>
-          <p className="text-sm text-zinc-500 mt-1">{step.description}</p>
+          <h2 className="text-xl font-bold text-[var(--sf-t1)]">{step.label}</h2>
+
+          <div className="flex flex-col gap-4 mt-4">
+            {/* Obligatorias */}
+            <div>
+              <p className="text-xs font-semibold text-[var(--sf-green)] mb-2 flex items-center gap-1.5">
+                <Check className="w-3.5 h-3.5" />
+                OBLIGATORIAS
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {REQUIRED_COLS[step.id]?.map(col => {
+                  const hasData = step.status === 'loaded' && !!detectedCols[step.id]
+                  const found = hasData ? detectedCols[step.id].includes(col) : null
+                  return (
+                    <span key={col} className={cn(
+                      'inline-flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg border transition-all',
+                      hasData
+                        ? found
+                          ? 'bg-[var(--sf-green-bg)] text-emerald-600 border-[var(--sf-green-border)]'
+                          : 'bg-red-50 text-red-600 border-red-200'
+                        : 'bg-[var(--sf-green-bg)] text-[var(--sf-green)] border-[var(--sf-green-border)]'
+                    )}>
+                      {hasData && (found
+                        ? <Check className="w-3.5 h-3.5 shrink-0" />
+                        : <X className="w-3.5 h-3.5 shrink-0" />
+                      )}
+                      {col}
+                    </span>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* Opcionales */}
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <p className="text-xs font-semibold text-[var(--sf-t3)] flex items-center gap-1.5">
+                  <Plus className="w-3.5 h-3.5" />
+                  OPCIONALES
+                </p>
+                {step.status === 'loaded' && detectedCols[step.id] && (
+                  <span className="text-xs text-[var(--sf-t4)]">
+                    — {OPTIONAL_COLS[step.id]?.filter(c => detectedCols[step.id].includes(c)).length ?? 0} de {OPTIONAL_COLS[step.id]?.length ?? 0} detectadas
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-[var(--sf-t4)] mb-3">
+                Mientras más columnas subas, más profundo es el análisis
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {OPTIONAL_COLS[step.id]?.map(col => {
+                  const hasData = step.status === 'loaded' && !!detectedCols[step.id]
+                  const found = hasData ? detectedCols[step.id].includes(col) : null
+                  return (
+                    <span key={col} className={cn(
+                      'group relative inline-flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg border cursor-default transition-all',
+                      hasData
+                        ? found
+                          ? 'bg-indigo-50 text-indigo-600 border-indigo-200'
+                          : 'text-[var(--sf-t4)] border-[var(--sf-border)]'
+                        : 'text-[var(--sf-t2)] border-[var(--sf-border)] hover:bg-[var(--sf-elevated)] hover:border-[var(--sf-border-active)]'
+                    )} style={!hasData ? { background: 'var(--sf-inset)' } : hasData && !found ? { background: 'var(--sf-inset)' } : undefined}>
+                      {hasData && found && <Check className="w-3 h-3 shrink-0" />}
+                      {hasData && !found && <Plus className="w-3 h-3 shrink-0 opacity-40" />}
+                      {col}
+                      {/* Tooltip */}
+                      {COL_FEATURES[col] && (
+                        <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 rounded-lg bg-[var(--sf-t1)] text-white text-xs font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-10">
+                          Activa: {COL_FEATURES[col]}
+                          <span className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-[var(--sf-t1)]" />
+                        </span>
+                      )}
+                    </span>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* Resumen cuando cargado */}
+            {step.status === 'loaded' && detectedCols[step.id] && (
+              <p className="text-[0.6875rem] text-[var(--sf-t4)] pt-1 border-t border-[var(--sf-border)]">
+                {detectedCols[step.id].length} columnas en total · {step.file?.name}
+              </p>
+            )}
+          </div>
         </div>
 
-        {/* Column guide */}
-        {step.status === 'pending' && (
-          <TablaEjemplo
-            headers={step.id === 'ventas' ? VENTAS_HEADERS : step.id === 'metas' ? METAS_HEADERS : INVENTARIO_HEADERS}
-            rows={step.id === 'ventas' ? VENTAS_ROWS : step.id === 'metas' ? METAS_ROWS : INVENTARIO_ROWS}
-          />
-        )}
+        {/* Example table (collapsible) */}
+        <div>
+          <button
+            onClick={() => setShowExample(prev => !prev)}
+            className="flex items-center justify-between w-full text-left px-3.5 py-2.5 rounded-xl border border-[var(--sf-border)] hover:border-[var(--sf-green-border)] hover:bg-[var(--sf-green-bg)] transition-all cursor-pointer group"
+            style={{ background: 'var(--sf-elevated)' }}
+          >
+            <p className="text-xs font-semibold text-[var(--sf-t3)] uppercase tracking-widest group-hover:text-[var(--sf-green)] transition-colors">
+              Ejemplo de formato
+            </p>
+            <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--sf-green)] group-hover:text-[var(--sf-green)] transition-colors">
+              {showExample ? '\u25B2 Ocultar ejemplo' : '\u25BC Ver ejemplo'}
+            </span>
+          </button>
+          {showExample && (
+            <>
+              <TablaEjemplo
+                headers={step.id === 'ventas' ? VENTAS_HEADERS : step.id === 'metas' ? METAS_HEADERS : INVENTARIO_HEADERS}
+                rows={step.id === 'ventas' ? VENTAS_ROWS : step.id === 'metas' ? METAS_ROWS : INVENTARIO_ROWS}
+              />
+              <div className="flex justify-end mt-2">
+                <button
+                  onClick={downloadTemplate}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-[var(--sf-border)] bg-[var(--sf-elevated)] text-[var(--sf-t2)] text-sm font-medium hover:bg-[var(--sf-hover)] transition-colors cursor-pointer"
+                >
+                  <FileDown className="w-3.5 h-3.5" />
+                  Descargar plantilla {step.id}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
 
+        {/* Drop zone */}
         <FileDropzone
           step={step}
           onFileSelect={(file) => handleFileSelect(currentStep, file)}
@@ -495,9 +686,136 @@ export default function UploadPage() {
           isProcessing={processingStep === currentStep}
         />
 
+        {/* Filas descartadas */}
+        {step.status === 'loaded' && discardedRowsMap[step.id]?.length > 0 && (() => {
+          const discarded = discardedRowsMap[step.id]
+          return (
+            <div className="rounded-lg border border-amber-400/30 bg-amber-50/50">
+              <button
+                onClick={() => setShowDiscarded(prev => !prev)}
+                className="w-full flex items-center justify-between px-3.5 py-2.5 text-left"
+              >
+                <span className="flex items-center gap-2 text-sm font-medium text-amber-600">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  Se omitieron {discarded.length} {discarded.length === 1 ? 'fila' : 'filas'} — ver detalle
+                </span>
+                <span className="text-xs text-amber-500/60">{showDiscarded ? '\u25B2 Ocultar' : '\u25BC Ver'}</span>
+              </button>
+              {showDiscarded && (
+                <div className="px-3.5 pb-3 space-y-1.5 border-t border-amber-400/20 pt-2.5">
+                  {discarded.map((row) => (
+                    <div key={row.rowNumber} className="flex gap-2.5 text-xs">
+                      <span className="shrink-0 text-amber-500/60 font-mono w-12 text-right">fila {row.rowNumber}</span>
+                      <span className="text-[var(--sf-t3)] leading-snug">{row.reason}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })()}
+
+        {/* Error detallado */}
+        {step.status === 'error' && step.parseError && (
+          <div className="rounded-lg border border-red-300/50 bg-red-50/50 p-3.5">
+            <div className="flex items-start gap-2.5">
+              {step.parseError.code === 'INVALID_DATES' ? (
+                <span className="text-base shrink-0 leading-none mt-0.5">{'\u{1F4C5}'}</span>
+              ) : step.parseError.code === 'FILE_PROTECTED_OR_CORRUPT' ? (
+                <span className="text-base shrink-0 leading-none mt-0.5">{'\u{1F512}'}</span>
+              ) : step.parseError.code === 'ENCODING_ISSUE' ? (
+                <span className="text-base shrink-0 leading-none mt-0.5">{'\u{1F524}'}</span>
+              ) : (
+                <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+              )}
+              <div className="space-y-1 min-w-0 flex-1">
+                <p className="text-sm font-medium text-red-600">
+                  {step.parseError.code === 'MULTIPLE_SHEETS'         ? 'Múltiples pestañas detectadas'
+                  : step.parseError.code === 'NO_VALID_COLUMNS'       ? 'No se reconocieron las columnas'
+                  : step.parseError.code === 'MISSING_REQUIRED'       ? 'Faltan columnas obligatorias'
+                  : step.parseError.code === 'FORMAT_NOT_SUPPORTED'   ? 'Formato de archivo no compatible'
+                  : step.parseError.code === 'EMPTY_FILE'             ? 'El archivo no tiene datos procesables'
+                  : step.parseError.code === 'INVALID_DATES'          ? 'Formato de fecha no reconocido'
+                  : step.parseError.code === 'FILE_PROTECTED_OR_CORRUPT' ? 'Archivo protegido o corrupto'
+                  : step.parseError.code === 'ENCODING_ISSUE'         ? 'Problema de codificación de texto'
+                  :                                                     'Error al leer el archivo'}
+                </p>
+                <p className="text-xs text-[var(--sf-t3)] leading-relaxed">{step.parseError.message}</p>
+
+                {step.parseError.code === 'MULTIPLE_SHEETS' && (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {step.parseError.sheets.map(s => (
+                      <span key={s} className="text-xs px-2 py-0.5 rounded-full text-[var(--sf-t2)]" style={{ background: 'var(--sf-inset)' }}>
+                        {s}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {step.parseError.code === 'MISSING_REQUIRED' && (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {step.parseError.missing.map(c => (
+                      <span key={c} className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-600 font-medium">
+                        {'\u2717'} {c}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {step.parseError.code === 'INVALID_DATES' && (
+                  <div className="pt-1 space-y-1">
+                    <p className="text-[0.6875rem] text-[var(--sf-t4)]">Fechas encontradas en el archivo:</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {step.parseError.sample.map((s, i) => (
+                        <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-600 font-medium">
+                          {s}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {step.parseError.code === 'ENCODING_ISSUE' && step.parseError.sample.length > 0 && (
+                  <div className="pt-1 space-y-1">
+                    <p className="text-[0.6875rem] text-[var(--sf-t4)]">Columnas con caracteres incorrectos:</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {step.parseError.sample.map((s, i) => (
+                        <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-600 font-medium">
+                          {s}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Banner CTA — ventas cargado */}
+        {step.id === 'ventas' && step.status === 'loaded' && step.parsedData && (
+          <div className="flex items-center justify-between gap-4 px-4 py-3.5 rounded-lg bg-[var(--sf-green-bg)] border border-[var(--sf-green-border)]">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-emerald-600">
+                {'\u2713'} Archivo listo — {step.parsedData.length.toLocaleString()} registros cargados
+              </p>
+              <p className="text-xs text-[var(--sf-t3)] mt-0.5">
+                Puedes continuar ahora o agregar metas e inventario para activar más análisis.
+              </p>
+            </div>
+            <button
+              onClick={() => setCurrentStep(c => c + 1)}
+              className="shrink-0 px-5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-semibold text-sm transition-colors whitespace-nowrap"
+            >
+              Continuar →
+            </button>
+          </div>
+        )}
+
+        {/* Vista previa de datos */}
         {step.parsedData && step.parsedData.length > 0 && step.status === 'loaded' && (
           <div className="space-y-2">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-600">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--sf-t4)]">
               Vista previa — {step.parsedData.length.toLocaleString()} registros
             </p>
             <DataPreview data={step.parsedData} maxRows={5} />
@@ -511,11 +829,12 @@ export default function UploadPage() {
           onClick={() => setCurrentStep((c) => c - 1)}
           disabled={currentStep === 0}
           className={cn(
-            'flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-all',
+            'flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all',
             currentStep === 0
-              ? 'opacity-30 cursor-not-allowed text-zinc-600'
-              : 'bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300'
+              ? 'opacity-30 cursor-not-allowed text-[var(--sf-t4)]'
+              : 'border border-[var(--sf-border)] hover:bg-[var(--sf-hover)] text-[var(--sf-t2)]'
           )}
+          style={currentStep > 0 ? { background: 'var(--sf-card)' } : undefined}
         >
           <ChevronLeft className="w-4 h-4" />
           Anterior
@@ -527,29 +846,36 @@ export default function UploadPage() {
               onClick={handleAnalyze}
               disabled={!allRequiredDone()}
               className={cn(
-                'flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold transition-all',
+                'flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-semibold transition-all',
                 allRequiredDone()
-                  ? 'bg-[#00B894] hover:bg-[#00a884] text-black shadow-lg shadow-[#00B894]/20'
-                  : 'bg-zinc-800 text-zinc-600 cursor-not-allowed'
+                  ? 'bg-emerald-500 hover:bg-emerald-600 text-white'
+                  : 'bg-[var(--sf-inset)] text-[var(--sf-t4)] cursor-not-allowed'
               )}
             >
               Analizar ventas
               <ChevronRight className="w-4 h-4" />
             </button>
           ) : (
-            <button
-              onClick={() => setCurrentStep((c) => c + 1)}
-              disabled={!canGoNext()}
-              className={cn(
-                'flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all',
-                canGoNext()
-                  ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700'
-                  : 'bg-zinc-900 text-zinc-700 cursor-not-allowed'
+            <div className="flex flex-col items-end gap-1">
+              <button
+                onClick={() => setCurrentStep((c) => c + 1)}
+                disabled={!canGoNext()}
+                className={cn(
+                  'flex items-center gap-2 rounded-xl text-sm font-semibold transition-all duration-300',
+                  canGoNext()
+                    ? 'bg-emerald-500 hover:bg-emerald-600 text-white py-3 px-8'
+                    : 'text-[var(--sf-t4)] cursor-not-allowed px-6 py-2.5 border border-[var(--sf-border)]'
+                )}
+                style={!canGoNext() ? { background: 'var(--sf-card)' } : undefined}
+              >
+                {canGoNext()
+                  ? `Siguiente: ${steps[currentStep + 1]?.label ?? 'Continuar'} \u2192`
+                  : <><span>Siguiente</span><ChevronRight className="w-4 h-4" /></>}
+              </button>
+              {canGoNext() && steps[currentStep + 1] && !steps[currentStep + 1].required && (
+                <p className="text-[11px] text-[var(--sf-t4)]">Paso {currentStep + 2} es opcional, puedes saltar</p>
               )}
-            >
-              Siguiente
-              <ChevronRight className="w-4 h-4" />
-            </button>
+            </div>
           )}
         </div>
       </div>

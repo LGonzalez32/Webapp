@@ -1,6 +1,8 @@
 ﻿node_modules/
 dist/
 .env
+.env.local
+.env.*.local
 backend/.env
 backend/__pycache__/
 *.pyc

@@ -5,15 +5,19 @@ import { ChevronLeft, ChevronRight, Sun, Moon } from 'lucide-react'
 const MESES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
 
 const PAGE_TITLES: Record<string, { title: string; sub: string }> = {
-  '/cargar':       { title: 'Cargar Datos',       sub: 'Sube tus ventas y activa el monitor comercial' },
-  '/dashboard':    { title: 'Estado Comercial',   sub: 'Alertas, semáforo de riesgo y KPIs del equipo' },
-  '/vendedores':   { title: 'Vendedores',         sub: 'Desempeño individual y alertas por vendedor' },
-  '/rendimiento':  { title: 'Rendimiento Anual',  sub: 'Comparativa año actual vs año anterior' },
-  '/clientes':     { title: 'Clientes',           sub: 'Clientes dormidos y concentración de riesgo' },
-  '/metas':        { title: 'Metas de Ventas',    sub: 'Progreso vs objetivo por vendedor' },
-  '/chat':         { title: 'Asistente IA',       sub: 'Consulta tus datos en lenguaje natural' },
-  '/configuracion':{ title: 'Configuración',      sub: 'Empresa, moneda y umbrales de análisis' },
+  '/cargar':        { title: 'Cargar Datos',        sub: 'Sube tus ventas y activa el monitor comercial' },
+  '/dashboard':     { title: 'Estado Comercial',    sub: 'Alertas, semáforo de riesgo y KPIs del equipo' },
+  '/vendedores':    { title: 'Vendedores',          sub: 'Desempeño individual y alertas por vendedor' },
+  '/rendimiento':   { title: 'Rendimiento Anual',   sub: 'Comparativa año actual vs año anterior' },
+  '/clientes':      { title: 'Clientes',            sub: 'Clientes dormidos y concentración de riesgo' },
+  '/metas':         { title: 'Metas de Ventas',     sub: 'Progreso vs objetivo por vendedor' },
+  '/chat':          { title: 'Asistente IA',        sub: 'Consulta tus datos en lenguaje natural' },
+  '/configuracion': { title: 'Configuración',       sub: 'Empresa, moneda y umbrales de análisis' },
+  '/departamentos': { title: 'Departamentos',       sub: 'Mapa de calor de ventas YTD por departamento' },
 }
+
+// Rutas donde el selector de período no aplica
+const HIDE_PERIOD_SELECTOR = new Set(['/departamentos'])
 
 export default function TopBar() {
   const location = useLocation()
@@ -59,7 +63,7 @@ export default function TopBar() {
         {tema === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
       </button>
 
-      {isProcessed && (
+      {isProcessed && !HIDE_PERIOD_SELECTOR.has(location.pathname) && (
         <div className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 rounded-lg px-1 py-1">
           <button
             onClick={goPrev}

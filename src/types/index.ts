@@ -10,13 +10,24 @@ export interface SaleRecord {
   categoria?: string
   proveedor?: string
   canal?: string
+  departamento?: string
+  supervisor?: string
+  codigo_producto?: string
+  codigo_cliente?: string
 }
 
 export interface MetaRecord {
-  mes_periodo: string // formato "YYYY-MM"
-  vendedor: string
+  mes: number           // 1-12
+  anio: number
   meta: number
-  canal?: string
+  tipo_meta: 'unidades' | 'venta_neta'
+  vendedor?:     string
+  cliente?:      string
+  producto?:     string
+  categoria?:    string
+  departamento?: string
+  supervisor?:   string
+  canal?:        string
 }
 
 export interface InventoryItem {
@@ -34,6 +45,7 @@ export interface DataAvailability {
   has_venta_neta: boolean
   has_categoria: boolean
   has_canal: boolean
+  has_supervisor: boolean
   has_metas: boolean
   has_inventario: boolean
 }
@@ -63,7 +75,14 @@ export interface VendorAnalysis {
   riesgo: RiesgoVendedor
   ytd_actual?: number
   ytd_anterior?: number
+  ytd_actual_neto?: number
+  ytd_anterior_neto?: number
   variacion_ytd_pct?: number | null
+  // ── Enriquecimiento del motor ──
+  top_clientes_periodo: Array<{ cliente: string; unidades: number; venta_neta: number | null }> | null
+  productos_ausentes: Array<{ producto: string; dias_sin_venta: number; ultimo_periodo: string }> | null
+  canal_principal: string | null
+  productos_lentos_con_historial: Array<{ producto: string; clasificacion_inventario: string; vendedor_vendio_antes: boolean; dias_sin_vender: number }> | null
 }
 
 // ─── ESTADÍSTICAS DEL EQUIPO ──────────────────────────────────────────────────
@@ -73,6 +92,7 @@ export interface TeamStats {
   total_unidades: number
   variacion_pct: number | null
   meta_equipo?: number
+  meta_equipo_total?: number | null
   cumplimiento_equipo?: number
   proyeccion_equipo?: number
   mejor_vendedor: string
@@ -95,7 +115,9 @@ export type InsightTipo =
   | 'riesgo_cliente'
   | 'riesgo_producto'
   | 'riesgo_meta'
+  | 'riesgo_equipo'
   | 'cruzado'
+  | 'hallazgo'
 
 export type InsightPrioridad = 'CRITICA' | 'ALTA' | 'MEDIA' | 'BAJA'
 
@@ -106,6 +128,7 @@ export interface Insight {
   emoji: string
   titulo: string
   descripcion: string
+  fuente?: 'supervisor'
   vendedor?: string
   cliente?: string
   producto?: string
@@ -116,6 +139,7 @@ export interface Insight {
     descripcion: string
     tipo: 'perdida' | 'riesgo' | 'oportunidad'
   }
+  detector?: string
 }
 
 // ─── CLIENTES DORMIDOS ────────────────────────────────────────────────────────
@@ -130,6 +154,8 @@ export interface ClienteDormido {
   recovery_score: number
   recovery_label: 'alta' | 'recuperable' | 'dificil' | 'perdido'
   recovery_explicacion: string
+  frecuencia_esperada_dias: number | null
+  threshold_usado: number
 }
 
 // ─── CONCENTRACIÓN DE RIESGO ──────────────────────────────────────────────────
@@ -160,6 +186,7 @@ export interface ForecastData {
   year: number
   metric: 'units' | 'revenue'
   seller: string
+  model_used?: string | null
   kpis: ForecastKPIs
   series: {
     actual_current_year: SeriesDataPoint[]
@@ -168,6 +195,29 @@ export interface ForecastData {
     meta: SeriesDataPoint[]
   }
 }
+
+// ─── PARSE ERRORS ─────────────────────────────────────────────────────────────
+
+export type ParseError =
+  | { code: 'FORMAT_NOT_SUPPORTED'; message: string }
+  | { code: 'MULTIPLE_SHEETS'; sheets: string[]; message: string }
+  | { code: 'NO_VALID_COLUMNS'; found: string[]; message: string }
+  | { code: 'MISSING_REQUIRED'; missing: string[]; found: string[]; message: string }
+  | { code: 'EMPTY_FILE'; message: string }
+  | { code: 'INVALID_DATES'; sample: string[]; message: string }
+  | { code: 'FILE_PROTECTED_OR_CORRUPT'; message: string }
+  | { code: 'ENCODING_ISSUE'; sample: string[]; message: string }
+  | { code: 'UNKNOWN'; message: string }
+
+export interface DiscardedRow {
+  rowNumber: number
+  rawData: Record<string, string>
+  reason: string
+}
+
+export type ParseResult<T> =
+  | { success: true; data: T[]; columns: string[]; sheetName?: string; discardedRows?: DiscardedRow[] }
+  | { success: false; error: ParseError }
 
 // ─── UPLOAD / SESIÓN ──────────────────────────────────────────────────────────
 
@@ -179,6 +229,7 @@ export interface UploadStep {
   status: 'pending' | 'loaded' | 'error' | 'skipped'
   file?: File
   parsedData?: any[]
+  parseError?: ParseError
 }
 
 export interface ValidationIssue {
@@ -225,6 +276,74 @@ export interface CategoriaInventario {
   ultimo_movimiento?: Date
 }
 
+// ─── INVENTARIO AGRUPADO POR CATEGORÍA ───────────────────────────────────────
+
+export interface InventarioPorCategoria {
+  categoria: string
+  productos_total: number
+  unidades_totales: number
+  pm3_total: number
+  dias_inventario_promedio: number
+  capital_inmovilizado_pct: number
+  productos_quiebre: number
+  productos_baja_cobertura: number
+  productos_lento: number
+  productos_sin_movimiento: number
+  clasificacion_categoria: 'critica' | 'riesgo' | 'normal' | 'sobrestock'
+}
+
+// ─── ANÁLISIS POR SUPERVISOR ──────────────────────────────────────────────────
+
+export interface SupervisorAnalysis {
+  supervisor: string
+  vendedores: string[]
+  ventas_periodo: number
+  meta_zona: number | null
+  cumplimiento_pct: number | null
+  proyeccion_cierre: number
+  variacion_pct: number
+  vendedores_criticos: number
+  vendedores_riesgo: number
+  vendedores_ok: number
+  vendedores_superando: number
+  riesgo_zona: 'critico' | 'riesgo' | 'ok' | 'superando'
+  ytd_actual: number
+  ytd_anterior: number
+}
+
+// ─── ANÁLISIS POR CATEGORÍA ───────────────────────────────────────────────────
+
+export interface CategoriaAnalysis {
+  categoria: string
+  ventas_periodo: number
+  ventas_anterior: number
+  variacion_pct: number
+  pm3: number
+  variacion_vs_pm3: number
+  meta_categoria: number | null
+  cumplimiento_pct: number | null
+  top_vendedores: string[]
+  top_clientes: string[]
+  tendencia: 'crecimiento' | 'estable' | 'caida' | 'colapso' | 'sin_datos'
+  participacion_pct: number
+}
+
+// ─── ANÁLISIS POR CANAL ───────────────────────────────────────────────────────
+
+export interface CanalAnalysis {
+  canal: string
+  ventas_periodo: number
+  ventas_anterior: number
+  variacion_pct: number
+  pm3: number
+  participacion_pct: number
+  top_vendedor: string | null
+  top_cliente: string | null
+  activo_periodo: boolean
+  activo_anterior: boolean
+  tendencia: 'crecimiento' | 'estable' | 'caida' | 'desaparecido'
+}
+
 // ─── CONFIGURACIÓN ────────────────────────────────────────────────────────────
 
 export interface Configuracion {
@@ -237,7 +356,6 @@ export interface Configuracion {
   umbral_baja_cobertura: number
   umbral_normal: number
   tema: 'dark' | 'light'
-  /** @deprecated API key moved to backend env var DEEPSEEK_API_KEY */
   deepseek_api_key?: string
 }
 
@@ -272,6 +390,30 @@ export interface OrgInvitation {
   expires_at: string
   created_at: string
 }
+
+// ─── CHAT CONTEXT CLIENTE (puente ClientesPage → ChatPage) ───────────────────
+
+export type ChatClienteContext =
+  | {
+      tipo: 'dormido'
+      cliente: string
+      vendedor: string
+      dias_sin_actividad: number
+      compras_historicas: number
+      valor_historico: number
+      recovery_score: number
+      recovery_explicacion: string
+      frecuencia_esperada_dias: number | null
+    }
+  | {
+      tipo: 'top'
+      nombre: string
+      vendedor: string
+      totalUnidades: number
+      totalVenta: number
+      varPct: number | null
+      cumulativePct: number
+    }
 
 // ─── CHAT CONTEXT (para IA) ───────────────────────────────────────────────────
 

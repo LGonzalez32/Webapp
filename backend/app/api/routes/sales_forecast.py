@@ -15,6 +15,7 @@ from ...services.sales_forecast_service import (
     persist_forecast_to_supabase,
     get_persisted_forecast,
     build_annual_performance,
+    _forecast_cache,
 )
 
 router = APIRouter()
@@ -144,7 +145,8 @@ async def get_annual_performance(request: AnnualPerformanceRequest):
             metric=request.metric,
             seller=request.vendedor,
             kpis=kpis,
-            series=series
+            series=series,
+            model_used=forecast.model_used
         )
         
     except Exception as e:
@@ -210,7 +212,8 @@ async def sync_sales_data(data: dict):
             })
         
         set_sales_data(normalized)
-        
+        _forecast_cache.clear()  # Invalidate cache on new data
+
         return {
             "success": True,
             "message": f"Datos sincronizados: {len(normalized)} registros"

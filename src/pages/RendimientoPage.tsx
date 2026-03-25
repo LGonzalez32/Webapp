@@ -1,16 +1,29 @@
-import { useMemo, useState, useEffect } from 'react'
+import { useMemo, useState, useEffect, useRef, type CSSProperties, type Key } from 'react'
+import { buildPivotTree, flattenPivot } from '../utils/pivotUtils'
+import type { DimKey, PivotNode } from '../utils/pivotUtils'
+import {
+  DndContext, closestCenter, PointerSensor, useSensor, useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  SortableContext, horizontalListSortingStrategy,
+  useSortable, arrayMove,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
+import { restrictToHorizontalAxis, restrictToParentElement } from '@dnd-kit/modifiers'
 import { useNavigate } from 'react-router-dom'
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, ReferenceLine, Legend,
+  ComposedChart, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, ReferenceLine,
 } from 'recharts'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
 import { salesInPeriod } from '../lib/analysis'
 import { syncSalesData, getAnnualPerformance } from '../lib/forecastApi'
-import { TrendingUp, TrendingDown, Minus, Calendar, ChevronRight, ChevronDown, ArrowUp, ArrowDown, Settings2, Loader2 } from 'lucide-react'
+import { TrendingUp, TrendingDown, Minus, Calendar, Loader2 } from 'lucide-react'
 import { cn } from '../lib/utils'
 import type { SaleRecord, MetaRecord, ForecastData } from '../types'
+import { DIM_META, PIVOT_PRESETS } from '../config/metaConfig'
 
 const MESES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
 
@@ -27,8 +40,6 @@ function formatCurrency(n: number, moneda: string): string {
 
 // ─── PIVOT TABLE HELPERS ──────────────────────────────────────────────────────
 
-type DimKey = 'mes' | 'vendedor' | 'canal' | 'cliente' | 'producto'
-
 interface PivotCols {
   unidades: boolean
   venta_neta: boolean
@@ -37,130 +48,48 @@ interface PivotCols {
   pct_total: boolean
 }
 
-interface PivotNode {
-  id: string
-  label: string
-  depth: number
-  dim: DimKey
-  dimVal: string
-  mesCtx: string | null
-  vendedorCtx: string | null
-  unidades: number
-  ventaNeta: number
-  prevUnidades: number
-  prevVentaNeta: number
-  meta: number | null
-  children: PivotNode[]
-}
 
-function getSalesVal(s: SaleRecord, dim: DimKey): string {
-  const d = new Date(s.fecha)
-  switch (dim) {
-    case 'mes':      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-    case 'vendedor': return s.vendedor
-    case 'canal':    return s.canal ?? 'Sin canal'
-    case 'cliente':  return s.cliente ?? '(sin cliente)'
-    case 'producto': return s.producto ?? '(sin producto)'
+const FORECAST_BACKEND_ENABLED = false // TODO: reactivar cuando el backend esté desplegado en producción
+
+// ─── SORTABLE PILL ────────────────────────────────────────────────────────────
+
+function SortablePill({
+  dim, index, onRemove,
+}: { dim: DimKey; index: number; onRemove: (dim: DimKey) => void; key?: Key }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } =
+    useSortable({ id: dim, transition: null })
+
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    zIndex: isDragging ? 20 : undefined,
+    opacity: isDragging ? 0.95 : 1,
+    cursor: isDragging ? 'grabbing' : 'grab',
+    background: 'var(--sf-card)',
+    border: '1px solid var(--sf-border)',
+    borderRadius: '6px',
+    padding: '6px 12px',
+    touchAction: 'none',
   }
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="flex items-center gap-1.5 text-xs font-bold select-none"
+    >
+      <span style={{ color: 'var(--sf-t5)', lineHeight: 1, cursor: 'inherit' }} {...attributes} {...listeners}>⠿</span>
+      <span style={{ color: 'var(--sf-t3)' }}>{DIM_META[dim]?.label ?? dim}</span>
+      <span style={{ fontSize: '10px', opacity: 0.4, fontFamily: "'DM Mono', monospace" }}>{index + 1}</span>
+      <button
+        onClick={() => onRemove(dim)}
+        onPointerDown={e => e.stopPropagation()}
+        className="ml-0.5 transition-colors leading-none"
+        style={{ color: 'var(--sf-t5)' }}
+        title={`Quitar ${DIM_META[dim]?.label ?? dim}`}
+      >×</button>
+    </div>
+  )
 }
-
-function getPrevVal(s: SaleRecord, dim: DimKey, targetYear: number): string {
-  if (dim !== 'mes') return getSalesVal(s, dim)
-  const d = new Date(s.fecha)
-  return `${targetYear}-${String(d.getMonth() + 1).padStart(2, '0')}`
-}
-
-function dimDisplayLabel(val: string, dim: DimKey): string {
-  if (dim !== 'mes') return val
-  const [y, m] = val.split('-')
-  return `${MESES[parseInt(m, 10) - 1]} ${y}`
-}
-
-function getMeta(metas: MetaRecord[], mesCtx: string | null, vendedorCtx: string | null): number | null {
-  if (!mesCtx) return null
-  const filtered = metas.filter((m) => m.mes_periodo === mesCtx)
-  if (vendedorCtx) {
-    const found = filtered.find((m) => m.vendedor.toLowerCase().trim() === vendedorCtx.toLowerCase().trim())
-    return found?.meta ?? null
-  }
-  const total = filtered.reduce((a, m) => a + m.meta, 0)
-  return total || null
-}
-
-function buildPivotTree(
-  currSales: SaleRecord[],
-  prevSales: SaleRecord[],
-  metas: MetaRecord[],
-  dims: DimKey[],
-  currentYear: number,
-  parentId: string,
-  depth: number,
-  mesCtx: string | null,
-  vendedorCtx: string | null,
-): PivotNode[] {
-  if (dims.length === 0 || currSales.length === 0) return []
-  const [dim, ...restDims] = dims
-
-  const currMap = new Map<string, SaleRecord[]>()
-  const prevMap = new Map<string, SaleRecord[]>()
-
-  currSales.forEach((s) => {
-    const v = getSalesVal(s, dim)
-    if (!currMap.has(v)) currMap.set(v, [])
-    currMap.get(v)!.push(s)
-  })
-  prevSales.forEach((s) => {
-    const v = getPrevVal(s, dim, currentYear)
-    if (!prevMap.has(v)) prevMap.set(v, [])
-    prevMap.get(v)!.push(s)
-  })
-
-  const allVals = new Set([...currMap.keys()])
-
-  const sorted = [...allVals].sort(dim === 'mes'
-    ? (a, b) => a.localeCompare(b)
-    : (a, b) => {
-        const ua = (currMap.get(a) ?? []).reduce((t, s) => t + s.unidades, 0)
-        const ub = (currMap.get(b) ?? []).reduce((t, s) => t + s.unidades, 0)
-        return ub - ua
-      })
-
-  return sorted.map((val) => {
-    const cs = currMap.get(val) ?? []
-    const ps = prevMap.get(val) ?? []
-    const newMes    = dim === 'mes'      ? val : mesCtx
-    const newVendor = dim === 'vendedor' ? val : vendedorCtx
-
-    const unidades    = cs.reduce((a, s) => a + s.unidades, 0)
-    const ventaNeta   = cs.reduce((a, s) => a + (s.venta_neta ?? 0), 0)
-    const prevUnidades  = ps.reduce((a, s) => a + s.unidades, 0)
-    const prevVentaNeta = ps.reduce((a, s) => a + (s.venta_neta ?? 0), 0)
-    const meta = getMeta(metas, newMes, newVendor)
-    const id = `${parentId}::${val}`
-
-    const children = restDims.length > 0
-      ? buildPivotTree(cs, ps, metas, restDims, currentYear, id, depth + 1, newMes, newVendor)
-      : []
-
-    return { id, label: dimDisplayLabel(val, dim), depth, dim, dimVal: val, mesCtx: newMes, vendedorCtx: newVendor, unidades, ventaNeta, prevUnidades, prevVentaNeta, meta, children }
-  })
-}
-
-function flattenPivot(
-  nodes: PivotNode[],
-  expanded: Set<string>,
-  out: (PivotNode & { hasChildren: boolean })[],
-) {
-  for (const n of nodes) {
-    const hasChildren = n.children.length > 0
-    out.push({ ...n, hasChildren })
-    if (hasChildren && expanded.has(n.id)) {
-      flattenPivot(n.children, expanded, out)
-    }
-  }
-}
-
-const FORECAST_BACKEND_ENABLED = false  // TODO: optimizar y reactivar
 
 // ─── PÁGINA ───────────────────────────────────────────────────────────────────
 
@@ -169,7 +98,6 @@ export default function RendimientoPage() {
   const navigate = useNavigate()
   const { sales, metas, dataAvailability, selectedPeriod, configuracion, forecastData, forecastChartLoading, setForecastData, setForecastChartLoading } = useAppStore()
   const [metric, setMetric] = useState<'unidades' | 'venta_neta'>('unidades')
-  const [showForecast] = useState(false) // TODO: reactivar cuando el forecast esté optimizado
   const [showBudget, setShowBudget] = useState(true)
   const [selectedVendor, setSelectedVendor] = useState<string>('todos')
   const [selectedYear, setSelectedYear] = useState<number>(selectedPeriod.year)
@@ -177,10 +105,10 @@ export default function RendimientoPage() {
   const [selectedCanal, setSelectedCanal] = useState<string>('all')
   const [selectedProducto, setSelectedProducto] = useState<string>('all')
 
-  const currentYear  = selectedPeriod.year  // usado en bloque forecast (deshabilitado)
+  const currentYear  = selectedPeriod.year
   const currentMonth = selectedPeriod.month
-  const today        = new Date()
-  const isCurrentYear = today.getFullYear() === selectedYear
+  const isCurrentYear = currentYear === selectedYear
+  const showForecast = FORECAST_BACKEND_ENABLED && forecastData != null && isCurrentYear
 
   // ── Sync sales data to backend and fetch forecast ───────────────────────────
   useEffect(() => {
@@ -189,9 +117,12 @@ export default function RendimientoPage() {
       if (sales.length === 0) return
 
       setForecastChartLoading(true)
-      syncSalesData(sales).catch(() => {})
 
       try {
+        const syncResult = await syncSalesData(sales)
+        if (!syncResult.success) {
+          return
+        }
         const metricType = metric === 'venta_neta' ? 'revenue' : 'units'
         const dimValue = selectedVendor === 'todos' ? 'all' : selectedVendor
 
@@ -202,6 +133,7 @@ export default function RendimientoPage() {
             year: result.year,
             metric: result.metric as 'units' | 'revenue',
             seller: result.seller,
+            model_used: result.model_used,
             kpis: {
               ytd: result.kpis.ytd,
               ytd_prior_year: result.kpis.ytd_prior_year,
@@ -214,7 +146,6 @@ export default function RendimientoPage() {
           setForecastData(forecastPayload)
         }
       } catch (err) {
-        console.error('Error loading forecast:', err)
       } finally {
         setForecastChartLoading(false)
       }
@@ -224,13 +155,47 @@ export default function RendimientoPage() {
   }, [sales, currentYear, selectedVendor, metric])
 
   // ── Pivot state ──────────────────────────────────────────────────────────
-  const [pivotDims, setPivotDims] = useState<DimKey[]>(['mes'])
+  const [pivotDims, setPivotDims] = useState<DimKey[]>(() => {
+    try {
+      const stored = localStorage.getItem('sf_pivot_dims')
+      if (stored) {
+        const parsed = JSON.parse(stored) as DimKey[]
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed
+      }
+    } catch { /* ignore */ }
+    return ['mes']
+  })
   const [pivotCols, setPivotCols] = useState<PivotCols>({
     unidades: true, venta_neta: true, meta: true, variacion: true, pct_total: false,
   })
   const [showSubtotals, setShowSubtotals] = useState(true)
   const [pivotConfigOpen, setPivotConfigOpen] = useState(false)
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
+  const [sortCol, setSortCol] = useState<'unidades' | 'venta_neta' | null>(null)
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const [addDimOpen, setAddDimOpen] = useState(false)
+  const addDimRef = useRef<HTMLDivElement>(null)
+  const [pivotData, setPivotData] = useState<PivotNode[]>([])
+  const [pivotLoading, setPivotLoading] = useState(false)
+  const workerRef = useRef<Worker | null>(null)
+  const dimsChangedRef = useRef(true)
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
+
+  // Close + Agregar popover on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (addDimRef.current && !addDimRef.current.contains(e.target as Node)) {
+        setAddDimOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  // Persist dims to localStorage
+  useEffect(() => {
+    localStorage.setItem('sf_pivot_dims', JSON.stringify(pivotDims))
+  }, [pivotDims])
 
   useEffect(() => {
     if (sales.length === 0) navigate('/cargar', { replace: true })
@@ -281,29 +246,52 @@ export default function RendimientoPage() {
     })
   }, [sales, selectedYear, selectedVendor, selectedCliente, selectedCanal, selectedProducto])
 
-  // ── Chart data ────────────────────────────────────────────────────────────
+  const [chartFilter, setChartFilter] = useState<{ dim: DimKey; value: string } | null>(null)
+
+  const filteredForChart = useMemo(() => {
+    if (!chartFilter) return filteredSales
+    const { dim, value } = chartFilter
+    if (dim === 'mes') {
+      const month = parseInt(value.split('-')[1] ?? '0')
+      return filteredSales.filter(s => new Date(s.fecha).getMonth() + 1 === month)
+    }
+    return filteredSales.filter(s => (s as Record<string, unknown>)[dim] === value)
+  }, [filteredSales, chartFilter])
+
+  // ── Chart data (Ene-Dic only) ───────────────────────────────────────────
   const chartData = useMemo(() => {
     const chartPrev = selectedYear - 1
+
     return MESES.map((label, monthIdx) => {
-      const currSales = salesInPeriod(filteredSales, selectedYear, monthIdx)
+      const currSales = salesInPeriod(filteredForChart, selectedYear, monthIdx)
       const currVal = useVentaNeta ? currSales.reduce((a, s) => a + (s.venta_neta ?? 0), 0) : currSales.reduce((a, s) => a + s.unidades, 0)
 
-      const prevSales = salesInPeriod(filteredSales, chartPrev, monthIdx)
+      const prevSales = salesInPeriod(filteredForChart, chartPrev, monthIdx)
       const prevVal = useVentaNeta ? prevSales.reduce((a, s) => a + (s.venta_neta ?? 0), 0) : prevSales.reduce((a, s) => a + s.unidades, 0)
 
       let budget: number | null = null
       if (dataAvailability.has_metas && showBudget) {
-        const key = `${selectedYear}-${String(monthIdx + 1).padStart(2, '0')}`
-        const vm = selectedVendor === 'todos' ? metas.filter((m) => m.mes_periodo === key) : metas.filter((m) => m.mes_periodo === key && m.vendedor === selectedVendor)
+        const vm = selectedVendor === 'todos'
+          ? metas.filter((m) => m.anio === selectedYear && m.mes === monthIdx + 1)
+          : metas.filter((m) => m.anio === selectedYear && m.mes === monthIdx + 1 && m.vendedor === selectedVendor)
         budget = vm.reduce((a, m) => a + m.meta, 0) || null
       }
 
-      // Forecast line deshabilitado — showForecast siempre false
-      const forecast: number | null = null
+      // Forecast from backend — only for future months
+      let forecast: number | null = null
+      let forecastUpper: number | null = null
+      if (forecastData?.series?.forecast && isCurrentYear && monthIdx > currentMonth) {
+        const fp = forecastData.series.forecast.find(p => p.month === monthIdx + 1)
+        if (fp?.value != null) forecast = fp.value
+      }
+      // Connect forecast to last actual month
+      if (forecastData?.series?.forecast && isCurrentYear && monthIdx === currentMonth) {
+        forecast = currVal > 0 ? currVal : null
+      }
 
-      return { mes: label, actual: currVal > 0 || monthIdx <= currentMonth ? currVal : null, anterior: prevVal > 0 ? prevVal : null, forecast, budget, isCurrent: monthIdx === currentMonth && isCurrentYear, isFuture: isCurrentYear && monthIdx > currentMonth }
+      return { mes: label, actual: currVal > 0 || monthIdx <= currentMonth ? currVal : null, anterior: prevVal > 0 ? prevVal : null, forecast, forecastUpper, budget, isCurrent: monthIdx === currentMonth && isCurrentYear, isFuture: isCurrentYear && monthIdx > currentMonth }
     })
-  }, [filteredSales, metas, selectedYear, currentMonth, useVentaNeta, showBudget, isCurrentYear, dataAvailability.has_metas, selectedVendor])
+  }, [filteredForChart, metas, selectedYear, currentMonth, useVentaNeta, showBudget, isCurrentYear, dataAvailability.has_metas, selectedVendor, forecastData])
 
   const hasPrevYearData = chartData.some((d) => d.anterior !== null && d.anterior > 0)
 
@@ -326,51 +314,82 @@ export default function RendimientoPage() {
     const chartPrev = selectedYear - 1
     let ytdCurr = 0, ytdPrev = 0
     for (let m = 0; m <= currentMonth; m++) {
-      const cs = salesInPeriod(filteredSales, selectedYear, m)
-      const ps = salesInPeriod(filteredSales, chartPrev, m)
+      const cs = salesInPeriod(filteredForChart, selectedYear, m)
+      const ps = salesInPeriod(filteredForChart, chartPrev, m)
       ytdCurr += useVentaNeta ? cs.reduce((a, s) => a + (s.venta_neta ?? 0), 0) : cs.reduce((a, s) => a + s.unidades, 0)
       ytdPrev += useVentaNeta ? ps.reduce((a, s) => a + (s.venta_neta ?? 0), 0) : ps.reduce((a, s) => a + s.unidades, 0)
     }
     const variacion = ytdPrev > 0 ? ((ytdCurr - ytdPrev) / ytdPrev) * 100 : null
     let bestMonth = -1, bestVal = -1
     for (let m = 0; m <= currentMonth; m++) {
-      const cs = salesInPeriod(filteredSales, selectedYear, m)
+      const cs = salesInPeriod(filteredForChart, selectedYear, m)
       const val = useVentaNeta ? cs.reduce((a, s) => a + (s.venta_neta ?? 0), 0) : cs.reduce((a, s) => a + s.unidades, 0)
       if (val > bestVal) { bestVal = val; bestMonth = m }
     }
     let projected = ytdCurr
     if (isCurrentYear) {
       const ytdPrevSum = Array.from({ length: currentMonth + 1 }, (_, i) => {
-        const s = salesInPeriod(filteredSales, chartPrev, i)
+        const s = salesInPeriod(filteredForChart, chartPrev, i)
         return useVentaNeta ? s.reduce((a, v) => a + (v.venta_neta ?? 0), 0) : s.reduce((a, v) => a + v.unidades, 0)
       }).reduce((a, b) => a + b, 0)
       const gf = ytdPrevSum > 0 ? ytdCurr / ytdPrevSum : 1
       for (let m = currentMonth + 1; m < 12; m++) {
-        const ps = salesInPeriod(filteredSales, chartPrev, m)
+        const ps = salesInPeriod(filteredForChart, chartPrev, m)
         const pv = useVentaNeta ? ps.reduce((a, s) => a + (s.venta_neta ?? 0), 0) : ps.reduce((a, s) => a + s.unidades, 0)
         projected += Math.round(pv * gf)
       }
     }
     return { ytdCurr, ytdPrev, variacion, bestMonth, bestVal, projected }
-  }, [filteredSales, selectedYear, currentMonth, useVentaNeta, isCurrentYear, forecastData])
+  }, [filteredForChart, selectedYear, currentMonth, useVentaNeta, isCurrentYear, forecastData])
 
-  // ── Pivot computation ─────────────────────────────────────────────────────
-  const pivotTree = useMemo(() => {
-    const chartPrev = selectedYear - 1
-    const currSales = filteredSales.filter((s) => new Date(s.fecha).getFullYear() === selectedYear)
-    const prevSales = filteredSales.filter((s) => new Date(s.fecha).getFullYear() === chartPrev)
-    return buildPivotTree(currSales, prevSales, metas, pivotDims, selectedYear, 'root', 0, null, null)
+  // ── Pivot computation via Web Worker ──────────────────────────────────────
+  // Mark dims as changed so the worker's onmessage auto-expands on structural change
+  useEffect(() => { dimsChangedRef.current = true }, [pivotDims])
+
+  useEffect(() => {
+    workerRef.current?.terminate()
+    workerRef.current = new Worker(
+      new URL('../workers/pivotWorker.ts', import.meta.url),
+      { type: 'module' }
+    )
+    setPivotLoading(true)
+    workerRef.current.onmessage = (e: MessageEvent<PivotNode[]>) => {
+      const data = e.data
+      setPivotData(data)
+      // Auto-expand depth 0 and 1 only when dims changed (not on data-only change)
+      if (dimsChangedRef.current) {
+        dimsChangedRef.current = false
+        const keysToExpand = new Set<string>()
+        data.forEach((n) => {
+          keysToExpand.add(n.id)
+          n.children.forEach((c) => keysToExpand.add(c.id))
+        })
+        setExpandedKeys(keysToExpand)
+      }
+      setPivotLoading(false)
+    }
+    workerRef.current.postMessage({ filteredSales, metas, pivotDims, selectedYear })
+    return () => workerRef.current?.terminate()
   }, [filteredSales, metas, pivotDims, selectedYear])
 
   const grandTotal = useMemo(() =>
-    pivotTree.reduce((a, n) => ({ u: a.u + n.unidades, v: a.v + n.ventaNeta }), { u: 0, v: 0 }),
-  [pivotTree])
+    pivotData.reduce((a, n) => ({ u: a.u + n.unidades, v: a.v + n.ventaNeta, pu: a.pu + n.prevUnidades, pv: a.pv + n.prevVentaNeta }), { u: 0, v: 0, pu: 0, pv: 0 }),
+  [pivotData])
+
+  const sortedPivotTree = useMemo(() => {
+    if (!sortCol) return pivotData
+    return [...pivotData].sort((a, b) => {
+      const av = sortCol === 'venta_neta' ? a.ventaNeta : a.unidades
+      const bv = sortCol === 'venta_neta' ? b.ventaNeta : b.unidades
+      return sortDir === 'desc' ? bv - av : av - bv
+    })
+  }, [pivotData, sortCol, sortDir])
 
   const flatRows = useMemo(() => {
     const out: (PivotNode & { hasChildren: boolean })[] = []
-    flattenPivot(pivotTree, expandedKeys, out)
+    flattenPivot(sortedPivotTree, expandedKeys, out)
     return out
-  }, [pivotTree, expandedKeys])
+  }, [sortedPivotTree, expandedKeys])
 
   const toggleExpand = (id: string) => {
     setExpandedKeys((prev) => {
@@ -403,6 +422,24 @@ export default function RendimientoPage() {
     )
   }
 
+  const removeDim = (key: DimKey) => {
+    setPivotDims((prev) => prev.length > 1 ? prev.filter((d) => d !== key) : prev)
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event
+    if (over && active.id !== over.id) {
+      const oldIndex = pivotDims.indexOf(active.id as DimKey)
+      const newIndex = pivotDims.indexOf(over.id as DimKey)
+      setPivotDims(arrayMove(pivotDims, oldIndex, newIndex))
+    }
+  }
+
+  const handleSortCol = (col: 'unidades' | 'venta_neta') => {
+    if (sortCol === col) setSortDir((d) => d === 'desc' ? 'asc' : 'desc')
+    else { setSortCol(col); setSortDir('desc') }
+  }
+
   // Column header count
   const colCount = [
     pivotCols.unidades,
@@ -416,12 +453,12 @@ export default function RendimientoPage() {
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (!active || !payload?.length) return null
     return (
-      <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-3 shadow-2xl text-xs space-y-1.5 min-w-[160px]">
-        <p className="font-bold text-zinc-200 mb-2">{label}</p>
+      <div style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderRadius: '8px', padding: '10px 14px', fontSize: '12px', color: 'var(--sf-t1)', minWidth: '160px', boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
+        <p style={{ fontWeight: 600, marginBottom: '8px', color: 'var(--sf-t1)' }}>{label}</p>
         {payload.map((p: any) => (
           <div key={p.name} className="flex justify-between gap-4">
             <span style={{ color: p.color }}>{p.name}</span>
-            <span className="font-bold text-zinc-200">{useVentaNeta ? formatCurrency(p.value, configuracion.moneda) : p.value?.toLocaleString()}</span>
+            <span style={{ fontFamily: "'DM Mono', monospace", fontWeight: 500, color: 'var(--sf-t1)' }}>{useVentaNeta ? formatCurrency(p.value, configuracion.moneda) : p.value?.toLocaleString()}</span>
           </div>
         ))}
       </div>
@@ -429,13 +466,13 @@ export default function RendimientoPage() {
   }
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6 pb-20 animate-in fade-in duration-700">
+    <div className="max-w-5xl mx-auto space-y-6 pb-20 animate-in fade-in duration-700" style={{ color: 'var(--sf-t1)' }}>
 
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-3xl font-bold text-zinc-50 tracking-tight">Rendimiento Anual</h1>
-          <p className="text-zinc-500 mt-1">
+          <h1 className="text-3xl font-bold tracking-tight" style={{ color: 'var(--sf-t1)' }}>Rendimiento Anual</h1>
+          <p className="mt-1" style={{ color: 'var(--sf-t5)' }}>
             {[
               selectedVendor !== 'todos' ? selectedVendor : 'Todos los vendedores',
               selectedCliente !== 'all' ? selectedCliente : null,
@@ -445,8 +482,8 @@ export default function RendimientoPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Calendar className="w-4 h-4 text-zinc-600" />
-          <span className="text-sm font-medium text-zinc-400">{selectedYear} vs {selectedYear - 1}</span>
+          <Calendar className="w-4 h-4" style={{ color: 'var(--sf-t5)' }} />
+          <span className="text-sm font-medium" style={{ color: 'var(--sf-t5)' }}>{selectedYear} vs {selectedYear - 1}</span>
         </div>
       </div>
 
@@ -454,45 +491,44 @@ export default function RendimientoPage() {
       <div className="flex flex-wrap gap-3 items-center justify-between">
         <div className="flex flex-wrap gap-2">
           {/* Año */}
-          <select value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} className="px-3 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-sm text-zinc-200 focus:outline-none focus:border-[#00B894]/50">
+          <select value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '8px', color: 'var(--sf-t1)', fontSize: '13px', height: '36px', padding: '0 12px', outline: 'none' }}>
             {años.map((a) => <option key={a} value={a}>{a}</option>)}
           </select>
           {/* Vendedor */}
-          <select value={selectedVendor} onChange={(e) => setSelectedVendor(e.target.value)} className="px-3 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-sm text-zinc-200 focus:outline-none focus:border-[#00B894]/50">
+          <select value={selectedVendor} onChange={(e) => setSelectedVendor(e.target.value)} style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '8px', color: 'var(--sf-t1)', fontSize: '13px', height: '36px', padding: '0 12px', outline: 'none' }}>
             {vendors.map((v) => <option key={v} value={v}>{v === 'todos' ? 'Todos los vendedores' : v}</option>)}
           </select>
           {/* Cliente */}
           {dataAvailability.has_cliente && (
-            <select value={selectedCliente} onChange={(e) => setSelectedCliente(e.target.value)} className="px-3 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-sm text-zinc-200 focus:outline-none focus:border-[#00B894]/50">
+            <select value={selectedCliente} onChange={(e) => setSelectedCliente(e.target.value)} style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '8px', color: 'var(--sf-t1)', fontSize: '13px', height: '36px', padding: '0 12px', outline: 'none' }}>
               <option value="all">Todos los clientes</option>
               {clientes.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           )}
           {/* Canal */}
           {dataAvailability.has_canal && (
-            <select value={selectedCanal} onChange={(e) => setSelectedCanal(e.target.value)} className="px-3 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-sm text-zinc-200 focus:outline-none focus:border-[#00B894]/50">
+            <select value={selectedCanal} onChange={(e) => setSelectedCanal(e.target.value)} style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '8px', color: 'var(--sf-t1)', fontSize: '13px', height: '36px', padding: '0 12px', outline: 'none' }}>
               <option value="all">Todos los canales</option>
               {canales.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           )}
           {/* Producto */}
           {dataAvailability.has_producto && (
-            <select value={selectedProducto} onChange={(e) => setSelectedProducto(e.target.value)} className="px-3 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-sm text-zinc-200 focus:outline-none focus:border-[#00B894]/50">
+            <select value={selectedProducto} onChange={(e) => setSelectedProducto(e.target.value)} style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '8px', color: 'var(--sf-t1)', fontSize: '13px', height: '36px', padding: '0 12px', outline: 'none' }}>
               <option value="all">Todos los productos</option>
               {productos.map((p) => <option key={p} value={p}>{p}</option>)}
             </select>
           )}
         </div>
         <div className="flex items-center gap-2">
-          <div className="flex bg-zinc-900 border border-zinc-800 rounded-lg p-1">
-            <button onClick={() => setMetric('unidades')} className={cn('px-3 py-1.5 rounded text-xs font-bold transition-all', metric === 'unidades' ? 'bg-[#00B894] text-black' : 'text-zinc-500 hover:text-zinc-300')}>Unidades</button>
+          <div className="flex p-1 rounded-lg" style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)' }}>
+            <button onClick={() => setMetric('unidades')} className="px-3 py-1.5 rounded text-xs font-bold transition-all" style={metric === 'unidades' ? { background: '#00D68F', color: 'var(--sf-page)' } : { color: 'var(--sf-t5)' }}>Unidades</button>
             {dataAvailability.has_venta_neta && (
-              <button onClick={() => setMetric('venta_neta')} className={cn('px-3 py-1.5 rounded text-xs font-bold transition-all', metric === 'venta_neta' ? 'bg-[#00B894] text-black' : 'text-zinc-500 hover:text-zinc-300')}>Facturación</button>
+              <button onClick={() => setMetric('venta_neta')} className="px-3 py-1.5 rounded text-xs font-bold transition-all" style={metric === 'venta_neta' ? { background: '#00D68F', color: 'var(--sf-page)' } : { color: 'var(--sf-t5)' }}>Facturación</button>
             )}
           </div>
-          {/* Proyección oculta — TODO: reactivar cuando el forecast esté optimizado */}
           {dataAvailability.has_metas && (
-            <button onClick={() => setShowBudget(!showBudget)} className={cn('px-3 py-2 rounded-lg text-xs font-bold border transition-all', showBudget ? 'bg-blue-500/10 border-blue-500/30 text-blue-400' : 'bg-zinc-900 border-zinc-800 text-zinc-500')}>Meta</button>
+            <button onClick={() => setShowBudget(!showBudget)} className="px-3 py-2 rounded-lg text-xs font-bold transition-all" style={showBudget ? { background: '#FFB80018', border: '1px solid #FFB80040', color: 'var(--sf-amber)' } : { background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', color: 'var(--sf-t5)' }}>Meta</button>
           )}
         </div>
       </div>
@@ -501,38 +537,47 @@ export default function RendimientoPage() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {forecastChartLoading ? (
           <div className="col-span-4 flex items-center justify-center py-8">
-            <Loader2 className="w-6 h-6 animate-spin text-[#00B894]" />
-            <span className="ml-2 text-zinc-500 text-sm">Cargando proyección...</span>
+            <Loader2 className="w-6 h-6 animate-spin" style={{ color: 'var(--sf-green)' }} />
+            <span className="ml-2 text-sm" style={{ color: 'var(--sf-t5)' }}>Cargando proyección...</span>
           </div>
         ) : (
           <>
-            <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-4">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-600 mb-1">YTD {selectedYear}</p>
-              <p className="text-2xl font-black text-zinc-50">{useVentaNeta ? formatCurrency(ytdStats.ytdCurr, configuracion.moneda) : formatUnits(ytdStats.ytdCurr)}</p>
-              <p className="text-[10px] text-zinc-600 mt-1">Acumulado {MESES[0]}–{MESES[currentMonth]}</p>
+            <div style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderTop: '3px solid var(--sf-border)', borderRadius: '12px', padding: '20px' }}>
+              <p style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--sf-t5)', marginBottom: '4px' }}>YTD {selectedYear}</p>
+              <p style={{ fontFamily: "'DM Mono', monospace", fontSize: '28px', fontWeight: 500, color: 'var(--sf-t1)' }}>{useVentaNeta ? formatCurrency(ytdStats.ytdCurr, configuracion.moneda) : formatUnits(ytdStats.ytdCurr)}</p>
+              <p style={{ fontSize: '12px', color: 'var(--sf-t5)', marginTop: '4px' }}>Acumulado {MESES[0]}–{MESES[currentMonth]}</p>
             </div>
-            <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-4">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-600 mb-1">vs {selectedYear - 1}</p>
+            <div style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderTop: `3px solid ${ytdStats.variacion == null ? 'var(--sf-border)' : ytdStats.variacion >= 0 ? 'var(--sf-green)' : 'var(--sf-red)'}`, borderRadius: '12px', padding: '20px' }}>
+              <p style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--sf-t5)', marginBottom: '4px' }}>vs {selectedYear - 1}</p>
               {ytdStats.variacion !== null ? (
                 <div className="flex items-center gap-2">
-                  {ytdStats.variacion >= 0 ? <TrendingUp className="w-5 h-5 text-[#00B894]" /> : <TrendingDown className="w-5 h-5 text-red-400" />}
-                  <p className={cn('text-2xl font-black', ytdStats.variacion >= 0 ? 'text-[#00B894]' : 'text-red-400')}>{ytdStats.variacion >= 0 ? '+' : ''}{ytdStats.variacion.toFixed(1)}%</p>
+                  {ytdStats.variacion >= 0 ? <TrendingUp className="w-5 h-5" style={{ color: 'var(--sf-green)' }} /> : <TrendingDown className="w-5 h-5" style={{ color: 'var(--sf-red)' }} />}
+                  <p style={{ fontFamily: "'DM Mono', monospace", fontSize: '28px', fontWeight: 500, color: ytdStats.variacion >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>{ytdStats.variacion >= 0 ? '+' : ''}{ytdStats.variacion.toFixed(1)}%</p>
                 </div>
               ) : (
-                <div className="flex items-center gap-2"><Minus className="w-5 h-5 text-zinc-600" /><p className="text-2xl font-black text-zinc-600">—</p></div>
+                <div className="flex items-center gap-2"><Minus className="w-5 h-5" style={{ color: 'var(--sf-t5)' }} /><p style={{ fontFamily: "'DM Mono', monospace", fontSize: '28px', fontWeight: 500, color: 'var(--sf-t5)' }}>—</p></div>
               )}
-              <p className="text-[10px] text-zinc-600 mt-1">{useVentaNeta ? formatCurrency(ytdStats.ytdPrev, configuracion.moneda) : formatUnits(ytdStats.ytdPrev)} año ant.</p>
+              <p style={{ fontSize: '12px', color: 'var(--sf-t5)', marginTop: '4px' }}>{useVentaNeta ? formatCurrency(ytdStats.ytdPrev, configuracion.moneda) : formatUnits(ytdStats.ytdPrev)} año ant.</p>
             </div>
-            <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-4">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-600 mb-1">Mejor Mes</p>
-              <p className="text-2xl font-black text-zinc-50">{ytdStats.bestMonth >= 0 ? MESES[ytdStats.bestMonth] : '—'}</p>
-              <p className="text-[10px] text-zinc-600 mt-1">{ytdStats.bestVal > 0 ? (useVentaNeta ? formatCurrency(ytdStats.bestVal, configuracion.moneda) : formatUnits(ytdStats.bestVal)) : '—'}</p>
+            <div style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderTop: '3px solid var(--sf-border)', borderRadius: '12px', padding: '20px' }}>
+              <p style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--sf-t5)', marginBottom: '4px' }}>Mejor Mes</p>
+              <p style={{ fontFamily: "'DM Mono', monospace", fontSize: '28px', fontWeight: 500, color: 'var(--sf-t1)' }}>{ytdStats.bestMonth >= 0 ? MESES[ytdStats.bestMonth] : '—'}</p>
+              <p style={{ fontSize: '12px', color: 'var(--sf-t5)', marginTop: '4px' }}>{ytdStats.bestVal > 0 ? (useVentaNeta ? formatCurrency(ytdStats.bestVal, configuracion.moneda) : formatUnits(ytdStats.bestVal)) : '—'}</p>
             </div>
             {isCurrentYear && (
-              <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-4">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-600 mb-1">Proyección Año</p>
-                <p className="text-2xl font-black text-[#00B894]">{useVentaNeta ? formatCurrency(ytdStats.projected, configuracion.moneda) : formatUnits(ytdStats.projected)}</p>
-                <p className="text-[10px] text-zinc-600 mt-1">Cierre estimado {selectedYear}</p>
+              <div style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderTop: '3px solid #00D68F', borderRadius: '12px', padding: '20px' }}>
+                <p style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--sf-t5)', marginBottom: '4px' }}>Proyección Año</p>
+                <p style={{ fontFamily: "'DM Mono', monospace", fontSize: '28px', fontWeight: 500, color: 'var(--sf-green)' }}>{useVentaNeta ? formatCurrency(ytdStats.projected, configuracion.moneda) : formatUnits(ytdStats.projected)}</p>
+                <p style={{ fontSize: '12px', color: 'var(--sf-t5)', marginTop: '4px' }}>Cierre estimado {selectedYear}</p>
+                {forecastData?.model_used ? (
+                  <span className="mt-1 inline-block text-[10px] font-mono px-2 py-0.5 rounded" style={{ color: 'var(--sf-green)', background: 'rgba(0,214,143,0.08)' }}>
+                    {forecastData.model_used}
+                  </span>
+                ) : isCurrentYear && sales.length >= 90 ? null : (
+                  <span className="mt-1 inline-block text-[10px] italic" style={{ color: 'var(--sf-t5)' }} title="Sube más historial para activar modelo ML">
+                    Extrapolación lineal
+                  </span>
+                )}
               </div>
             )}
           </>
@@ -540,179 +585,261 @@ export default function RendimientoPage() {
       </div>
 
       {/* Main chart */}
-      <div className="bg-zinc-900/40 border border-zinc-800 rounded-2xl p-6">
-        <p className="text-xs font-bold uppercase tracking-widest text-zinc-600 mb-6">Evolución mensual — {useVentaNeta ? 'Facturación' : 'Unidades vendidas'}</p>
+      <div className="relative" style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '12px', padding: '20px' }}>
+        <p style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--sf-t5)', marginBottom: chartFilter ? '12px' : '24px' }}>Evolución mensual — {useVentaNeta ? 'Facturación' : 'Unidades vendidas'}</p>
+        {chartFilter && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px', fontSize: '12px', color: '#1D9E75' }}>
+            <span>Filtrando por: <strong>{chartFilter.value}</strong></span>
+            <button onClick={() => setChartFilter(null)} style={{ opacity: 0.5, fontSize: '11px', background: 'none', border: 'none', cursor: 'pointer', color: '#1D9E75' }}>✕ Limpiar</button>
+          </div>
+        )}
         <ResponsiveContainer width="100%" height={360}>
-          <LineChart data={chartData} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
-            <XAxis dataKey="mes" tick={{ fill: '#71717a', fontSize: 11 }} axisLine={false} tickLine={false} />
-            <YAxis tick={{ fill: '#71717a', fontSize: 11 }} axisLine={false} tickLine={false} width={60} tickFormatter={(v) => useVentaNeta ? formatCurrency(v, '') : formatUnits(v)} />
+          <ComposedChart data={chartData} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+            <CartesianGrid strokeDasharray="2 4" stroke="var(--sf-border)" vertical={false} />
+            <XAxis dataKey="mes" tick={{ fill: 'var(--sf-t5)', fontSize: 11, fontFamily: 'inherit' }} axisLine={false} tickLine={false} />
+            <YAxis tick={{ fill: 'var(--sf-t5)', fontSize: 11, fontFamily: "'DM Mono', monospace" }} axisLine={false} tickLine={false} width={60} tickFormatter={(v) => useVentaNeta ? formatCurrency(v, '') : formatUnits(v)} />
             <Tooltip content={<CustomTooltip />} />
-            <Legend wrapperStyle={{ paddingTop: '20px', fontSize: '11px', color: '#71717a' }} />
-            {isCurrentYear && <ReferenceLine x={MESES[currentMonth]} stroke="#3f3f46" strokeDasharray="4 4" label={{ value: 'Hoy', fill: '#52525b', fontSize: 10, position: 'top' }} />}
-            <Line type="monotone" dataKey="anterior" name={hasPrevYearData ? String(selectedYear - 1) : `${selectedYear - 1} — sin datos`} stroke={hasPrevYearData ? '#52525b' : '#27272a'} strokeWidth={hasPrevYearData ? 2 : 1} strokeDasharray={hasPrevYearData ? undefined : '3 3'} opacity={hasPrevYearData ? 1 : 0.3} dot={false} connectNulls />
-            <Line type="monotone" dataKey="actual" name={String(selectedYear)} stroke="#00B894" strokeWidth={3} dot={(props: any) => { const { cx, cy, payload } = props; if (!payload.isCurrent) return <g key={`dot-${cx}`} />; return <circle key={`dot-${cx}`} cx={cx} cy={cy} r={5} fill="#00B894" stroke="#000" strokeWidth={2} /> }} connectNulls />
-            {showForecast && isCurrentYear && <Line type="monotone" dataKey="forecast" name="Proyección" stroke="#00B894" strokeWidth={2} strokeDasharray="6 4" dot={false} connectNulls />}
-            {showBudget && dataAvailability.has_metas && <Line type="monotone" dataKey="budget" name="Meta" stroke="#3B82F6" strokeWidth={2} strokeDasharray="4 4" dot={false} connectNulls />}
-          </LineChart>
+            {isCurrentYear && <ReferenceLine x={MESES[currentMonth]} stroke="var(--sf-border)" strokeDasharray="4 4" label={{ value: 'Hoy', fill: 'var(--sf-t5)', fontSize: 10, position: 'top' }} />}
+            {showForecast && <Area type="monotone" dataKey="forecast" stroke="none" fill="#00D68F" fillOpacity={0.06} connectNulls={false} legendType="none" />}
+            <Line type="monotone" dataKey="anterior" name={hasPrevYearData ? String(selectedYear - 1) : `${selectedYear - 1} — sin datos`} stroke={hasPrevYearData ? 'var(--sf-t5)' : 'var(--sf-border)'} strokeWidth={hasPrevYearData ? 1.5 : 1} strokeDasharray="4 4" opacity={hasPrevYearData ? 1 : 0.3} dot={false} connectNulls />
+            <Line type="monotone" dataKey="actual" name={String(selectedYear)} stroke="#00D68F" strokeWidth={2} dot={(props: any) => { const { cx, cy, payload } = props; if (!payload.isCurrent) return <g key={`dot-${cx}`} />; return <circle key={`dot-${cx}`} cx={cx} cy={cy} r={5} fill="#00D68F" stroke="var(--sf-page)" strokeWidth={2} /> }} connectNulls />
+            {showForecast && <Line type="monotone" dataKey="forecast" name="Proyección" stroke="#00D68F" strokeWidth={2} strokeDasharray="8 6" strokeOpacity={0.6} dot={{ r: 3, fill: '#00D68F', fillOpacity: 0.4, stroke: 'none' }} connectNulls={false} />}
+            {showBudget && dataAvailability.has_metas && <Line type="monotone" dataKey="budget" name="Meta" stroke="#FFB800" strokeWidth={1.5} strokeDasharray="4 4" dot={false} connectNulls />}
+          </ComposedChart>
         </ResponsiveContainer>
-      </div>
 
-      {/* ── PIVOT TABLE ─────────────────────────────────────────────────────── */}
-      <div className="bg-zinc-900/40 border border-zinc-800 rounded-2xl overflow-hidden">
-
-        {/* Pivot header */}
-        <div className="px-6 py-4 border-b border-zinc-800 flex items-center justify-between gap-3">
-          <p className="text-xs font-bold uppercase tracking-widest text-zinc-600">Tabla Pivot</p>
-          <button
-            onClick={() => setPivotConfigOpen(!pivotConfigOpen)}
-            className={cn('flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all', pivotConfigOpen ? 'bg-[#00B894]/10 border-[#00B894]/30 text-[#00B894]' : 'bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-zinc-200')}
-          >
-            <Settings2 className="w-3.5 h-3.5" />
-            Configurar
-          </button>
+        {/* Custom legend */}
+        <div className="flex items-center justify-center gap-6 mt-4 text-xs" style={{ color: 'var(--sf-t5)' }}>
+          <span className="flex items-center gap-2">
+            <span className="w-5" style={{ borderTop: '2px dashed var(--sf-t5)' }} />
+            {selectedYear - 1}
+          </span>
+          <span className="flex items-center gap-2">
+            <span className="w-5 h-0.5 rounded" style={{ background: '#00D68F' }} />
+            {selectedYear}
+          </span>
+          {showForecast && (
+            <span className="flex items-center gap-2">
+              <span className="w-5 h-0.5 rounded opacity-50" style={{ borderTop: '2px dashed #00D68F' }} />
+              Proyección
+            </span>
+          )}
+          {showBudget && dataAvailability.has_metas && (
+            <span className="flex items-center gap-2">
+              <span className="w-5" style={{ borderTop: '2px dashed #FFB800' }} />
+              Meta
+            </span>
+          )}
         </div>
 
-        {/* Config panel */}
-        {pivotConfigOpen && (
-          <div className="px-6 py-5 border-b border-zinc-800 space-y-5 bg-zinc-900/30">
-            {/* Dims */}
-            <div className="space-y-2">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-600">Agrupar por (orden)</p>
-              <div className="flex flex-wrap gap-2">
-                {availableDims.map(({ key, label }) => (
-                  <div key={key} className={cn('flex items-center gap-1 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all cursor-pointer', pivotDims.includes(key) ? 'bg-[#00B894]/10 border-[#00B894]/30 text-[#00B894]' : 'bg-zinc-800 border-zinc-700 text-zinc-500')} onClick={() => toggleDim(key)}>
-                    {label}
-                    {pivotDims.includes(key) && (
-                      <>
-                        <button onClick={(e) => { e.stopPropagation(); moveDim(pivotDims.indexOf(key), -1) }} className="hover:text-white ml-1"><ArrowUp className="w-3 h-3" /></button>
-                        <button onClick={(e) => { e.stopPropagation(); moveDim(pivotDims.indexOf(key), 1) }} className="hover:text-white"><ArrowDown className="w-3 h-3" /></button>
-                        <span className="ml-1 text-[10px] opacity-60">{pivotDims.indexOf(key) + 1}</span>
-                      </>
-                    )}
-                  </div>
-                ))}
-              </div>
-              <p className="text-[10px] text-zinc-600">Orden actual: {pivotDims.join(' → ')}</p>
-            </div>
-
-            {/* Cols + subtotals */}
-            <div className="flex flex-wrap gap-4 items-start">
-              <div className="space-y-1">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-600 mb-2">Columnas de valor</p>
-                {[
-                  { key: 'unidades', label: 'Unidades', always: true },
-                  { key: 'venta_neta', label: 'Venta Neta', show: dataAvailability.has_venta_neta },
-                  { key: 'meta', label: 'Meta + Cum%', show: dataAvailability.has_metas },
-                  { key: 'variacion', label: 'Variación %', always: true },
-                  { key: 'pct_total', label: '% del total', always: true },
-                ].filter((c) => c.always || c.show).map(({ key, label }) => (
-                  <label key={key} className="flex items-center gap-2 text-xs text-zinc-400 cursor-pointer">
-                    <input type="checkbox" checked={pivotCols[key as keyof PivotCols]} onChange={(e) => setPivotCols({ ...pivotCols, [key]: e.target.checked })} className="accent-[#00B894]" />
-                    {label}
-                  </label>
-                ))}
-              </div>
-              <div className="space-y-1">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-600 mb-2">Opciones</p>
-                <label className="flex items-center gap-2 text-xs text-zinc-400 cursor-pointer">
-                  <input type="checkbox" checked={showSubtotals} onChange={(e) => setShowSubtotals(e.target.checked)} className="accent-[#00B894]" />
-                  Mostrar subtotales
-                </label>
-              </div>
-            </div>
+        {/* Model badge */}
+        {forecastData?.model_used && showForecast && (
+          <div className="flex items-center gap-2 mt-3">
+            <span className="px-2.5 py-1 rounded-md text-[10px] font-mono font-medium uppercase tracking-wider" style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', color: 'var(--sf-t3)' }}>
+              {forecastData.model_used}
+            </span>
+            <span className="text-[11px]" style={{ color: 'var(--sf-t4)' }}>
+              {forecastData.model_used === 'ENSEMBLE' && 'Blend adaptativo ETS + SARIMA'}
+              {forecastData.model_used === 'SARIMA' && 'Modelo estacional auto-optimizado'}
+              {forecastData.model_used === 'ETS' && 'Suavizamiento exponencial'}
+              {forecastData.model_used === 'NAIVE' && 'Promedio móvil (historial insuficiente)'}
+              {forecastData.model_used === 'SIMPLE' && 'Media móvil simple'}
+            </span>
           </div>
         )}
 
-        {/* Table */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-zinc-800 bg-zinc-900/50">
-                <th className="text-left px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-zinc-600">Dimensión</th>
-                {pivotCols.unidades && <th className="text-right px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-zinc-600">Unidades</th>}
-                {pivotCols.venta_neta && dataAvailability.has_venta_neta && <th className="text-right px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-zinc-600">Venta Neta</th>}
-                {pivotCols.meta && dataAvailability.has_metas && <th className="text-right px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-zinc-600">Meta</th>}
-                {pivotCols.meta && dataAvailability.has_metas && <th className="text-right px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-zinc-600">Cum%</th>}
-                {pivotCols.variacion && <th className="text-right px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-zinc-600">Var% YoY</th>}
-                {pivotCols.pct_total && <th className="text-right px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-zinc-600">% Total</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {flatRows.map((row, idx) => {
-                const varPct = row.prevUnidades > 0 ? ((row.unidades - row.prevUnidades) / row.prevUnidades) * 100 : null
-                const cumPct = row.meta && row.meta > 0 ? (row.unidades / row.meta) * 100 : null
-                const pctTotal = grandTotal.u > 0 ? (row.unidades / grandTotal.u) * 100 : 0
-                const isExpanded = expandedKeys.has(row.id)
-                const indent = row.depth * 20
+        {/* Loading overlay */}
+        {forecastChartLoading && (
+          <div className="absolute inset-0 flex items-center justify-center rounded-xl z-10" style={{ background: 'color-mix(in srgb, var(--sf-card) 80%, transparent)' }}>
+            <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--sf-t3)' }}>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Calculando proyección...
+            </div>
+          </div>
+        )}
+      </div>
 
-                return (
-                  <tr key={row.id} className={cn('border-b border-zinc-800/50 transition-colors', idx % 2 === 0 ? 'hover:bg-zinc-900/50' : 'bg-zinc-900/20 hover:bg-zinc-900/50')}>
-                    <td className="px-4 py-2.5" style={{ paddingLeft: `${16 + indent}px` }}>
-                      <div className="flex items-center gap-1.5">
-                        {row.hasChildren ? (
-                          <button onClick={() => toggleExpand(row.id)} className="w-4 h-4 flex items-center justify-center text-zinc-500 hover:text-zinc-200 shrink-0">
-                            {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                          </button>
-                        ) : (
-                          <span className="w-4 shrink-0" />
-                        )}
-                        <span className={cn('truncate max-w-[200px]', row.depth === 0 ? 'font-bold text-zinc-100' : row.depth === 1 ? 'font-semibold text-zinc-200' : 'text-zinc-400')}>
-                          {row.label}
-                        </span>
-                      </div>
-                    </td>
-                    {pivotCols.unidades && (
-                      <td className="px-4 py-2.5 text-right font-mono text-zinc-300">{formatUnits(row.unidades)}</td>
-                    )}
-                    {pivotCols.venta_neta && dataAvailability.has_venta_neta && (
-                      <td className="px-4 py-2.5 text-right font-mono text-zinc-400">{row.ventaNeta > 0 ? formatCurrency(row.ventaNeta, configuracion.moneda) : '—'}</td>
-                    )}
-                    {pivotCols.meta && dataAvailability.has_metas && (
-                      <td className="px-4 py-2.5 text-right text-zinc-500">{row.meta ? formatUnits(row.meta) : '—'}</td>
-                    )}
-                    {pivotCols.meta && dataAvailability.has_metas && (
-                      <td className={cn('px-4 py-2.5 text-right font-bold', cumPct == null ? 'text-zinc-600' : cumPct >= 100 ? 'text-[#00B894]' : cumPct >= 80 ? 'text-yellow-400' : 'text-red-400')}>
-                        {cumPct != null ? `${cumPct.toFixed(0)}%` : '—'}
-                      </td>
-                    )}
-                    {pivotCols.variacion && (
-                      <td className={cn('px-4 py-2.5 text-right font-bold', varPct == null ? 'text-zinc-600' : varPct >= 0 ? 'text-[#00B894]' : 'text-red-400')}>
-                        {varPct != null ? `${varPct >= 0 ? '+' : ''}${varPct.toFixed(1)}%` : '—'}
-                      </td>
-                    )}
-                    {pivotCols.pct_total && (
-                      <td className="px-5 py-2.5 text-right text-zinc-500">{pctTotal.toFixed(1)}%</td>
-                    )}
-                  </tr>
-                )
-              })}
+      {/* ── PIVOT TABLE ─────────────────────────────────────────────────────── */}
+      <div style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '12px', overflow: 'hidden' }}>
 
-              {/* Subtotals per top-level group when showSubtotals */}
-              {/* Total General */}
-              {flatRows.length > 0 && (
-                <tr className="border-t-2 border-zinc-700 bg-zinc-900/60">
-                  <td className="px-5 py-3 font-black text-zinc-100 text-xs uppercase tracking-wider">Total General</td>
-                  {pivotCols.unidades && <td className="px-4 py-3 text-right font-black text-zinc-100 font-mono">{formatUnits(grandTotal.u)}</td>}
-                  {pivotCols.venta_neta && dataAvailability.has_venta_neta && <td className="px-4 py-3 text-right font-black text-zinc-100 font-mono">{grandTotal.v > 0 ? formatCurrency(grandTotal.v, configuracion.moneda) : '—'}</td>}
-                  {pivotCols.meta && dataAvailability.has_metas && <td className="px-4 py-3 text-right text-zinc-500">—</td>}
-                  {pivotCols.meta && dataAvailability.has_metas && <td className="px-4 py-3 text-right text-zinc-500">—</td>}
-                  {pivotCols.variacion && <td className="px-4 py-3 text-right text-zinc-500">—</td>}
-                  {pivotCols.pct_total && <td className="px-5 py-3 text-right font-bold text-zinc-300">100%</td>}
-                </tr>
-              )}
-              {flatRows.length === 0 && (
-                <tr><td colSpan={1 + colCount} className="px-5 py-8 text-center text-zinc-600 text-xs">Sin datos para los filtros seleccionados.</td></tr>
-              )}
-            </tbody>
-          </table>
+        {/* Pivot header bar */}
+        <div className="px-6 py-4 flex items-center gap-3" style={{ borderBottom: '1px solid var(--sf-border)' }}>
+          <p style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--sf-t5)' }}>Tabla Pivot</p>
         </div>
 
-        {showSubtotals && pivotTree.length > 0 && (
-          <p className="px-5 py-2 text-[10px] text-zinc-700 border-t border-zinc-800">
-            Los totales de cada grupo visible actúan como subtotales. Expande los grupos para ver el detalle.
-          </p>
-        )}
+        {/* Always-visible dimension builder */}
+        <div className="px-6 py-4 space-y-3" style={{ borderBottom: '1px solid var(--sf-border)' }}>
+          {/* Drag pills + + Agregar */}
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd} modifiers={[restrictToHorizontalAxis, restrictToParentElement]}>
+            <SortableContext items={pivotDims} strategy={horizontalListSortingStrategy}>
+              <div className="flex items-center flex-wrap" style={{ gap: '8px' }}>
+                {pivotDims.map((dim, idx) => (
+                  <SortablePill key={dim} dim={dim} index={idx} onRemove={removeDim} />
+                ))}
+
+            {/* + Agregar popover */}
+            <div className="relative" ref={addDimRef} style={{ marginLeft: '4px', flexShrink: 0 }}>
+              <button
+                onClick={() => setAddDimOpen((v) => !v)}
+                disabled={pivotDims.length >= 4}
+                className="flex items-center gap-1 text-xs font-bold transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                style={{ background: 'transparent', border: '1px dashed var(--sf-border)', borderRadius: '6px', padding: '6px 12px', color: 'var(--sf-t5)' }}
+              >
+                + Agregar ▾
+              </button>
+              {addDimOpen && (
+                <div className="absolute left-0 top-full mt-1 z-20 shadow-2xl p-1.5 min-w-[140px]" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderRadius: '12px' }}>
+                  {availableDims
+                    .filter(({ key }) => !pivotDims.includes(key))
+                    .map(({ key, label }) => (
+                      <button
+                        key={key}
+                        onClick={() => { setPivotDims((prev) => [...prev, key]); setAddDimOpen(false) }}
+                        className="w-full text-left px-3 py-2 text-xs rounded-lg transition-colors"
+                        style={{ color: 'var(--sf-t3)' }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  {availableDims.filter(({ key }) => !pivotDims.includes(key)).length === 0 && (
+                    <p className="px-3 py-2 text-[10px]" style={{ color: 'var(--sf-t5)' }}>Todas las dims activas</p>
+                  )}
+                </div>
+              )}
+              </div>
+            </div>
+          </SortableContext>
+          </DndContext>
+        </div>
+
+
+        {/* Table */}
+        {(() => {
+          const pivotGrid = 'minmax(180px, 1fr) 100px 100px 90px 100px 70px'
+          const mono = { fontFamily: "'DM Mono', monospace" } as const
+          const hdrStyle: CSSProperties = { fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--sf-t2)', padding: '12px 16px' }
+          const gtActual  = useVentaNeta ? grandTotal.v  : grandTotal.u
+          const gtPrev    = useVentaNeta ? grandTotal.pv : grandTotal.pu
+          const gtVar     = gtActual - gtPrev
+          const gtVarPct  = gtPrev > 0 ? ((gtActual - gtPrev) / gtPrev) * 100 : null
+          const fmtVal    = (n: number) => useVentaNeta ? formatCurrency(n, configuracion.moneda) : formatUnits(n)
+
+          return (
+            <div className="overflow-x-auto">
+              {/* Header */}
+              <div
+                className="sticky top-0 z-10"
+                style={{ display: 'grid', gridTemplateColumns: pivotGrid, background: 'var(--sf-elevated)', borderBottom: '2px solid var(--sf-border)' }}
+              >
+                <div style={{ ...hdrStyle, borderLeft: '3px solid #1D9E75' }}>Dimensión</div>
+                <div style={{ ...hdrStyle, textAlign: 'right', cursor: 'pointer' }} onClick={() => handleSortCol('unidades')}>
+                  {selectedYear}{' '}<span style={{ opacity: sortCol === 'unidades' ? 1 : 0.4, color: sortCol === 'unidades' ? 'var(--sf-green)' : undefined }}>{sortCol === 'unidades' ? (sortDir === 'desc' ? '↓' : '↑') : '↕'}</span>
+                </div>
+                <div style={{ ...hdrStyle, textAlign: 'right' }}>{selectedYear - 1} YTD</div>
+                <div style={{ ...hdrStyle, textAlign: 'right' }}>Var</div>
+                <div style={{ ...hdrStyle, textAlign: 'right' }}>Var %</div>
+                <div style={{ ...hdrStyle, textAlign: 'right' }}>Peso</div>
+              </div>
+
+              {/* Totals row */}
+              <div style={{ display: 'grid', gridTemplateColumns: pivotGrid, background: 'var(--sf-inset)', borderBottom: '2px solid var(--sf-border)', alignItems: 'center' }}>
+                <div style={{ padding: '14px 16px', fontSize: '15px', fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.04em', color: 'var(--sf-t1)' }}>TOTAL</div>
+                <div style={{ ...mono, textAlign: 'right', padding: '14px 16px', fontSize: '15px', fontWeight: 700, color: 'var(--sf-t1)' }}>{fmtVal(gtActual)}</div>
+                <div style={{ ...mono, textAlign: 'right', padding: '14px 16px', fontSize: '13px', fontWeight: 500, color: 'var(--sf-t3)' }}>{fmtVal(gtPrev)}</div>
+                <div style={{ ...mono, textAlign: 'right', padding: '14px 16px', fontSize: '13px', fontWeight: 700, color: gtVar >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
+                  {gtVar >= 0 ? '+' : ''}{fmtVal(gtVar)}
+                </div>
+                <div style={{ ...mono, textAlign: 'right', padding: '14px 16px', fontSize: '13px', fontWeight: 700, color: gtVarPct == null ? 'var(--sf-t5)' : gtVarPct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
+                  {gtVarPct != null ? `${gtVarPct >= 0 ? '+' : ''}${gtVarPct.toFixed(1)}%` : '—'}
+                </div>
+                <div style={{ ...mono, textAlign: 'right', padding: '14px 16px', fontSize: '12px', color: 'var(--sf-t3)' }}>100%</div>
+              </div>
+
+              {/* Data rows */}
+              {pivotLoading ? (
+                <div style={{ padding: '24px', textAlign: 'center', color: 'var(--sf-t5)', fontSize: '12px' }}>
+                  Calculando...
+                </div>
+              ) : flatRows.length === 0 ? (
+                <div style={{ padding: '32px 16px', textAlign: 'center', fontSize: '12px', color: 'var(--sf-t5)' }}>Sin datos para los filtros seleccionados.</div>
+              ) : flatRows.map((row) => {
+                const actual     = useVentaNeta ? row.ventaNeta   : row.unidades
+                const prev       = useVentaNeta ? row.prevVentaNeta : row.prevUnidades
+                const varAbs     = actual - prev
+                const varPct     = prev > 0 ? ((actual - prev) / prev) * 100 : null
+                const totalVal   = useVentaNeta ? grandTotal.v : grandTotal.u
+                const pctTotal   = totalVal > 0 ? (actual / totalVal) * 100 : 0
+                const isExpanded = expandedKeys.has(row.id)
+                const isRoot     = row.depth === 0
+                const isSelected = isRoot && chartFilter?.value === row.dimVal
+                const depthColors = ['#1D9E75', '#3B8BD4', '#9F77DD', '#E8593C']
+
+                // Hierarchy backgrounds: root = card, children = elevated
+                const rowBg = isSelected
+                  ? 'rgba(29,158,117,0.08)'
+                  : isRoot ? 'var(--sf-card)' : 'var(--sf-elevated)'
+
+                return (
+                  <div
+                    key={row.id}
+                    style={{
+                      display: 'grid', gridTemplateColumns: pivotGrid, alignItems: 'center',
+                      borderBottom: isRoot ? '1px solid var(--sf-border)' : '1px solid var(--sf-border)',
+                      borderLeft: !isRoot ? `2px solid ${depthColors[row.depth] ?? '#1D9E75'}` : undefined,
+                      background: rowBg, transition: 'background 150ms',
+                      cursor: isRoot ? 'pointer' : 'default',
+                    }}
+                    onClick={isRoot ? () => setChartFilter(prev => prev?.value === row.dimVal ? null : { dim: pivotDims[0], value: row.dimVal }) : undefined}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = isSelected ? 'rgba(29,158,117,0.12)' : 'var(--sf-hover)' }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = rowBg }}
+                  >
+                    {/* Label cell */}
+                    {isRoot ? (
+                      <div className="flex items-center overflow-hidden" style={{ padding: '11px 16px' }}>
+                        {row.hasChildren ? (
+                          <span
+                            style={{ width: '18px', height: '18px', borderRadius: '4px', border: '1px solid var(--sf-border)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', color: 'var(--sf-t3)', flexShrink: 0, marginRight: '8px', cursor: 'pointer' }}
+                            onClick={(e) => { e.stopPropagation(); toggleExpand(row.id) }}
+                          >
+                            {isExpanded ? '−' : '+'}
+                          </span>
+                        ) : <span style={{ display: 'inline-block', width: '18px', marginRight: '8px', flexShrink: 0 }} />}
+                        <span className="truncate" style={{ fontSize: '13px', fontWeight: 600, color: 'var(--sf-t1)' }}>{row.label}</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center overflow-hidden" style={{ padding: `9px 16px 9px ${16 + row.depth * 22}px` }}>
+                        <span className="truncate" style={{ fontSize: '12px', color: 'var(--sf-t2)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                          {row.hasChildren && (
+                            <span style={{ fontSize: '8px', color: 'var(--sf-t4)', cursor: 'pointer', flexShrink: 0 }} onClick={(e) => { e.stopPropagation(); toggleExpand(row.id) }}>
+                              {isExpanded ? '▾' : '▸'}
+                            </span>
+                          )}
+                          <span style={{ color: 'var(--sf-t4)', fontSize: '11px' }}>·</span>
+                          {row.label}
+                          {(() => { const d = DIM_META[row.dim]; return d ? <span className={cn('shrink-0 px-1 py-0.5 rounded text-[9px] font-bold border leading-none', d.color)}>{d.badge}</span> : null })()}
+                        </span>
+                      </div>
+                    )}
+                    {/* Actual (current year — primary emphasis) */}
+                    <div style={{ ...mono, textAlign: 'right', paddingRight: 16, fontSize: '13px', fontWeight: isRoot ? 600 : 500, color: 'var(--sf-t1)' }}>{fmtVal(actual)}</div>
+                    {/* Prev YTD (reference — less emphasis) */}
+                    <div style={{ ...mono, textAlign: 'right', paddingRight: 16, fontSize: '13px', color: 'var(--sf-t3)' }}>{prev > 0 ? fmtVal(prev) : '—'}</div>
+                    {/* Var abs */}
+                    <div style={{ ...mono, textAlign: 'right', paddingRight: 16, fontSize: '13px', fontWeight: 500, color: varAbs >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
+                      {prev > 0 ? `${varAbs >= 0 ? '+' : ''}${fmtVal(varAbs)}` : '—'}
+                    </div>
+                    {/* Var % */}
+                    <div style={{ ...mono, textAlign: 'right', paddingRight: 16, fontSize: '13px', fontWeight: 600, color: varPct == null ? 'var(--sf-t5)' : varPct > 0 ? 'var(--sf-green)' : varPct >= -10 ? 'var(--sf-amber)' : 'var(--sf-red)' }}>
+                      {varPct != null ? `${varPct >= 0 ? '+' : ''}${varPct.toFixed(1)}%` : '—'}
+                    </div>
+                    {/* Peso % */}
+                    <div style={{ ...mono, textAlign: 'right', paddingRight: 16, fontSize: '12px', color: 'var(--sf-t3)' }}>{pctTotal.toFixed(1)}%</div>
+                  </div>
+                )
+              })}
+            </div>
+          )
+        })()}
       </div>
     </div>
   )

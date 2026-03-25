@@ -1,0 +1,227 @@
+{
+  "main": {
+    "id": "af41c92122083b60",
+    "type": "split",
+    "children": [
+      {
+        "id": "d33011d2e0bf8776",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "fa9219b5635f9f6b",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "_docs/features/DepartamentosPage.md",
+                "mode": "preview",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "DepartamentosPage"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "01de2f61b5348a98",
+    "type": "split",
+    "children": [
+      {
+        "id": "58728bbf44be77a2",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "0f7ed83372f18ead",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Explorador de archivos"
+            }
+          },
+          {
+            "id": "0bff3c2f6c0062f3",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Buscar"
+            }
+          },
+          {
+            "id": "f9a703892456032f",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Marcadores"
+            }
+          }
+        ],
+        "currentTab": 1
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "cd4bf97acdbd2e74",
+    "type": "split",
+    "children": [
+      {
+        "id": "841acc2f50208e82",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "0ead109c1ecc79ca",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "_docs/Changelog.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Enlaces entrantes de Changelog"
+            }
+          },
+          {
+            "id": "acb4ca59477eaab1",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "_docs/Changelog.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Enlaces salientes de Changelog"
+            }
+          },
+          {
+            "id": "3725189cdab385a8",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Etiquetas"
+            }
+          },
+          {
+            "id": "ef8cd2cc9c67d8c7",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "Todas las propiedades"
+            }
+          },
+          {
+            "id": "43908df6ec916bf3",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "_docs/Changelog.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Esquema de Changelog"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Abrir selector rápido": false,
+      "graph:Abrir vista gráfica": false,
+      "canvas:Crear nuevo lienzo": false,
+      "daily-notes:Abrir la nota de hoy": false,
+      "templates:Insertar plantilla": false,
+      "command-palette:Abrir paleta de comandos": false,
+      "bases:Crear nueva base": false
+    }
+  },
+  "active": "0bff3c2f6c0062f3",
+  "lastOpenFiles": [
+    "src/lib/chatService.ts.tmp.119284.1774367951435",
+    "backend/app/core/__pycache__/supabase_client.cpython-311.pyc",
+    "backend/app/models/__pycache__/sales_forecast_models.cpython-311.pyc",
+    "backend/app/api/routes/__pycache__/sales_forecast.cpython-311.pyc",
+    "backend/app/services/__pycache__/ensemble.cpython-311.pyc",
+    "backend/app/services/__pycache__/arima_model.cpython-311.pyc",
+    "backend/app/services/__pycache__/ets_model.cpython-311.pyc",
+    "backend/app/services/__pycache__/model_selector.cpython-311.pyc",
+    "backend/app/services/__pycache__/feature_engineer.cpython-311.pyc",
+    "backend/app/services/__pycache__/outlier_detector.cpython-311.pyc",
+    "backend/app/services/__pycache__/forecast_engine.cpython-311.pyc",
+    "node_modules/@dnd-kit/modifiers/CHANGELOG.md",
+    "node_modules/@dnd-kit/modifiers/README.md",
+    "node_modules/@dnd-kit/utilities/CHANGELOG.md",
+    "node_modules/@dnd-kit/utilities/README.md",
+    "node_modules/@dnd-kit/sortable/CHANGELOG.md",
+    "node_modules/@dnd-kit/sortable/README.md",
+    "node_modules/@dnd-kit/core/CHANGELOG.md",
+    "node_modules/@dnd-kit/core/README.md",
+    "node_modules/@dnd-kit/accessibility/CHANGELOG.md",
+    "node_modules/@dnd-kit/accessibility/README.md",
+    "_docs/features/UploadPage.md",
+    "_docs/Changelog.md",
+    "node_modules/bl/LICENSE.md",
+    "_docs/Arquitectura.md",
+    "node_modules/motion/README.md",
+    "node_modules/better-sqlite3/README.md",
+    "_docs/sesiones/2026-03-21.md",
+    "_docs/decisiones/ADR-003-ia-como-puente.md",
+    "_docs/decisiones/ADR-002-upload-bloqueante.md",
+    "_docs/decisiones/ADR-001-deepseek-backend.md",
+    "_docs/features/AuthOrganizaciones.md",
+    "_docs/features/ChatIA.md",
+    "_docs/Home.md",
+    "_docs/Principios.md",
+    "README.md",
+    "mapa.svg"
+  ]
+}

@@ -205,6 +205,7 @@ export default function ConfiguracionPage() {
         )}
       </div>
 
+
     </div>
   )
 }

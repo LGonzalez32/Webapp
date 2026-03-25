@@ -2,6 +2,7 @@ from datetime import datetime, date
 from dateutil.relativedelta import relativedelta
 from typing import Literal
 import uuid
+import hashlib
 
 from ..models.sales_forecast_models import (
     SalesForecastResult,
@@ -11,9 +12,18 @@ from ..models.sales_forecast_models import (
     AnnualPerformanceSeries,
     SeriesDataPoint,
 )
-from ..core.supabase_client import get_supabase
 from .ets_model import run_ets
 from .arima_model import run_sarima
+
+# ── In-memory forecast cache ─────────────────────────────────────────────────
+_forecast_cache: dict[str, SalesForecastResult] = {}
+_CACHE_MAX_SIZE = 50
+
+
+def _cache_key(sales_data: list[dict], year: int, vendedor: str, metric: str, dimension: str, dimension_value: str) -> str:
+    """Build a deterministic cache key from request params + data hash."""
+    data_hash = hashlib.md5(str(len(sales_data)).encode() + str(sales_data[:3]).encode() + str(sales_data[-3:]).encode()).hexdigest()[:12]
+    return f"{data_hash}-{year}-{vendedor}-{metric}-{dimension}-{dimension_value}"
 
 
 def _get_monthly_sales_by_dimension(
@@ -176,10 +186,15 @@ def generate_sales_forecast(
     dimension_value: str = "all"
 ) -> SalesForecastResult:
     """Genera forecast de ventas para un vendedor y métrica específicos."""
-    
+
+    # ── Check cache first ────────────────────────────────────────────────────
+    ck = _cache_key(sales_data, year, vendedor, metric, dimension, dimension_value)
+    if ck in _forecast_cache:
+        return _forecast_cache[ck]
+
     current_year_sales = _get_monthly_sales_by_dimension(sales_data, year, vendedor, metric, dimension, dimension_value)
     prior_year_sales = _get_prior_year_sales(sales_data, year, vendedor, metric, dimension, dimension_value)
-    
+
     historical = []
     for m in range(1, 13):
         if m in prior_year_sales:
@@ -187,25 +202,29 @@ def generate_sales_forecast(
     for m in range(1, 13):
         if m in current_year_sales:
             historical.append(current_year_sales[m])
-    
+
+    today = date.today()
+    current_month = today.month
+
+    # ── Cap horizon to remaining months in current year ──────────────────────
+    months_remaining = 12 - current_month
+    horizon_months = min(horizon_months, months_remaining)
+
     model = _select_model(historical)
-    
+
     if model == "SARIMA":
         fc_point, fc_lower, fc_upper = _run_sarima_forecast(historical, horizon_months)
     elif model == "ETS":
         fc_point, fc_lower, fc_upper = _run_ets_forecast(historical, horizon_months)
     else:
         fc_point, fc_lower, fc_upper = _run_simple_forecast(historical, horizon_months)
-    
-    today = date.today()
-    current_month = today.month
-    months_to_forecast = min(horizon_months, 12 - current_month)
-    
+
     actual_monthly = []
     forecast_monthly = []
     prior_year_monthly = []
     meta_monthly = []
-    
+
+    # Months 1-12: current year (actuals + forecast for remaining months)
     for m in range(1, 13):
         if m <= current_month:
             val = current_year_sales.get(m, 0)
@@ -223,23 +242,26 @@ def generate_sales_forecast(
                 ))
             else:
                 forecast_monthly.append(ForecastDataPoint(month=m, value=0))
-        
+
         prior_year_monthly.append(MonthlyDataPoint(
             month=m,
             value=prior_year_sales.get(m, 0) if prior_year_sales.get(m, 0) > 0 else None
         ))
         meta_monthly.append(MonthlyDataPoint(month=m, value=None))
-    
+
+    # No months 13+ — forecast capped to December
+
     ytd_actual = sum(current_year_sales.get(m, 0) for m in range(1, current_month + 1))
     ytd_prior = sum(prior_year_sales.get(m, 0) for m in range(1, current_month + 1))
-    
+
     best_month = 1
     best_val = 0
     for m in range(1, current_month + 1):
         if current_year_sales.get(m, 0) > best_val:
             best_val = current_year_sales.get(m, 0)
             best_month = m
-    
+
+    # projected_year_total: only sum forecast up to December (current year)
     projected = ytd_actual
     for m in range(current_month + 1, 13):
         idx = m - current_month - 1
@@ -247,10 +269,10 @@ def generate_sales_forecast(
             projected += fc_point[idx]
     
     hist_total = sum(historical[-12:]) if len(historical) >= 12 else sum(historical)
-    fc_total = sum(fc_point[:12])
+    fc_total = sum(fc_point)
     trend_pct = ((fc_total - hist_total) / hist_total * 100) if hist_total > 0 else 0
-    
-    return SalesForecastResult(
+
+    result = SalesForecastResult(
         year=year,
         metric=metric,
         vendedor=vendedor,
@@ -268,6 +290,13 @@ def generate_sales_forecast(
         generated_at=datetime.now().isoformat()
     )
 
+    # ── Store in cache ───────────────────────────────────────────────────────
+    if len(_forecast_cache) >= _CACHE_MAX_SIZE:
+        _forecast_cache.clear()
+    _forecast_cache[ck] = result
+
+    return result
+
 
 def persist_forecast_to_supabase(
     forecast: SalesForecastResult,
@@ -275,6 +304,10 @@ def persist_forecast_to_supabase(
     snapshot_id: str | None = None
 ) -> str:
     """Persiste el forecast en Supabase y retorna el ID."""
+    try:
+        from ..core.supabase_client import get_supabase
+    except (ImportError, Exception):
+        return str(uuid.uuid4())  # Supabase not available, skip persistence
     supabase = get_supabase()
     
     forecast_id = str(uuid.uuid4())
@@ -338,6 +371,10 @@ def get_persisted_forecast(
     org_id: str | None = None
 ) -> SalesForecastResult | None:
     """Recupera forecast persistido desde Supabase."""
+    try:
+        from ..core.supabase_client import get_supabase
+    except (ImportError, Exception):
+        return None  # Supabase not available, no persisted forecast
     supabase = get_supabase()
     
     query = supabase.table("sales_forecasts").select("*").eq("forecast_year", year).eq("vendedor", vendedor).eq("metric_type", metric).order("created_at", desc=True).limit(1)
@@ -420,22 +457,25 @@ def build_annual_performance(
     forecast_series = []
     prior_series = []
     meta_series = []
-    
+
+    # Build month-indexed lookup for forecast (may include months 13+)
+    fc_by_month = {fp.month: fp for fp in forecast.forecast_monthly}
+
     for m in range(1, 13):
         actual = forecast.actual_monthly[m-1]
-        fc = forecast.forecast_monthly[m-1]
         prior = forecast.prior_year_monthly[m-1]
-        
+
         actual_series.append(SeriesDataPoint(month=m, value=actual.value if actual.value and actual.value > 0 else None))
-        
-        if fc.month > date.today().month:
-            forecast_series.append(SeriesDataPoint(month=m, value=fc.value if fc.value > 0 else None))
+
+        fc = fc_by_month.get(m)
+        if fc and fc.month > date.today().month and fc.value > 0:
+            forecast_series.append(SeriesDataPoint(month=m, value=fc.value))
         else:
             forecast_series.append(SeriesDataPoint(month=m, value=None))
-        
+
         prior_series.append(SeriesDataPoint(month=m, value=prior.value if prior.value and prior.value > 0 else None))
         meta_series.append(SeriesDataPoint(month=m, value=None))
-    
+
     series = AnnualPerformanceSeries(
         actual_current_year=actual_series,
         prior_year=prior_series,
