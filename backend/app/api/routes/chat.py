@@ -50,5 +50,4 @@ async def proxy_chat(body: ChatRequest):
     if not resp.is_success:
         raise HTTPException(status_code=502, detail="API_ERROR")
 
-    data = resp.json()
-    return {"content": data["choices"][0]["message"]["content"]}
+    return resp.json()

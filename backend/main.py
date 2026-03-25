@@ -31,6 +31,12 @@ app.add_middleware(
 app.include_router(health.router, prefix="/api/v1", tags=["health"])
 app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
 
+
+@app.get("/")
+async def root():
+    """Root health check for Render."""
+    return {"status": "ok", "service": "salesflow-backend"}
+
 try:
     from app.api.routes import forecast, sales_forecast
     app.include_router(forecast.router, prefix="/api/v1", tags=["forecast"])
