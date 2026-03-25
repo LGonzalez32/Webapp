@@ -283,9 +283,21 @@ Reglas:
   }, [])
 
   const handleProfundizar = useCallback((item: CategoriaInventario, analysisText: string) => {
-    navigate('/chat?q=' + encodeURIComponent(
-      `Profundizar sobre producto ${item.producto}: ${item.unidades_actuales} uds actuales, PM3 ${item.pm3.toFixed(0)}, ${item.dias_inventario} días inventario, estado ${CLASI_CONFIG[item.clasificacion]?.label}. ${analysisText}`
-    ))
+    const fullContext = [
+      `Profundizar sobre producto: ${item.producto}`,
+      `Unidades actuales: ${item.unidades_actuales}`,
+      `PM3: ${item.pm3.toFixed(0)}`,
+      `Días inventario: ${item.dias_inventario}`,
+      `Clasificación: ${CLASI_CONFIG[item.clasificacion]?.label}`,
+      analysisText ? `\nAnálisis previo:\n${analysisText}` : '',
+      ``,
+      `Con base en este análisis, profundiza: ¿qué vendedores movían este producto, en qué canales se vendía, hay clientes que lo compraban y dejaron de hacerlo?`
+    ].filter(Boolean).join('\n')
+    if (fullContext.length > 600) {
+      navigate('/chat', { state: { prefill: fullContext } })
+    } else {
+      navigate('/chat?q=' + encodeURIComponent(fullContext))
+    }
   }, [navigate])
 
   // Todos los hooks antes del return condicional

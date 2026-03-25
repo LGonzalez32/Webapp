@@ -467,9 +467,21 @@ export default function ClientesPage() {
                                   </div>
                                   <button
                                     onClick={() => {
-                                      navigate('/chat?q=' + encodeURIComponent(
-                                        `Profundizar sobre cliente ${c.cliente}: ${c.dias_sin_actividad} días inactivo, valor histórico ${moneda} ${c.valor_historico.toLocaleString()}, score recuperación ${c.recovery_score}/100. ${analysis.text}`
-                                      ))
+                                      const fullContext = [
+                                        `Profundizar sobre cliente dormido: ${c.cliente}`,
+                                        `Vendedor: ${c.vendedor}`,
+                                        `Días inactivo: ${c.dias_sin_actividad}`,
+                                        `Valor histórico: ${moneda} ${c.valor_historico.toLocaleString()}`,
+                                        `Recovery: ${c.recovery_score}/100 (${c.recovery_label})`,
+                                        analysis.text ? `\nAnálisis previo:\n${analysis.text}` : '',
+                                        ``,
+                                        `Con base en este análisis, profundiza: ¿por qué se durmió este cliente, qué productos compraba, hay patrón con otros clientes dormidos del mismo vendedor?`
+                                      ].filter(Boolean).join('\n')
+                                      if (fullContext.length > 600) {
+                                        navigate('/chat', { state: { prefill: fullContext } })
+                                      } else {
+                                        navigate('/chat?q=' + encodeURIComponent(fullContext))
+                                      }
                                     }}
                                     style={{
                                       marginTop: '12px',

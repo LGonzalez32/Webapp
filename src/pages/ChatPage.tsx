@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams, useLocation } from 'react-router-dom'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
 import { sendChatMessage, sendDeepAnalysis, parseFollowUps, parseChartBlock } from '../lib/chatService'
@@ -376,6 +376,7 @@ export default function ChatPage() {
   useAnalysis()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  const location = useLocation()
   const {
     isProcessed, vendorAnalysis, teamStats, insights, clientesDormidos,
     concentracionRiesgo, categoriasInventario, dataAvailability,
@@ -498,7 +499,7 @@ export default function ChatPage() {
 
   // Enviar pregunta desde ?q= al montar (puente desde EstadoComercialPage)
   useEffect(() => {
-    const pregunta = searchParams.get('q')
+    const pregunta = searchParams.get('q') || (location.state as any)?.prefill
     if (!pregunta) return
     const timer = setTimeout(() => handleSend(pregunta), 800)
     return () => clearTimeout(timer)

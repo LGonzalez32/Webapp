@@ -1512,7 +1512,24 @@ export default function EstadoComercialPage() {
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation()
-                                  navigate('/chat?q=' + encodeURIComponent(`Profundizar sobre: ${insight.titulo}. ${insight.descripcion}`))
+                                  const analysisText = analysis?.text || ''
+                                  const fullContext = [
+                                    `Profundizar sobre: ${insight.titulo}`,
+                                    ``,
+                                    `Contexto del insight: ${insight.descripcion}`,
+                                    insight.impacto_economico ? `Impacto económico: ${insight.impacto_economico.descripcion} (${configuracion.moneda} ${insight.impacto_economico.valor?.toLocaleString()})` : '',
+                                    insight.vendedor ? `Vendedor: ${insight.vendedor}` : '',
+                                    insight.cliente ? `Cliente: ${insight.cliente}` : '',
+                                    insight.producto ? `Producto: ${insight.producto}` : '',
+                                    analysisText ? `\nAnálisis previo:\n${analysisText}` : '',
+                                    ``,
+                                    `Con base en este análisis, profundiza: ¿qué está causando esto específicamente, qué datos adicionales lo confirman, y qué patrón hay detrás?`
+                                  ].filter(Boolean).join('\n')
+                                  if (fullContext.length > 600) {
+                                    navigate('/chat', { state: { prefill: fullContext } })
+                                  } else {
+                                    navigate('/chat?q=' + encodeURIComponent(fullContext))
+                                  }
                                 }}
                                 className="mt-3 px-4 py-2 rounded-lg text-xs font-medium cursor-pointer"
                                 style={{ border: '1px solid var(--sf-green-border)', background: 'var(--sf-green-bg)', color: 'var(--sf-green)' }}

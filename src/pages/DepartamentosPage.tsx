@@ -167,7 +167,7 @@ export default function DepartamentosPage() {
   const sales = useAppStore(s => s.sales)
   const { year, month } = useAppStore(s => s.selectedPeriod)
   const configuracion = useAppStore(s => s.configuracion)
-  const setChatContextCliente = useAppStore(s => s.setChatContextCliente)
+
 
   const [hovered, setHovered] = useState<string | null>(null)
   const navigate = useNavigate()
@@ -490,12 +490,17 @@ export default function DepartamentosPage() {
               <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
                 <button
                   onClick={() => {
-                    setChatContextCliente({
-                      tipo: 'top' as any,
-                      nombre: aiExplanation.depto,
-                      contexto: aiExplanation.text ?? '',
-                    } as any)
-                    navigate('/chat?depto=' + encodeURIComponent(aiExplanation.depto))
+                    const fullContext = [
+                      `Profundizar sobre departamento: ${aiExplanation.depto}`,
+                      aiExplanation.text ? `\nAnálisis previo:\n${aiExplanation.text}` : '',
+                      ``,
+                      `Con base en este análisis, profundiza: ¿qué vendedores explican el resultado, hay migración de canal, qué productos están cayendo en este departamento?`
+                    ].filter(Boolean).join('\n')
+                    if (fullContext.length > 600) {
+                      navigate('/chat', { state: { prefill: fullContext } })
+                    } else {
+                      navigate('/chat?q=' + encodeURIComponent(fullContext))
+                    }
                   }}
                   style={{
                     background: 'rgba(29,158,117,0.12)', border: '1px solid rgba(29,158,117,0.35)',
@@ -810,11 +815,20 @@ export default function DepartamentosPage() {
                     <AiStructuredText text={insightText} />
                     <div className="mt-4 pt-3.5 border-t border-[var(--sf-border)] flex justify-end">
                       <button
-                        onClick={() => navigate(`/chat?q=${encodeURIComponent(
-                          `Analiza en detalle el departamento ${insightDept}. ` +
-                          `Ventas YTD ${year}: ${deptData[insightDept]?.ytdActual ?? 0} uds. ` +
-                          `Dame vendedores específicos, clientes en riesgo y plan de acción.`
-                        )}`)}
+                        onClick={() => {
+                          const fullContext = [
+                            `Profundizar sobre departamento: ${insightDept}`,
+                            `Ventas YTD ${year}: ${deptData[insightDept]?.ytdActual ?? 0} uds`,
+                            insightText ? `\nAnálisis previo:\n${insightText}` : '',
+                            ``,
+                            `Con base en este análisis, profundiza: ¿qué vendedores explican el resultado, hay migración de canal, qué productos están cayendo en este departamento?`
+                          ].filter(Boolean).join('\n')
+                          if (fullContext.length > 600) {
+                            navigate('/chat', { state: { prefill: fullContext } })
+                          } else {
+                            navigate('/chat?q=' + encodeURIComponent(fullContext))
+                          }
+                        }}
                         className="text-[12px] text-[var(--sf-t5)] hover:text-[var(--sf-t2)] transition-colors flex items-center gap-1 cursor-pointer"
                       >
                         Profundizar en Chat IA →
