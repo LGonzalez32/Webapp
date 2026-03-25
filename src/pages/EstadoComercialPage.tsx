@@ -1041,6 +1041,37 @@ export default function EstadoComercialPage() {
     }
   }, [configuracion])
 
+  // ── YTD chart data (mensual individual: año actual vs anterior) ──
+  // Must be before early return to respect Rules of Hooks
+  const ytdChart = useMemo(() => {
+    const currentYear = selectedPeriod.year
+    const previousYear = currentYear - 1
+    const currentMonth = selectedPeriod.month // 0-based in store
+
+    const data: { month: string; actual: number; anterior: number }[] = []
+    let totalActual = 0
+    let totalAnterior = 0
+
+    for (let m = 0; m <= currentMonth; m++) {
+      const ventasActual = sales
+        .filter(s => { const d = new Date(s.fecha); return d.getFullYear() === currentYear && d.getMonth() === m })
+        .reduce((sum, s) => sum + s.unidades, 0)
+      const ventasAnterior = sales
+        .filter(s => { const d = new Date(s.fecha); return d.getFullYear() === previousYear && d.getMonth() === m })
+        .reduce((sum, s) => sum + s.unidades, 0)
+
+      totalActual += ventasActual
+      totalAnterior += ventasAnterior
+
+      data.push({
+        month: MESES_CORTO[m],
+        actual: ventasActual,
+        anterior: ventasAnterior,
+      })
+    }
+    return { data, totalActual, totalAnterior }
+  }, [sales, selectedPeriod.year, selectedPeriod.month])
+
   if (!teamStats) {
     if (sales.length === 0) return null // el useEffect redirige a /cargar
 
@@ -1109,36 +1140,6 @@ export default function EstadoComercialPage() {
 
   const ytdVar  = teamStats.variacion_ytd_equipo
   const ytdAnno = maxDate.getFullYear()
-
-  // ── YTD chart data (mensual individual: año actual vs anterior) ──
-  const ytdChart = useMemo(() => {
-    const currentYear = selectedPeriod.year
-    const previousYear = currentYear - 1
-    const currentMonth = selectedPeriod.month // 0-based in store
-
-    const data: { month: string; actual: number; anterior: number }[] = []
-    let totalActual = 0
-    let totalAnterior = 0
-
-    for (let m = 0; m <= currentMonth; m++) {
-      const ventasActual = sales
-        .filter(s => { const d = new Date(s.fecha); return d.getFullYear() === currentYear && d.getMonth() === m })
-        .reduce((sum, s) => sum + s.unidades, 0)
-      const ventasAnterior = sales
-        .filter(s => { const d = new Date(s.fecha); return d.getFullYear() === previousYear && d.getMonth() === m })
-        .reduce((sum, s) => sum + s.unidades, 0)
-
-      totalActual += ventasActual
-      totalAnterior += ventasAnterior
-
-      data.push({
-        month: MESES_CORTO[m],
-        actual: ventasActual,
-        anterior: ventasAnterior,
-      })
-    }
-    return { data, totalActual, totalAnterior }
-  }, [sales, selectedPeriod.year, selectedPeriod.month])
 
   const ytdDiff = ytdChart.totalActual - ytdChart.totalAnterior
   const ytdChartUp = ytdDiff >= 0
