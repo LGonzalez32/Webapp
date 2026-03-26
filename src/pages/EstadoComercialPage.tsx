@@ -1457,91 +1457,95 @@ export default function EstadoComercialPage() {
                     {insight.descripcion}
                   </p>
 
-                  {/* Expanded content */}
-                  {isExpanded && (
+                  {/* Analizar con IA — always visible for non-hallazgo without analysis */}
+                  {!isHallazgo && !analysis && (
+                    <div className="flex justify-end mt-2">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleAnalyzeInsight(insight) }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-all duration-150"
+                        style={{
+                          color: 'var(--sf-green, #22c55e)',
+                          background: 'var(--sf-green-bg, rgba(34,197,94,0.06))',
+                          border: '1px solid var(--sf-green-border, rgba(34,197,94,0.15))',
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.background = 'rgba(34,197,94,0.12)'; e.currentTarget.style.borderColor = 'rgba(34,197,94,0.3)' }}
+                        onMouseLeave={e => { e.currentTarget.style.background = 'var(--sf-green-bg, rgba(34,197,94,0.06))'; e.currentTarget.style.borderColor = 'var(--sf-green-border, rgba(34,197,94,0.15))' }}
+                      >
+                        ✦ Analizar con IA
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Loading spinner — replaces button while analyzing */}
+                  {!isHallazgo && analysis?.loading && (
+                    <div className="flex justify-end mt-2">
+                      <span className="inline-flex items-center gap-1.5 text-xs" style={{ color: 'var(--sf-t4)' }}>
+                        <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                        </svg>
+                        Analizando...
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Analysis result — appears once generated */}
+                  {!isHallazgo && analysis?.text && !analysis.loading && (
                     <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--sf-border-subtle)' }}>
-                      {isHallazgo ? (
-                        /* Hallazgo: show extra data if available */
-                        insight.impacto_economico ? (
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-xs" style={{ color: 'var(--sf-t4)' }}>Impacto estimado: </span>
-                            <span className="text-xs font-semibold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-t2)' }}>
-                              {configuracion.moneda} {insight.impacto_economico.valor.toLocaleString()}
-                            </span>
-                          </div>
-                        ) : insight.valor_numerico ? (
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-xs" style={{ color: 'var(--sf-t4)' }}>Valor: </span>
-                            <span className="text-xs font-semibold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-t2)' }}>
-                              {insight.valor_numerico.toLocaleString()}
-                            </span>
-                          </div>
-                        ) : (
-                          <p className="text-xs" style={{ color: 'var(--sf-t4)' }}>Sin datos adicionales.</p>
-                        )
+                      <div className="text-[13px] leading-relaxed whitespace-pre-line" style={{ color: 'var(--sf-t3)' }}>
+                        {analysis.text}
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          const analysisText = analysis?.text || ''
+                          const fullContext = [
+                            `Profundizar sobre: ${insight.titulo}`,
+                            ``,
+                            `Contexto del insight: ${insight.descripcion}`,
+                            insight.impacto_economico ? `Impacto económico: ${insight.impacto_economico.descripcion} (${configuracion.moneda} ${insight.impacto_economico.valor?.toLocaleString()})` : '',
+                            insight.vendedor ? `Vendedor: ${insight.vendedor}` : '',
+                            insight.cliente ? `Cliente: ${insight.cliente}` : '',
+                            insight.producto ? `Producto: ${insight.producto}` : '',
+                            analysisText ? `\nAnálisis previo:\n${analysisText}` : '',
+                            ``,
+                            `Con base en este análisis, profundiza: ¿qué está causando esto específicamente, qué datos adicionales lo confirman, y qué patrón hay detrás?`
+                          ].filter(Boolean).join('\n')
+                          if (fullContext.length > 600) {
+                            navigate('/chat', { state: { prefill: fullContext } })
+                          } else {
+                            navigate('/chat?q=' + encodeURIComponent(fullContext))
+                          }
+                        }}
+                        className="mt-3 px-4 py-2 rounded-lg text-xs font-medium cursor-pointer"
+                        style={{ border: '1px solid var(--sf-green-border)', background: 'var(--sf-green-bg)', color: 'var(--sf-green)' }}
+                        onMouseEnter={e => (e.currentTarget.style.opacity = '0.8')}
+                        onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
+                      >
+                        + Profundizar
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Hallazgo expanded content — only on click */}
+                  {isHallazgo && isExpanded && (
+                    <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--sf-border-subtle)' }}>
+                      {insight.impacto_economico ? (
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs" style={{ color: 'var(--sf-t4)' }}>Impacto estimado: </span>
+                          <span className="text-xs font-semibold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-t2)' }}>
+                            {configuracion.moneda} {insight.impacto_economico.valor.toLocaleString()}
+                          </span>
+                        </div>
+                      ) : insight.valor_numerico ? (
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs" style={{ color: 'var(--sf-t4)' }}>Valor: </span>
+                          <span className="text-xs font-semibold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-t2)' }}>
+                            {insight.valor_numerico.toLocaleString()}
+                          </span>
+                        </div>
                       ) : (
-                        /* Non-hallazgo: IA analysis */
-                        <>
-                          {!analysis && (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); handleAnalyzeInsight(insight) }}
-                              className="text-xs font-medium cursor-pointer inline-flex items-center gap-1"
-                              style={{ color: '#38bdf8', opacity: 0.8, background: 'none', border: 'none', padding: 0 }}
-                              onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
-                              onMouseLeave={e => (e.currentTarget.style.opacity = '0.8')}
-                            >
-                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                                <path d="M12 2L15 8.5L22 9.5L17 14.5L18 21.5L12 18.5L6 21.5L7 14.5L2 9.5L9 8.5Z" />
-                              </svg>
-                              Analizar con IA →
-                            </button>
-                          )}
-                          {analysis?.loading && (
-                            <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--sf-t4)' }}>
-                              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
-                              </svg>
-                              Analizando...
-                            </div>
-                          )}
-                          {analysis?.text && !analysis.loading && (
-                            <>
-                              <div className="text-[13px] leading-relaxed whitespace-pre-line" style={{ color: 'var(--sf-t3)' }}>
-                                {analysis.text}
-                              </div>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  const analysisText = analysis?.text || ''
-                                  const fullContext = [
-                                    `Profundizar sobre: ${insight.titulo}`,
-                                    ``,
-                                    `Contexto del insight: ${insight.descripcion}`,
-                                    insight.impacto_economico ? `Impacto económico: ${insight.impacto_economico.descripcion} (${configuracion.moneda} ${insight.impacto_economico.valor?.toLocaleString()})` : '',
-                                    insight.vendedor ? `Vendedor: ${insight.vendedor}` : '',
-                                    insight.cliente ? `Cliente: ${insight.cliente}` : '',
-                                    insight.producto ? `Producto: ${insight.producto}` : '',
-                                    analysisText ? `\nAnálisis previo:\n${analysisText}` : '',
-                                    ``,
-                                    `Con base en este análisis, profundiza: ¿qué está causando esto específicamente, qué datos adicionales lo confirman, y qué patrón hay detrás?`
-                                  ].filter(Boolean).join('\n')
-                                  if (fullContext.length > 600) {
-                                    navigate('/chat', { state: { prefill: fullContext } })
-                                  } else {
-                                    navigate('/chat?q=' + encodeURIComponent(fullContext))
-                                  }
-                                }}
-                                className="mt-3 px-4 py-2 rounded-lg text-xs font-medium cursor-pointer"
-                                style={{ border: '1px solid var(--sf-green-border)', background: 'var(--sf-green-bg)', color: 'var(--sf-green)' }}
-                                onMouseEnter={e => (e.currentTarget.style.opacity = '0.8')}
-                                onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
-                              >
-                                + Profundizar
-                              </button>
-                            </>
-                          )}
-                        </>
+                        <p className="text-xs" style={{ color: 'var(--sf-t4)' }}>Sin datos adicionales.</p>
                       )}
                     </div>
                   )}
