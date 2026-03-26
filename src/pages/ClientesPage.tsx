@@ -467,6 +467,7 @@ export default function ClientesPage() {
                                   </div>
                                   <button
                                     onClick={() => {
+                                      const displayMessage = `Profundizar: cliente ${c.cliente} (${c.dias_sin_actividad} días inactivo)`
                                       const fullContext = [
                                         `Profundizar sobre cliente dormido: ${c.cliente}`,
                                         `Vendedor: ${c.vendedor}`,
@@ -477,11 +478,7 @@ export default function ClientesPage() {
                                         ``,
                                         `Con base en este análisis, profundiza: ¿por qué se durmió este cliente, qué productos compraba, hay patrón con otros clientes dormidos del mismo vendedor?`
                                       ].filter(Boolean).join('\n')
-                                      if (fullContext.length > 600) {
-                                        navigate('/chat', { state: { prefill: fullContext } })
-                                      } else {
-                                        navigate('/chat?q=' + encodeURIComponent(fullContext))
-                                      }
+                                      navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage } })
                                     }}
                                     style={{
                                       marginTop: '12px',

@@ -57,7 +57,7 @@ export default function EstadoComercialPage() {
     insights, vendorAnalysis, teamStats, dataAvailability,
     configuracion, selectedPeriod, setSelectedPeriod, sales, loadingMessage,
     clientesDormidos, concentracionRiesgo, categoriasInventario, supervisorAnalysis,
-    canalAnalysis, categoriaAnalysis,
+    canalAnalysis, categoriaAnalysis, dataSource,
   } = useAppStore()
 
   const [vendedorPanel, setVendedorPanel] = useState<VendorAnalysis | null>(null)
@@ -69,8 +69,8 @@ export default function EstadoComercialPage() {
   const [analysisStep, setAnalysisStep] = useState(0)
 
   useEffect(() => {
-    if (sales.length === 0) navigate('/', { replace: true })
-  }, [sales, navigate])
+    if (sales.length === 0 && dataSource === 'none') navigate('/', { replace: true })
+  }, [sales, navigate, dataSource])
 
   useEffect(() => {
     if (teamStats) return
@@ -1499,6 +1499,7 @@ export default function EstadoComercialPage() {
                         onClick={(e) => {
                           e.stopPropagation()
                           const analysisText = analysis?.text || ''
+                          const displayMessage = `Profundizar: ${insight.titulo}`
                           const fullContext = [
                             `Profundizar sobre: ${insight.titulo}`,
                             ``,
@@ -1511,11 +1512,7 @@ export default function EstadoComercialPage() {
                             ``,
                             `Con base en este análisis, profundiza: ¿qué está causando esto específicamente, qué datos adicionales lo confirman, y qué patrón hay detrás?`
                           ].filter(Boolean).join('\n')
-                          if (fullContext.length > 600) {
-                            navigate('/chat', { state: { prefill: fullContext } })
-                          } else {
-                            navigate('/chat?q=' + encodeURIComponent(fullContext))
-                          }
+                          navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage } })
                         }}
                         className="mt-3 px-4 py-2 rounded-lg text-xs font-medium cursor-pointer"
                         style={{ border: '1px solid var(--sf-green-border)', background: 'var(--sf-green-bg)', color: 'var(--sf-green)' }}
@@ -1660,12 +1657,12 @@ export default function EstadoComercialPage() {
             const varPct = canalPrincipal.variacion_pct
             const varColor = varPct >= 5 ? 'var(--sf-green)' : varPct <= -5 ? 'var(--sf-red)' : 'var(--sf-t3)'
             const varText = Math.abs(varPct) < 5 ? 'estable' : varPct >= 5 ? `subió ${Math.abs(Math.round(varPct))}%` : `bajó ${Math.abs(Math.round(varPct))}%`
-            const chatQ = encodeURIComponent('Analiza el estado de los canales este período')
+            const chatQ = 'Analiza el estado de los canales este período'
             return (
               <div
                 className="group rounded-xl p-5 cursor-pointer transition-colors duration-200"
                 style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderTop: `3px solid ${topBorder}` }}
-                onClick={() => navigate(`/chat?q=${chatQ}`)}
+                onClick={() => navigate('/chat', { state: { prefill: chatQ } })}
                 onMouseEnter={e => { const el = e.currentTarget as HTMLDivElement; el.style.borderColor = 'var(--sf-border-active)'; el.style.background = 'var(--sf-hover-card)' }}
                 onMouseLeave={e => { const el = e.currentTarget as HTMLDivElement; el.style.borderColor = 'var(--sf-border)'; el.style.background = 'var(--sf-card)' }}
               >

@@ -490,17 +490,14 @@ export default function DepartamentosPage() {
               <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
                 <button
                   onClick={() => {
+                    const displayMessage = `Profundizar: departamento ${aiExplanation.depto}`
                     const fullContext = [
                       `Profundizar sobre departamento: ${aiExplanation.depto}`,
                       aiExplanation.text ? `\nAnálisis previo:\n${aiExplanation.text}` : '',
                       ``,
                       `Con base en este análisis, profundiza: ¿qué vendedores explican el resultado, hay migración de canal, qué productos están cayendo en este departamento?`
                     ].filter(Boolean).join('\n')
-                    if (fullContext.length > 600) {
-                      navigate('/chat', { state: { prefill: fullContext } })
-                    } else {
-                      navigate('/chat?q=' + encodeURIComponent(fullContext))
-                    }
+                    navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage } })
                   }}
                   style={{
                     background: 'rgba(29,158,117,0.12)', border: '1px solid rgba(29,158,117,0.35)',
@@ -832,6 +829,7 @@ export default function DepartamentosPage() {
                     <div className="mt-4 pt-3.5 border-t border-[var(--sf-border)] flex justify-end">
                       <button
                         onClick={() => {
+                          const displayMessage = `Profundizar: departamento ${insightDept}`
                           const fullContext = [
                             `Profundizar sobre departamento: ${insightDept}`,
                             `Ventas YTD ${year}: ${deptData[insightDept]?.ytdActual ?? 0} uds`,
@@ -839,11 +837,7 @@ export default function DepartamentosPage() {
                             ``,
                             `Con base en este análisis, profundiza: ¿qué vendedores explican el resultado, hay migración de canal, qué productos están cayendo en este departamento?`
                           ].filter(Boolean).join('\n')
-                          if (fullContext.length > 600) {
-                            navigate('/chat', { state: { prefill: fullContext } })
-                          } else {
-                            navigate('/chat?q=' + encodeURIComponent(fullContext))
-                          }
+                          navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage } })
                         }}
                         className="text-[12px] text-[var(--sf-t5)] hover:text-[var(--sf-t2)] transition-colors flex items-center gap-1 cursor-pointer"
                       >

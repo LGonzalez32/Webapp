@@ -21,7 +21,7 @@ const HIDE_PERIOD_SELECTOR = new Set(['/departamentos'])
 
 export default function TopBar() {
   const location = useLocation()
-  const { selectedPeriod, setSelectedPeriod, isProcessed, configuracion, setConfiguracion } = useAppStore()
+  const { selectedPeriod, setSelectedPeriod, isProcessed, dataSource, configuracion, setConfiguracion } = useAppStore()
   const tema = configuracion.tema
   const toggleTema = () => setConfiguracion({ tema: tema === 'dark' ? 'light' : 'dark' })
 
@@ -55,6 +55,20 @@ export default function TopBar() {
       </div>
 
       <div className="flex items-center gap-2">
+      {dataSource === 'demo' && (
+        <span
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 4,
+            padding: '3px 10px', borderRadius: 6,
+            fontSize: 11, fontWeight: 500,
+            background: 'rgba(245,158,11,0.08)',
+            color: '#d97706',
+            border: '1px solid rgba(245,158,11,0.15)',
+          }}
+        >
+          Datos demo
+        </span>
+      )}
       <button
         onClick={toggleTema}
         className="p-2 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors"

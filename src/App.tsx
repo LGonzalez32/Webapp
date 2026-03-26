@@ -2,7 +2,7 @@ import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import AppLayout from './components/layout/AppLayout'
 import { RequireAuth } from './components/auth/RequireAuth'
-import { useAppStore } from './store/appStore'
+import { useAppStore, useStoreHydrated } from './store/appStore'
 import { useAuth } from './lib/useAuth'
 
 const UploadPage = lazy(() => import('./pages/UploadPage'))
@@ -32,7 +32,13 @@ function LoadingFallback() {
 
 export default function App() {
   useAuth()
-  const { isProcessed } = useAppStore()
+  const { isProcessed, dataSource } = useAppStore()
+  const hydrated = useStoreHydrated()
+
+  // No tomar decisiones de routing hasta que Zustand rehidrate localStorage
+  if (!hydrated) {
+    return <LoadingFallback />
+  }
 
   return (
     <BrowserRouter>
@@ -56,7 +62,7 @@ export default function App() {
           >
             <Route
               path="/"
-              element={isProcessed ? <Navigate to="/dashboard" replace /> : <Navigate to="/cargar" replace />}
+              element={(isProcessed || dataSource !== 'none') ? <Navigate to="/dashboard" replace /> : <Navigate to="/cargar" replace />}
             />
             <Route path="/cargar" element={<UploadPage />} />
             <Route path="/dashboard" element={<EstadoComercialPage />} />

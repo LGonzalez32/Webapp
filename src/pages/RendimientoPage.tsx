@@ -96,7 +96,7 @@ function SortablePill({
 export default function RendimientoPage() {
   useAnalysis()
   const navigate = useNavigate()
-  const { sales, metas, dataAvailability, selectedPeriod, configuracion, forecastData, forecastChartLoading, setForecastData, setForecastChartLoading } = useAppStore()
+  const { sales, metas, dataAvailability, selectedPeriod, configuracion, forecastData, forecastChartLoading, setForecastData, setForecastChartLoading, dataSource } = useAppStore()
   const [metric, setMetric] = useState<'unidades' | 'venta_neta'>('unidades')
   const [showBudget, setShowBudget] = useState(true)
   const [selectedVendor, setSelectedVendor] = useState<string>('todos')
@@ -198,8 +198,8 @@ export default function RendimientoPage() {
   }, [pivotDims])
 
   useEffect(() => {
-    if (sales.length === 0) navigate('/cargar', { replace: true })
-  }, [sales.length, navigate])
+    if (sales.length === 0 && dataSource === 'none') navigate('/cargar', { replace: true })
+  }, [sales.length, navigate, dataSource])
 
   if (sales.length === 0) return null
 

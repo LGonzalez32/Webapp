@@ -254,6 +254,7 @@ export interface FileValidationResult {
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
+  displayContent?: string
   timestamp: Date
   navegacion?: { ruta: string; label: string }
   isDeepAnalysis?: boolean

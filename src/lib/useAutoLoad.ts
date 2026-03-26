@@ -4,16 +4,23 @@ import { useAuthStore } from '../store/authStore'
 import { useAppStore } from '../store/appStore'
 import { useOrgStore } from '../store/orgStore'
 import { getUserOrg, loadOrgData } from './orgService'
+import { getDemoData, DEMO_EMPRESA } from './demoData'
+import { loadDatasets } from './dataCache'
+import type { SaleRecord, MetaRecord, InventoryItem } from '../types'
 
 export function useAutoLoad() {
   const user = useAuthStore((s) => s.user)
   const loadingAuth = useAuthStore((s) => s.loading)
-  const { isProcessed, setSales, setMetas, setInventory, setIsLoading, setLoadingMessage } =
-    useAppStore()
+  const {
+    isProcessed, sales, dataSource,
+    setSales, setMetas, setInventory,
+    setIsLoading, setLoadingMessage, setConfiguracion,
+  } = useAppStore()
   const { setOrg, setCurrentRole } = useOrgStore()
   const navigate = useNavigate()
   const location = useLocation()
   const ranRef = useRef(false)
+  const localRestoreRef = useRef(false)
 
   // Resetear el guard cuando el análisis se invalida
   useEffect(() => {
@@ -22,10 +29,51 @@ export function useAutoLoad() {
     }
   }, [isProcessed])
 
+  // ── Restauración local (sin auth): demo → getDemoData(), real → IndexedDB ──
+  useEffect(() => {
+    if (localRestoreRef.current || isProcessed || sales.length > 0) return
+    if (dataSource === 'none') return
+    localRestoreRef.current = true
+
+    const restore = async () => {
+      setIsLoading(true)
+
+      if (dataSource === 'demo') {
+        setLoadingMessage('Restaurando datos demo...')
+        const { sales, metas, inventory } = getDemoData()
+        setSales(sales)
+        setMetas(metas)
+        setInventory(inventory)
+        setConfiguracion({ empresa: DEMO_EMPRESA })
+      } else if (dataSource === 'real') {
+        setLoadingMessage('Restaurando datos guardados...')
+        try {
+          const cached = await loadDatasets()
+          const cachedSales = cached.sales as SaleRecord[] | undefined
+          if (cachedSales && cachedSales.length > 0) {
+            setSales(cachedSales)
+            if (cached.metas) setMetas(cached.metas as MetaRecord[])
+            if (cached.inventory) setInventory(cached.inventory as InventoryItem[])
+          }
+        } catch {
+          // IndexedDB not available — user will need to re-upload
+        }
+      }
+
+      setIsLoading(false)
+      setLoadingMessage('')
+    }
+
+    restore()
+  }, [dataSource, isProcessed, sales.length]) // eslint-disable-line
+
+  // ── Carga desde Supabase (con auth) ────────────────────────────────────────
   useEffect(() => {
     // AuthCallbackPage maneja su propio redirect — no interferir
     if (location.pathname === '/auth/callback') return
     if (loadingAuth || !user || isProcessed || ranRef.current) return
+    // Si hay datos locales (demo o real), no interferir con carga Supabase
+    if (dataSource === 'demo' || dataSource === 'real') return
     ranRef.current = true
 
     const run = async () => {
@@ -64,5 +112,5 @@ export function useAutoLoad() {
     }
 
     run()
-  }, [user, loadingAuth, isProcessed, location.pathname]) // eslint-disable-line
+  }, [user, loadingAuth, isProcessed, location.pathname, dataSource]) // eslint-disable-line
 }

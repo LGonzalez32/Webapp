@@ -486,20 +486,24 @@ export default function ChatPage() {
 
   // Enviar pregunta desde ?q= al montar (puente desde EstadoComercialPage)
   useEffect(() => {
-    const pregunta = searchParams.get('q') || (location.state as any)?.prefill
+    const stateData = location.state as any
+    const pregunta = searchParams.get('q') || stateData?.prefill
     if (!pregunta) return
-    const timer = setTimeout(() => handleSend(pregunta), 800)
+    const display = stateData?.displayPrefill as string | undefined
+    const timer = setTimeout(() => handleSend(pregunta, display), 800)
+    // Limpiar state de navegación para evitar re-envío en re-render
+    window.history.replaceState({}, '', '/chat')
     return () => clearTimeout(timer)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleSend = async (text: string) => {
+  const handleSend = async (text: string, displayContent?: string) => {
     if (!text.trim() || isLoading || profundizandoIndex !== null) return
 
     const entity = detectEntity(text)
     if (entity) setActiveEntity(entity)
     const ctx = buildCtxWithEntity(entity ?? activeEntity)
 
-    const userMsg: ChatMessage = { role: 'user', content: text, timestamp: new Date() }
+    const userMsg: ChatMessage = { role: 'user', content: text, displayContent, timestamp: new Date() }
     addChatMessage(userMsg)
     setInput('')
     setIsLoading(true)
@@ -661,7 +665,7 @@ export default function ChatPage() {
                             {msg.chart && <InlineChart chart={msg.chart} />}
                           </>
                         ) : (
-                          <div className="whitespace-pre-wrap">{msg.content}</div>
+                          <div className="whitespace-pre-wrap">{msg.displayContent || msg.content}</div>
                         )}
                       </div>
                       {msg.navegacion && (

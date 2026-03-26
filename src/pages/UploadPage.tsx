@@ -7,6 +7,7 @@ import { useOrgStore } from '../store/orgStore'
 import { getDemoData, DEMO_EMPRESA } from '../lib/demoData'
 import { parseSalesFile, parseMetasFile, parseInventoryFile } from '../lib/fileParser'
 import { uploadOrgFile, getOrgStorageFiles, deleteOrgFiles } from '../lib/orgService'
+import { saveDatasets, clearDatasets } from '../lib/dataCache'
 import LoadingOverlay from '../components/ui/LoadingOverlay'
 import StepIndicator from '../components/upload/StepIndicator'
 import FileDropzone from '../components/upload/FileDropzone'
@@ -165,7 +166,7 @@ function TablaEjemplo({ headers, rows }: { headers: { col: string; req: boolean 
 }
 
 export default function UploadPage() {
-  const { setSales, setMetas, setInventory, setIsProcessed, setSelectedPeriod, resetAll, configuracion, setConfiguracion } = useAppStore()
+  const { setSales, setMetas, setInventory, setIsProcessed, setSelectedPeriod, setDataSource, resetAll, configuracion, setConfiguracion } = useAppStore()
   const { org } = useOrgStore()
   const canEdit = useOrgStore(s => s.canEdit())
   const navigate = useNavigate()
@@ -307,6 +308,10 @@ export default function UploadPage() {
     setSales(salesData)
     setMetas(metasData)
     setInventory(inventoryData)
+    setDataSource('real')
+
+    // Persistir en IndexedDB para sobrevivir refreshes
+    saveDatasets(salesData, metasData, inventoryData).catch(() => {})
 
     if (org) {
       setLoading({ title: 'Guardando en la nube...', subtitle: 'Subiendo archivos a tu organización', progress: 60 })
@@ -344,6 +349,7 @@ export default function UploadPage() {
       setMetas(metas)
       setInventory(inventory)
       setConfiguracion({ empresa: DEMO_EMPRESA })
+      setDataSource('demo')
       setLoading({ title: '\u00A1Listo!', subtitle: 'Redirigiendo al dashboard', progress: 100 })
       setTimeout(() => {
         setLoading(null)
@@ -354,6 +360,7 @@ export default function UploadPage() {
 
   const handleLimpiar = async () => {
     resetAll()
+    clearDatasets().catch(() => {})
     setSteps(INITIAL_STEPS)
     setCurrentStep(0)
     setStorageFiles(null)

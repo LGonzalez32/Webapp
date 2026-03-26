@@ -78,6 +78,7 @@ interface AppState {
   isLoading: boolean
   loadingMessage: string
   orgId: string
+  dataSource: 'none' | 'demo' | 'real'
   selectedPeriod: { year: number; month: number }
 
   // Configuración
@@ -105,6 +106,7 @@ interface AppState {
   setIsProcessed: (val: boolean) => void
   setIsLoading: (val: boolean) => void
   setLoadingMessage: (msg: string) => void
+  setDataSource: (source: 'none' | 'demo' | 'real') => void
   setSelectedPeriod: (period: { year: number; month: number }) => void
   setConfiguracion: (config: Partial<Configuracion>) => void
   setChatContextVendedor: (v: VendorAnalysis | null) => void
@@ -147,6 +149,7 @@ export const useAppStore = create<AppState>()(
       isLoading: false,
       loadingMessage: '',
       orgId: '',
+      dataSource: 'none',
       selectedPeriod: {
         year: new Date().getFullYear(),
         month: new Date().getMonth(), // 0-indexed
@@ -170,6 +173,7 @@ export const useAppStore = create<AppState>()(
       setCanalAnalysis:         (canalAnalysis)         => set({ canalAnalysis }),
       setDataAvailability: (dataAvailability) => set({ dataAvailability }),
 
+      setDataSource: (dataSource) => set({ dataSource }),
       setIsProcessed: (isProcessed) => set({ isProcessed }),
       setLoadingMessage: (loadingMessage) => set({ loadingMessage }),
       setIsLoading: (isLoading) => set({ isLoading }),
@@ -208,6 +212,7 @@ export const useAppStore = create<AppState>()(
           forecastData: null,
           forecastLoading: false,
           forecastChartLoading: false,
+          dataSource: 'none',
           isProcessed: false,
           isLoading: false,
           selectedPeriod: {
@@ -219,7 +224,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'salesflow-storage',
-      version: 5,
+      version: 6,
       migrate: (persistedState: any) => ({
         selectedPeriod: persistedState?.selectedPeriod ?? {
           year: new Date().getFullYear(),
@@ -229,14 +234,28 @@ export const useAppStore = create<AppState>()(
           ...DEFAULT_CONFIG,
         },
         orgId: persistedState?.orgId ?? '',
+        dataSource: persistedState?.dataSource ?? 'none',
       }) as any,
       // sales/metas/inventory NO se persisten: son muy grandes para localStorage
-      // y bloquean el hilo principal al serializarse. El usuario vuelve a subir el archivo.
+      // y bloquean el hilo principal al serializarse. Se restauran via IndexedDB o getDemoData().
       partialize: (state) => ({
         selectedPeriod: state.selectedPeriod,
         configuracion: state.configuracion,
         orgId: state.orgId,
+        dataSource: state.dataSource,
       }) as any,
     }
   )
 )
+
+// ── Hydration hook: esperar a que Zustand rehidrate localStorage ──
+import { useState, useEffect } from 'react'
+
+export function useStoreHydrated() {
+  const [hydrated, setHydrated] = useState(useAppStore.persist.hasHydrated())
+  useEffect(() => {
+    const unsub = useAppStore.persist.onFinishHydration(() => setHydrated(true))
+    return unsub
+  }, [])
+  return hydrated
+}

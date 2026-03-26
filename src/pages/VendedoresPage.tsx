@@ -35,7 +35,7 @@ export default function VendedoresPage() {
   const {
     vendorAnalysis, insights, dataAvailability, isProcessed,
     sales, selectedPeriod, clientesDormidos, configuracion,
-    supervisorAnalysis,
+    supervisorAnalysis, dataSource,
   } = useAppStore()
   const navigate = useNavigate()
   const { search: locationSearch } = useLocation()
@@ -183,8 +183,8 @@ export default function VendedoresPage() {
 
   // ── Redirect cuando no hay datos ──────────────────────────────────────────
   useEffect(() => {
-    if (sales.length === 0) navigate('/')
-  }, [sales.length]) // eslint-disable-line
+    if (sales.length === 0 && dataSource === 'none') navigate('/')
+  }, [sales.length, dataSource]) // eslint-disable-line
 
   // ── Early returns ──────────────────────────────────────────────────────────
   if (sales.length === 0) return null
