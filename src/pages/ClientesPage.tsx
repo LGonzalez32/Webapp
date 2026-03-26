@@ -36,7 +36,6 @@ export default function ClientesPage() {
     selectedPeriod,
     dataAvailability,
     configuracion,
-    setChatContextCliente,
   } = useAppStore()
 
   const [sortKey, setSortKey] = useState<SortKey>('prioridad')
@@ -45,6 +44,49 @@ export default function ClientesPage() {
   const [filterVendedor, setFilterVendedor] = useState<string>('all')
   const [expandedClienteId, setExpandedClienteId] = useState<string | null>(null)
   const [analysisMap, setAnalysisMap] = useState<Record<string, { loading: boolean; text: string | null }>>({})
+
+  const [expandedParetoId, setExpandedParetoId] = useState<string | null>(null)
+  const [paretoAnalysisMap, setParetoAnalysisMap] = useState<Record<string, { loading: boolean; text: string | null }>>({})
+
+  const handleAnalyzeTopCliente = useCallback(async (c: ParetoCliente) => {
+    const id = `pareto-${c.nombre}`
+    setParetoAnalysisMap(prev => ({ ...prev, [id]: { loading: true, text: null } }))
+    setExpandedParetoId(id)
+
+    const systemPrompt =
+      `Eres un analista comercial de una distribuidora.\n` +
+      `Responde SIEMPRE en este formato exacto, sin introducción ni cierre:\n\n` +
+      `📊 RESUMEN: [Una oración de máximo 15 palabras con el hallazgo principal]\n\n` +
+      `🔺 CRECIMIENTO:\n- [Dato positivo sobre este cliente — máximo 2 bullets]\n\n` +
+      `🔻 RIESGO:\n- [Dato sobre concentración, dependencia o caída potencial — máximo 2 bullets]\n\n` +
+      `💡 HALLAZGO: [Un dato concreto no obvio — con números específicos. NUNCA preguntas ni instrucciones operativas.]\n\n` +
+      `Reglas:\n` +
+      `- Máximo 120 palabras en total\n` +
+      `- Cada bullet debe tener un número concreto (%, unidades, días, USD)\n` +
+      `- Si una sección no aplica, omítela\n` +
+      `- NUNCA hagas preguntas al usuario\n` +
+      `- NUNCA des instrucciones operativas\n` +
+      `- Responde en español`
+
+    const userPrompt =
+      `Cliente top: ${c.nombre}\n` +
+      `Vendedor: ${c.vendedor}\n` +
+      `Unidades YTD: ${c.totalUnidades.toLocaleString()}\n` +
+      (dataAvailability.has_venta_neta ? `Venta neta YTD: ${configuracion.moneda} ${c.totalVenta.toLocaleString()}\n` : '') +
+      `Variación YoY: ${c.varPct != null ? `${c.varPct.toFixed(1)}%` : 'N/A'}\n` +
+      `Peso acumulado: ${c.cumulativePct.toFixed(1)}%\n` +
+      `Peso individual: ${c.peso.toFixed(1)}% del total`
+
+    try {
+      const json = await callAI(
+        [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+        { model: 'deepseek-chat', max_tokens: 300, temperature: 0.3 },
+      )
+      setParetoAnalysisMap(prev => ({ ...prev, [id]: { loading: false, text: json.choices?.[0]?.message?.content ?? 'Sin respuesta' } }))
+    } catch (err) {
+      setParetoAnalysisMap(prev => ({ ...prev, [id]: { loading: false, text: `Error: ${err instanceof Error ? err.message : 'Error al conectar.'}` } }))
+    }
+  }, [configuracion, dataAvailability.has_venta_neta])
 
   const handleAnalyzeCliente = useCallback(async (c: ClienteDormido) => {
     const id = c.cliente
@@ -585,10 +627,13 @@ export default function ClientesPage() {
                           </tr>
                         )
                       }
+                      const paretoKey = `pareto-${c.nombre}`
+                      const paretoAnalysis = paretoAnalysisMap[paretoKey]
+                      const isParetoExpanded = expandedParetoId === paretoKey
                       rows.push(
+                        <React.Fragment key={idx}>
                         <tr
-                          key={idx}
-                          style={{ borderBottom: '1px solid var(--sf-border)', transition: 'background 120ms' }}
+                          style={{ borderBottom: isParetoExpanded ? 'none' : '1px solid var(--sf-border)', transition: 'background 120ms' }}
                           onMouseEnter={e => (e.currentTarget.style.background = 'var(--sf-hover)')}
                           onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                         >
@@ -619,17 +664,18 @@ export default function ClientesPage() {
                           </td>
                           <td style={{ padding: '9px 16px', textAlign: 'right' }}>
                             <button
-                              onClick={() => {
-                                setChatContextCliente({ tipo: 'top', nombre: c.nombre, vendedor: c.vendedor, totalUnidades: c.totalUnidades, totalVenta: c.totalVenta, varPct: c.varPct, cumulativePct: c.cumulativePct })
-                                navigate('/chat?cliente=' + encodeURIComponent(c.nombre))
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleAnalyzeTopCliente(c)
                               }}
+                              disabled={paretoAnalysis?.loading}
                               title="Analizar con IA"
                               style={{
                                 background: 'rgba(29,158,117,0.12)',
                                 border: '1px solid rgba(29,158,117,0.35)',
                                 borderRadius: '8px',
                                 padding: '6px 12px',
-                                cursor: 'pointer',
+                                cursor: paretoAnalysis?.loading ? 'wait' : 'pointer',
                                 fontSize: '12px',
                                 fontWeight: 500,
                                 color: '#1D9E75',
@@ -639,21 +685,102 @@ export default function ClientesPage() {
                                 whiteSpace: 'nowrap',
                                 transition: 'all 150ms',
                                 marginLeft: 'auto',
+                                opacity: paretoAnalysis?.loading ? 0.6 : 1,
                               }}
                               onMouseEnter={e => {
-                                e.currentTarget.style.background = 'rgba(29,158,117,0.22)'
-                                e.currentTarget.style.borderColor = 'rgba(29,158,117,0.6)'
+                                if (!paretoAnalysis?.loading) {
+                                  e.currentTarget.style.background = 'rgba(29,158,117,0.22)'
+                                  e.currentTarget.style.borderColor = 'rgba(29,158,117,0.6)'
+                                }
                               }}
                               onMouseLeave={e => {
                                 e.currentTarget.style.background = 'rgba(29,158,117,0.12)'
                                 e.currentTarget.style.borderColor = 'rgba(29,158,117,0.35)'
                               }}
                             >
-                              <span style={{ fontSize: '13px' }}>✦</span>
-                              Analizar
+                              {paretoAnalysis?.loading ? (
+                                <>
+                                  <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                                  </svg>
+                                  Analizando…
+                                </>
+                              ) : paretoAnalysis?.text ? (
+                                <>
+                                  <span style={{ fontSize: '13px' }}>✦</span>
+                                  Regenerar
+                                </>
+                              ) : (
+                                <>
+                                  <span style={{ fontSize: '13px' }}>✦</span>
+                                  Analizar
+                                </>
+                              )}
                             </button>
                           </td>
                         </tr>
+                        {/* Inline analysis panel */}
+                        {isParetoExpanded && (paretoAnalysis?.loading || paretoAnalysis?.text) && (
+                          <tr>
+                            <td colSpan={7} style={{ padding: 0, borderBottom: '1px solid var(--sf-border)' }}>
+                              <div style={{ padding: '16px 24px', background: 'var(--sf-inset)', borderTop: '1px solid var(--sf-border)' }}>
+                                {paretoAnalysis.loading ? (
+                                  <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--sf-t4)' }}>
+                                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                                    </svg>
+                                    Analizando cliente…
+                                  </div>
+                                ) : paretoAnalysis.text ? (
+                                  <>
+                                    <div className="text-[13px] leading-relaxed whitespace-pre-line" style={{ color: 'var(--sf-t3)' }}>
+                                      {paretoAnalysis.text}
+                                    </div>
+                                    <button
+                                      onClick={() => {
+                                        const displayMessage = `Profundizar: cliente ${c.nombre} (${c.peso.toFixed(1)}% del total)`
+                                        const fullContext = [
+                                          `Profundizar sobre cliente top: ${c.nombre}`,
+                                          `Vendedor: ${c.vendedor}`,
+                                          `Unidades YTD: ${c.totalUnidades.toLocaleString()}`,
+                                          dataAvailability.has_venta_neta ? `Venta neta YTD: ${moneda} ${c.totalVenta.toLocaleString()}` : '',
+                                          `Variación YoY: ${c.varPct != null ? `${c.varPct.toFixed(1)}%` : 'N/A'}`,
+                                          `Peso: ${c.peso.toFixed(1)}% del total`,
+                                          paretoAnalysis.text ? `\nAnálisis previo:\n${paretoAnalysis.text}` : '',
+                                          ``,
+                                          `Con base en este análisis, profundiza: ¿este cliente está creciendo o decreciendo, qué productos compra, hay riesgo de concentración, qué vendedor lo atiende?`
+                                        ].filter(Boolean).join('\n')
+                                        navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage } })
+                                      }}
+                                      style={{
+                                        marginTop: '12px',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '6px',
+                                        padding: '6px 14px',
+                                        borderRadius: '8px',
+                                        border: '1px solid rgba(29,158,117,0.35)',
+                                        background: 'rgba(29,158,117,0.08)',
+                                        color: '#1D9E75',
+                                        fontSize: '12px',
+                                        fontWeight: 600,
+                                        cursor: 'pointer',
+                                        transition: 'all 150ms',
+                                      }}
+                                      onMouseEnter={e => (e.currentTarget.style.opacity = '0.8')}
+                                      onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
+                                    >
+                                      + Profundizar
+                                    </button>
+                                  </>
+                                ) : null}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                        </React.Fragment>
                       )
                     })
                     return rows
