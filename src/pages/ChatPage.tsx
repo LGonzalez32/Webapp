@@ -486,10 +486,10 @@ export default function ChatPage() {
 
   // Enviar pregunta desde ?q= al montar (puente desde EstadoComercialPage)
   useEffect(() => {
-    const stateData = location.state as any
+    const stateData = location.state as { prefill?: string; displayPrefill?: string } | null
     const pregunta = searchParams.get('q') || stateData?.prefill
     if (!pregunta) return
-    const display = stateData?.displayPrefill as string | undefined
+    const display = stateData?.displayPrefill
     const timer = setTimeout(() => handleSend(pregunta, display), 800)
     // Limpiar state de navegación para evitar re-envío en re-render
     window.history.replaceState({}, '', '/chat')
@@ -514,8 +514,9 @@ export default function ChatPage() {
       const { cleanContent: c1, chart } = parseChartBlock(response)
       const { cleanContent, followUps } = parseFollowUps(c1)
       addChatMessage({ role: 'assistant', content: cleanContent, timestamp: new Date(), followUps, chart })
-    } catch (error: any) {
-      const msg = ERROR_MESSAGES[error.message] ?? ERROR_MESSAGES['API_ERROR']
+    } catch (error: unknown) {
+      const errorKey = error instanceof Error ? error.message : 'API_ERROR'
+      const msg = ERROR_MESSAGES[errorKey] ?? ERROR_MESSAGES['API_ERROR']
       addChatMessage({ role: 'assistant', content: `❌ ${msg}`, timestamp: new Date() })
     } finally {
       setIsLoading(false)
@@ -547,8 +548,9 @@ export default function ChatPage() {
         chart,
         ...(nav ? { navegacion: nav } : {}),
       })
-    } catch (error: any) {
-      const msg = ERROR_MESSAGES[error.message] ?? ERROR_MESSAGES['API_ERROR']
+    } catch (error: unknown) {
+      const errorKey = error instanceof Error ? error.message : 'API_ERROR'
+      const msg = ERROR_MESSAGES[errorKey] ?? ERROR_MESSAGES['API_ERROR']
       addChatMessage({ role: 'assistant', content: `❌ ${msg}`, timestamp: new Date() })
     } finally {
       setIsLoading(false)
@@ -575,8 +577,9 @@ export default function ChatPage() {
         timestamp: new Date(),
         isDeepAnalysis: true,
       })
-    } catch (error: any) {
-      const msg = ERROR_MESSAGES[error.message] ?? ERROR_MESSAGES['API_ERROR']
+    } catch (error: unknown) {
+      const errorKey = error instanceof Error ? error.message : 'API_ERROR'
+      const msg = ERROR_MESSAGES[errorKey] ?? ERROR_MESSAGES['API_ERROR']
       addChatMessage({ role: 'assistant', content: `❌ ${msg}`, timestamp: new Date() })
     } finally {
       setIsDeepLoading(false)

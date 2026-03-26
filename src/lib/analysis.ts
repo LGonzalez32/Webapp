@@ -44,7 +44,7 @@ function weekKey(date: Date): string {
   const day = d.getDay()
   const diff = d.getDate() - day + (day === 0 ? -6 : 1)
   d.setDate(diff)
-  return `${d.getFullYear()}-${d.getMonth()}-W${Math.ceil(d.getDate() / 7)}`
+  return `${d.getFullYear()}-${String(d.getMonth()).padStart(2, '0')}-W${Math.ceil(d.getDate() / 7)}`
 }
 
 // ─── ÍNDICE DE VENTAS ─────────────────────────────────────────────────────────
