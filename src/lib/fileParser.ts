@@ -702,5 +702,6 @@ export function detectDataAvailability(sales: SaleRecord[]): Omit<DataAvailabili
     has_categoria: sales.some((s) => s.categoria != null && s.categoria !== ''),
     has_canal: sales.some((s) => s.canal != null && s.canal !== ''),
     has_supervisor: sales.some((s) => s.supervisor != null && s.supervisor !== ''),
+    has_departamento: sales.some((s) => s.departamento != null && s.departamento !== ''),
   }
 }

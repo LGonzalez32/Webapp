@@ -40,6 +40,7 @@ const DEFAULT_AVAILABILITY: DataAvailability = {
   has_categoria: false,
   has_canal: false,
   has_supervisor: false,
+  has_departamento: false,
   has_metas: false,
   has_inventario: false,
 }

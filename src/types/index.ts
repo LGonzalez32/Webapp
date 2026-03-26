@@ -46,6 +46,7 @@ export interface DataAvailability {
   has_categoria: boolean
   has_canal: boolean
   has_supervisor: boolean
+  has_departamento: boolean
   has_metas: boolean
   has_inventario: boolean
 }

@@ -108,6 +108,7 @@ self.onmessage = (event: MessageEvent<WorkerInput | EnrichInput>) => {
     has_categoria:  index.has_categoria,
     has_canal:      index.has_canal,
     has_supervisor: index.has_supervisor,
+    has_departamento: index.has_departamento,
     has_metas:      metas.length > 0,
     has_inventario: inventory.length > 0,
   }

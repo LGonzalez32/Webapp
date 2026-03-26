@@ -62,6 +62,7 @@ export interface SaleIndex {
   has_categoria: boolean
   has_canal: boolean
   has_supervisor: boolean
+  has_departamento: boolean
 }
 
 function appendToMap<K>(map: Map<K, SaleRecord[]>, key: K, s: SaleRecord): void {
@@ -77,7 +78,7 @@ export function buildSaleIndex(sales: SaleRecord[]): SaleIndex {
   const byClient = new Map<string, SaleRecord[]>()
   let fechaReferencia = new Date(0)
   let has_producto = false, has_cliente = false, has_venta_neta = false
-  let has_categoria = false, has_canal = false, has_supervisor = false
+  let has_categoria = false, has_canal = false, has_supervisor = false, has_departamento = false
 
   for (const s of sales) {
     if (s.fecha > fechaReferencia) fechaReferencia = s.fecha
@@ -91,11 +92,12 @@ export function buildSaleIndex(sales: SaleRecord[]): SaleIndex {
     if (!has_categoria && s.categoria != null && s.categoria !== '') has_categoria = true
     if (!has_canal && s.canal != null && s.canal !== '') has_canal = true
     if (!has_supervisor && s.supervisor != null && s.supervisor !== '') has_supervisor = true
+    if (!has_departamento && s.departamento != null && s.departamento !== '') has_departamento = true
   }
 
   return {
     byPeriod, byVendor, byProduct, byClient, fechaReferencia,
-    has_producto, has_cliente, has_venta_neta, has_categoria, has_canal, has_supervisor,
+    has_producto, has_cliente, has_venta_neta, has_categoria, has_canal, has_supervisor, has_departamento,
   }
 }
 

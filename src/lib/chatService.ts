@@ -359,6 +359,84 @@ Variación vs período anterior: ${teamStats?.variacion_pct != null ? teamStats.
     }
   }
 
+  // ─── Departamentos ──────────────────────────────────────────────────────────
+  if (dataAvailability.has_departamento) {
+    const currentYear = año
+    const previousYear = currentYear - 1
+    const currentMonth = selectedPeriod.month
+
+    // Pre-filtrar por año y mes para no iterar sales completas por cada departamento
+    const salesCY: SaleRecord[] = []
+    const salesPY: SaleRecord[] = []
+    const deptMap = new Map<string, { actual: number; anterior: number }>()
+
+    for (const sale of sales) {
+      const d = toDate(sale.fecha)
+      const yr = d.getFullYear()
+      const mo = d.getMonth()
+      if (mo > currentMonth) continue
+      if (!sale.departamento) continue
+      const dept = sale.departamento.trim()
+      if (!dept) continue
+
+      if (!deptMap.has(dept)) deptMap.set(dept, { actual: 0, anterior: 0 })
+      const entry = deptMap.get(dept)!
+
+      if (yr === currentYear) {
+        entry.actual += sale.unidades
+        salesCY.push(sale)
+      } else if (yr === previousYear) {
+        entry.anterior += sale.unidades
+        salesPY.push(sale)
+      }
+    }
+
+    const depts = Array.from(deptMap.entries())
+      .map(([name, data]) => ({
+        name,
+        actual: data.actual,
+        anterior: data.anterior,
+        variacion: data.anterior > 0 ? ((data.actual - data.anterior) / data.anterior * 100) : 0,
+      }))
+      .sort((a, b) => b.actual - a.actual)
+
+    if (depts.length > 0) {
+      const totalActual = depts.reduce((s, d) => s + d.actual, 0)
+      const topDepts = depts.slice(0, 10)
+
+      p += '\n\n════════════════════\nDEPARTAMENTOS (' + depts.length + ' con datos)\n════════════════════'
+
+      for (const dept of topDepts) {
+        const pctTotal = totalActual > 0 ? (dept.actual / totalActual * 100).toFixed(1) : '0'
+        const varSign = dept.variacion >= 0 ? '+' : ''
+        p += `\n${dept.name}: ${dept.actual.toLocaleString()} uds YTD (${varSign}${dept.variacion.toFixed(1)}% vs ${previousYear}) — ${pctTotal}% del total`
+
+        // Top 3 vendedores de este departamento (usando salesCY pre-filtrado)
+        const vendedoresDept = new Map<string, number>()
+        for (const sale of salesCY) {
+          if (sale.departamento?.trim() === dept.name) {
+            vendedoresDept.set(sale.vendedor, (vendedoresDept.get(sale.vendedor) || 0) + sale.unidades)
+          }
+        }
+        const topVendedores = Array.from(vendedoresDept.entries())
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 3)
+
+        if (topVendedores.length > 0) {
+          p += `\n  Vendedores: ${topVendedores.map(([v, u]) => `${v} (${u.toLocaleString()})`).join(', ')}`
+        }
+      }
+
+      if (depts.length > 10) {
+        p += `\n(${depts.length - 10} departamentos adicionales omitidos por brevedad)`
+      }
+
+      const enCrecimiento = depts.filter(d => d.variacion > 0).length
+      const enCaida = depts.filter(d => d.variacion < 0).length
+      p += `\nResumen: ${enCrecimiento} departamentos creciendo, ${enCaida} en caída vs ${previousYear}`
+    }
+  }
+
   // ─── Concentración clientes ───────────────────────────────────────────────
   if (dataAvailability.has_cliente && concentracionRiesgo.length > 0) {
     p += '\n\n════════════════════\nCLIENTES CONCENTRACIÓN\n════════════════════'
