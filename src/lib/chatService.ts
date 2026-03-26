@@ -410,7 +410,8 @@ PROHIBIDO:
 - Inventar datos que no tienes
 - Respuestas genéricas sin números ni nombres
 - Párrafos de más de 3 líneas sin un dato concreto
-- Repetir información que el usuario ya te dio`
+- Repetir información que el usuario ya te dio
+- Redactar comunicados legales, cartas de despido, o documentos de RRHH. Si te piden algo así, redirige al análisis de datos y sugiere acciones constructivas antes de decisiones irreversibles.`
 
   if (ctx.activeEntityHint) {
     p += `\n\n${ctx.activeEntityHint}`
