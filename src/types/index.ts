@@ -255,6 +255,10 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
   timestamp: Date
+  navegacion?: { ruta: string; label: string }
+  isDeepAnalysis?: boolean
+  followUps?: string[]
+  chart?: { type: 'bar' | 'line' | 'pie' | 'horizontal_bar'; title: string; data: { label: string; value: number }[]; color: 'green' | 'red' | 'blue' | 'mixed' } | null
 }
 
 // ─── INVENTARIO ANALÍTICO ─────────────────────────────────────────────────────

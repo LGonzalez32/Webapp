@@ -18,6 +18,7 @@ import type {
   CategoriaAnalysis,
   CanalAnalysis,
   ChatClienteContext,
+  ChatMessage,
 } from '../types'
 
 const DEFAULT_CONFIG: Configuracion = {
@@ -65,6 +66,7 @@ interface AppState {
   // Contexto temporal para chat (no persistido)
   chatContextVendedor: VendorAnalysis | null
   chatContextCliente: ChatClienteContext | null
+  chatMessages: ChatMessage[]
 
   // Forecast del backend
   forecastData: ForecastData | null
@@ -107,6 +109,9 @@ interface AppState {
   setConfiguracion: (config: Partial<Configuracion>) => void
   setChatContextVendedor: (v: VendorAnalysis | null) => void
   setChatContextCliente: (c: ChatClienteContext | null) => void
+  setChatMessages: (messages: ChatMessage[]) => void
+  addChatMessage: (message: ChatMessage) => void
+  clearChatMessages: () => void
   setForecastData: (data: ForecastData | null) => void
   setForecastLoading: (loading: boolean) => void
   setForecastChartLoading: (loading: boolean) => void
@@ -134,6 +139,7 @@ export const useAppStore = create<AppState>()(
       dataAvailability: DEFAULT_AVAILABILITY,
       chatContextVendedor: null,
       chatContextCliente: null,
+      chatMessages: [],
       forecastData: null,
       forecastLoading: false,
       forecastChartLoading: false,
@@ -174,6 +180,9 @@ export const useAppStore = create<AppState>()(
         })),
       setChatContextVendedor: (chatContextVendedor) => set({ chatContextVendedor }),
       setChatContextCliente: (chatContextCliente) => set({ chatContextCliente }),
+      setChatMessages: (chatMessages) => set({ chatMessages }),
+      addChatMessage: (message) => set((state) => ({ chatMessages: [...state.chatMessages, message] })),
+      clearChatMessages: () => set({ chatMessages: [] }),
       setForecastData: (forecastData) => set({ forecastData }),
       setForecastLoading: (forecastLoading) => set({ forecastLoading }),
       setForecastChartLoading: (forecastChartLoading) => set({ forecastChartLoading }),
@@ -184,6 +193,7 @@ export const useAppStore = create<AppState>()(
           sales: [],
           metas: [],
           inventory: [],
+          chatMessages: [],
           vendorAnalysis: [],
           teamStats: null,
           insights: [],

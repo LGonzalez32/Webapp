@@ -616,19 +616,35 @@ export default function DepartamentosPage() {
               </div>
 
               {/* Info panel en hover */}
-              <div style={{ borderTop: '1px solid var(--sf-border)', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: '24px', minHeight: '42px' }}>
+              <div style={{ borderTop: '1px solid var(--sf-border)', padding: '10px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', minHeight: '42px' }}>
                 {hovered && hovData ? (
                   <>
-                    <span style={{ fontSize: '13px', fontWeight: 600, minWidth: '120px' }}>{hovered}</span>
-                    <span style={{ fontSize: '12px', opacity: 0.7 }}>{hovData.ytdActual.toLocaleString()} uds</span>
-                    {hovData.ytdAnterior > 0 && (
-                      <span style={{ fontSize: '12px', opacity: 0.4 }}>{hovData.ytdAnterior.toLocaleString()} uds</span>
-                    )}
-                    {hovData.variacion_pct != null && (
-                      <span style={{ fontSize: '13px', fontWeight: 700, color: hovData.status === 'arriba' ? '#1D9E75' : '#E24B4A' }}>
-                        {hovData.variacion_pct > 0 ? '+' : ''}{hovData.variacion_pct}%
-                      </span>
-                    )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+                      <span style={{ fontSize: '13px', fontWeight: 600, minWidth: '120px' }}>{hovered}</span>
+                      <span style={{ fontSize: '12px', opacity: 0.7 }}>{hovData.ytdActual.toLocaleString()} uds</span>
+                      {hovData.ytdAnterior > 0 && (
+                        <span style={{ fontSize: '12px', opacity: 0.4 }}>{hovData.ytdAnterior.toLocaleString()} uds</span>
+                      )}
+                      {hovData.variacion_pct != null && (
+                        <span style={{ fontSize: '13px', fontWeight: 700, color: hovData.status === 'arriba' ? '#1D9E75' : '#E24B4A' }}>
+                          {hovData.variacion_pct > 0 ? '+' : ''}{hovData.variacion_pct}%
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleDeptoClick(hovered, hovData) }}
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 4,
+                        padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600,
+                        color: '#1D9E75', background: 'rgba(29,158,117,0.06)',
+                        border: '1px solid rgba(29,158,117,0.15)', cursor: 'pointer',
+                        transition: 'all 0.15s', whiteSpace: 'nowrap',
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.background = 'rgba(29,158,117,0.14)'; e.currentTarget.style.borderColor = 'rgba(29,158,117,0.35)' }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'rgba(29,158,117,0.06)'; e.currentTarget.style.borderColor = 'rgba(29,158,117,0.15)' }}
+                    >
+                      ✦ IA
+                    </button>
                   </>
                 ) : (
                   <span style={{ fontSize: '12px', opacity: 0.35, fontStyle: 'italic' }}>Selecciona un departamento en el mapa</span>

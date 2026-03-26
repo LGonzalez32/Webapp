@@ -4,24 +4,12 @@ import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
 import { sendChatMessage, sendDeepAnalysis, parseFollowUps, parseChartBlock } from '../lib/chatService'
 import type { ChartData } from '../lib/chatService'
-import type { ChatMessage as BaseChatMessage } from '../types'
+import type { ChatMessage as BaseChatMessage, ChatMessage } from '../types'
 import type { ChatContext } from '../lib/chatService'
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import { Send, Loader2, Zap, ArrowRight, ExternalLink, BrainCircuit } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { format } from 'date-fns'
-
-// ─── Tipos locales ─────────────────────────────────────────────────────────────
-
-interface ChatMessage {
-  role: 'user' | 'assistant'
-  content: string
-  timestamp: Date
-  navegacion?: { ruta: string; label: string }
-  isDeepAnalysis?: boolean
-  followUps?: string[]
-  chart?: ChartData | null
-}
 
 const ERROR_MESSAGES: Record<string, string> = {
   CONFIG_MISSING: 'El asistente IA no está configurado en el servidor.',
@@ -381,9 +369,8 @@ export default function ChatPage() {
     isProcessed, vendorAnalysis, teamStats, insights, clientesDormidos,
     concentracionRiesgo, categoriasInventario, dataAvailability,
     configuracion, selectedPeriod, sales,
+    chatMessages: messages, setChatMessages: setMessages, addChatMessage,
   } = useAppStore()
-
-  const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [isDeepLoading, setIsDeepLoading] = useState(false)
@@ -475,7 +462,7 @@ export default function ChatPage() {
 
   // Auto-bienvenida al montar (una sola vez, cuando hay datos + key)
   useEffect(() => {
-    if (welcomeSentRef.current || !isProcessed) return
+    if (welcomeSentRef.current || !isProcessed || messages.length > 0) return
     welcomeSentRef.current = true
     setIsLoading(true)
     const initMsg: ChatMessage = {
@@ -513,7 +500,7 @@ export default function ChatPage() {
     const ctx = buildCtxWithEntity(entity ?? activeEntity)
 
     const userMsg: ChatMessage = { role: 'user', content: text, timestamp: new Date() }
-    setMessages((prev) => [...prev, userMsg])
+    addChatMessage(userMsg)
     setInput('')
     setIsLoading(true)
 
@@ -522,10 +509,10 @@ export default function ChatPage() {
       const response = await sendChatMessage(toApi(allMessages), ctx)
       const { cleanContent: c1, chart } = parseChartBlock(response)
       const { cleanContent, followUps } = parseFollowUps(c1)
-      setMessages((prev) => [...prev, { role: 'assistant', content: cleanContent, timestamp: new Date(), followUps, chart }])
+      addChatMessage({ role: 'assistant', content: cleanContent, timestamp: new Date(), followUps, chart })
     } catch (error: any) {
       const msg = ERROR_MESSAGES[error.message] ?? ERROR_MESSAGES['API_ERROR']
-      setMessages((prev) => [...prev, { role: 'assistant', content: `❌ ${msg}`, timestamp: new Date() }])
+      addChatMessage({ role: 'assistant', content: `❌ ${msg}`, timestamp: new Date() })
     } finally {
       setIsLoading(false)
     }
@@ -540,7 +527,7 @@ export default function ChatPage() {
 
     setProfundizandoIndex(index)
     const userMsg: ChatMessage = { role: 'user', content: prompt, timestamp: new Date() }
-    setMessages((prev) => [...prev, userMsg])
+    addChatMessage(userMsg)
     setIsLoading(true)
 
     try {
@@ -548,17 +535,17 @@ export default function ChatPage() {
       const response = await sendChatMessage(toApi(allMessages), buildCtxWithEntity(activeEntity))
       const { cleanContent: c1, chart } = parseChartBlock(response)
       const { cleanContent, followUps } = parseFollowUps(c1)
-      setMessages((prev) => [...prev, {
+      addChatMessage({
         role: 'assistant',
         content: cleanContent,
         timestamp: new Date(),
         followUps,
         chart,
         ...(nav ? { navegacion: nav } : {}),
-      }])
+      })
     } catch (error: any) {
       const msg = ERROR_MESSAGES[error.message] ?? ERROR_MESSAGES['API_ERROR']
-      setMessages((prev) => [...prev, { role: 'assistant', content: `❌ ${msg}`, timestamp: new Date() }])
+      addChatMessage({ role: 'assistant', content: `❌ ${msg}`, timestamp: new Date() })
     } finally {
       setIsLoading(false)
       setProfundizandoIndex(null)
@@ -573,20 +560,20 @@ export default function ChatPage() {
       content: 'Dame un análisis profundo del negocio',
       timestamp: new Date(),
     }
-    setMessages((prev) => [...prev, userMsg])
+    addChatMessage(userMsg)
     setIsDeepLoading(true)
 
     try {
       const response = await sendDeepAnalysis(chatContext)
-      setMessages((prev) => [...prev, {
+      addChatMessage({
         role: 'assistant',
         content: response,
         timestamp: new Date(),
         isDeepAnalysis: true,
-      }])
+      })
     } catch (error: any) {
       const msg = ERROR_MESSAGES[error.message] ?? ERROR_MESSAGES['API_ERROR']
-      setMessages((prev) => [...prev, { role: 'assistant', content: `❌ ${msg}`, timestamp: new Date() }])
+      addChatMessage({ role: 'assistant', content: `❌ ${msg}`, timestamp: new Date() })
     } finally {
       setIsDeepLoading(false)
     }

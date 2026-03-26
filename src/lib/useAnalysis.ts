@@ -171,6 +171,8 @@ export function useAnalysis() {
 
     return () => {
       worker.terminate()
+      workerRef.current = null
+      runningRef.current = false
     }
   }, [sales, metas, inventory, isProcessed, selectedPeriod, configuracion]) // eslint-disable-line
 }
