@@ -184,7 +184,7 @@ export default function VendedoresPage() {
   // ── Redirect cuando no hay datos ──────────────────────────────────────────
   useEffect(() => {
     if (sales.length === 0 && dataSource === 'none') navigate('/')
-  }, [sales.length, dataSource]) // eslint-disable-line
+  }, [sales.length, dataSource, navigate])
 
   // ── Early returns ──────────────────────────────────────────────────────────
   if (sales.length === 0) return null
@@ -267,7 +267,7 @@ export default function VendedoresPage() {
     return (
       <button
         onClick={() => handleSort(col)}
-        className={cn(colCls, `flex items-center justify-${justify}`)}
+        className={cn(colCls, 'flex items-center', justify === 'start' ? 'justify-start' : justify === 'center' ? 'justify-center' : 'justify-end')}
         style={{
           color: isActive ? 'var(--sf-t1)' : 'var(--sf-t5)',
           cursor: 'pointer',

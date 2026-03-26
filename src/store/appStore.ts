@@ -199,6 +199,8 @@ export const useAppStore = create<AppState>()(
           metas: [],
           inventory: [],
           chatMessages: [],
+          chatContextVendedor: null,
+          chatContextCliente: null,
           vendorAnalysis: [],
           teamStats: null,
           insights: [],
@@ -233,6 +235,7 @@ export const useAppStore = create<AppState>()(
         },
         configuracion: {
           ...DEFAULT_CONFIG,
+          ...(persistedState?.configuracion ?? {}),
         },
         orgId: persistedState?.orgId ?? '',
         dataSource: persistedState?.dataSource ?? 'none',
