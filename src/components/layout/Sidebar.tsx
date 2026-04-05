@@ -3,7 +3,7 @@ import type { ComponentType } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
   AlertTriangle, Users, TrendingUp, UserCheck, Target,
-  Bot, Upload, Settings, Menu, X as CloseIcon, Zap, RotateCcw, LogOut, Building2, Map,
+  Bot, Upload, Settings, Menu, X as CloseIcon, Zap, RotateCcw, LogOut, Map, Building2,
 } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { useAppStore } from '../../store/appStore'
@@ -15,15 +15,15 @@ interface NavItem {
   label: string
   href: string
   icon: ComponentType<{ className?: string }>
-  condition?: boolean
 }
 
 export default function Sidebar() {
   const location = useLocation()
   const navigate = useNavigate()
-  const { dataAvailability, configuracion, isProcessed, resetAll } = useAppStore()
+  const { configuracion, resetAll } = useAppStore()
   const { user } = useAuthStore()
   const org = useOrgStore(s => s.org)
+  const currentRole = useOrgStore(s => s.currentRole)
   const [isOpen, setIsOpen] = useState(false)
 
   const handleLogout = async () => {
@@ -35,19 +35,21 @@ export default function Sidebar() {
   const PRINCIPAL: NavItem[] = [
     { label: 'Estado Comercial', href: '/dashboard', icon: AlertTriangle },
     { label: 'Vendedores',       href: '/vendedores', icon: Users },
-    { label: 'Rendimiento Anual',href: '/rendimiento', icon: TrendingUp },
+    { label: 'Metas',            href: '/metas',      icon: Target },
   ]
 
   const ANALISIS: NavItem[] = [
-    { label: 'Clientes',       href: '/clientes',       icon: UserCheck, condition: dataAvailability.has_cliente },
-    { label: 'Rotación',       href: '/rotacion',       icon: RotateCcw, condition: dataAvailability.has_inventario },
-    { label: 'Metas',          href: '/metas',          icon: Target,    condition: dataAvailability.has_metas },
-    { label: 'Departamentos',  href: '/departamentos',  icon: Map },
-  ].filter((i) => i.condition !== false)
+    { label: 'Clientes',        href: '/clientes',    icon: UserCheck },
+    { label: 'Rotación',        href: '/rotacion',    icon: RotateCcw },
+    { label: 'Departamentos',   href: '/departamentos', icon: Map },
+    { label: 'Rendimiento Anual', href: '/rendimiento', icon: TrendingUp },
+  ]
 
+  // currentRole null means we couldn't determine — default to showing everything
+  const isViewer = currentRole === 'viewer'
   const HERRAMIENTAS: NavItem[] = [
     { label: 'Chat IA',        href: '/chat',          icon: Bot },
-    { label: 'Cargar datos',   href: '/cargar',        icon: Upload },
+    ...(!isViewer ? [{ label: 'Cargar datos',   href: '/cargar',        icon: Upload }] : []),
     { label: 'Organización',   href: '/organizacion',  icon: Building2 },
     { label: 'Configuración',  href: '/configuracion', icon: Settings },
   ]
@@ -69,7 +71,7 @@ export default function Sidebar() {
           : { color: 'var(--sf-t4)' }
         }
       >
-        <item.icon className="w-4 h-4 shrink-0" style={{ color: active ? 'var(--sf-green)' : 'var(--sf-t6)' }} />
+        <item.icon className="w-4 h-4 shrink-0" style={{ color: active ? 'var(--sf-green)' : 'var(--sf-t4)' }} />
         {item.label}
       </Link>
     )
@@ -79,7 +81,7 @@ export default function Sidebar() {
     <div className="flex flex-col h-full">
       {/* Logo */}
       <div className="px-5 py-6" style={{ borderBottom: '1px solid var(--sf-border-subtle)' }}>
-        <Link to="/" className="flex items-center gap-2.5" onClick={() => setIsOpen(false)}>
+        <Link to="/dashboard" className="flex items-center gap-2.5" onClick={() => setIsOpen(false)}>
           <div className="w-8 h-8 bg-[#00D68F] rounded-lg flex items-center justify-center shrink-0">
             <Zap className="w-4 h-4 text-white dark:text-[#020C18]" />
           </div>
@@ -102,13 +104,11 @@ export default function Sidebar() {
           {PRINCIPAL.map((item) => <NavLink key={item.href} item={item} />)}
         </div>
 
-        {/* Análisis — solo si hay datos */}
-        {isProcessed && ANALISIS.length > 0 && (
-          <div className="space-y-0.5">
-            <p className="px-4 text-[9px] font-bold uppercase tracking-widest mb-2" style={{ color: 'var(--sf-t7)' }}>Análisis</p>
-            {ANALISIS.map((item) => <NavLink key={item.href} item={item} />)}
-          </div>
-        )}
+        {/* Análisis */}
+        <div className="space-y-0.5">
+          <p className="px-4 text-[9px] font-bold uppercase tracking-widest mb-2" style={{ color: 'var(--sf-t7)' }}>Análisis</p>
+          {ANALISIS.map((item) => <NavLink key={item.href} item={item} />)}
+        </div>
 
         {/* Herramientas */}
         <div className="space-y-0.5">
@@ -120,9 +120,20 @@ export default function Sidebar() {
       {/* Footer — usuario + logout */}
       <div className="px-4 py-4 space-y-3" style={{ borderTop: '1px solid var(--sf-border-subtle)' }}>
         {user?.email && (
-          <p className="px-1 text-[11px] font-medium truncate" style={{ color: 'var(--sf-t6)' }} title={user.email}>
-            {user.email}
-          </p>
+          <div className="px-1 space-y-1">
+            <p className="text-[11px] font-medium truncate" style={{ color: 'var(--sf-t6)' }} title={user.email}>
+              {user.email}
+            </p>
+            <span className={`inline-block text-[9px] font-semibold px-1.5 py-0.5 rounded ${
+              (currentRole ?? 'owner') === 'owner'
+                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                : currentRole === 'editor'
+                  ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                  : 'bg-zinc-500/20 text-zinc-400 border border-zinc-500/30'
+            }`}>
+              {(currentRole ?? 'owner') === 'owner' ? 'Propietario' : currentRole === 'editor' ? 'Editor' : 'Visor'}
+            </span>
+          </div>
         )}
         <button
           onClick={handleLogout}
@@ -132,7 +143,9 @@ export default function Sidebar() {
           <LogOut className="w-4 h-4 shrink-0" />
           Cerrar sesión
         </button>
-        <p className="px-1 text-[10px]" style={{ color: 'var(--sf-t8)' }}>v2.0 · SalesFlow</p>
+        <div className="flex items-center px-1">
+          <p className="text-[10px]" style={{ color: 'var(--sf-t8)' }}>v2.0 · SalesFlow</p>
+        </div>
       </div>
     </div>
   )
@@ -140,12 +153,12 @@ export default function Sidebar() {
   return (
     <>
       {/* Desktop */}
-      <aside className="hidden lg:flex flex-col w-60 shrink-0 h-screen sticky top-0" style={{ background: 'var(--sf-sidebar)', borderRight: '1px solid var(--sf-border-subtle)' }}>
+      <aside className="sf-sidebar hidden md:flex flex-col w-60 shrink-0 h-screen sticky top-0" style={{ background: 'var(--sf-sidebar)', borderRight: '1px solid var(--sf-border-subtle)' }}>
         <SidebarContent />
       </aside>
 
       {/* Mobile hamburger */}
-      <div className="lg:hidden fixed top-4 left-4 z-50">
+      <div className="sf-sidebar md:hidden fixed top-4 left-4 z-50">
         <button
           onClick={() => setIsOpen(!isOpen)}
           className="w-10 h-10 rounded-xl flex items-center justify-center shadow-lg"
@@ -155,15 +168,23 @@ export default function Sidebar() {
         </button>
       </div>
 
-      {/* Mobile drawer */}
-      {isOpen && (
-        <>
-          <div className="lg:hidden fixed inset-0 bg-black/60 z-40" onClick={() => setIsOpen(false)} />
-          <aside className="lg:hidden fixed inset-y-0 left-0 w-64 z-50 flex flex-col shadow-2xl" style={{ background: 'var(--sf-sidebar)', borderRight: '1px solid var(--sf-border-subtle)' }}>
-            <SidebarContent />
-          </aside>
-        </>
-      )}
+      {/* Mobile drawer + backdrop */}
+      <div
+        className={cn(
+          'md:hidden fixed inset-0 bg-black/60 z-40 transition-opacity duration-250',
+          isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        )}
+        onClick={() => setIsOpen(false)}
+      />
+      <aside
+        className={cn(
+          'md:hidden fixed inset-y-0 left-0 w-64 z-50 flex flex-col shadow-2xl transition-transform duration-250 ease-out',
+          isOpen ? 'translate-x-0' : '-translate-x-full'
+        )}
+        style={{ background: 'var(--sf-sidebar)', borderRight: '1px solid var(--sf-border-subtle)' }}
+      >
+        <SidebarContent />
+      </aside>
     </>
   )
 }

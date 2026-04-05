@@ -1,8 +1,9 @@
 import { useState, type FormEvent } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { Zap, Loader2 } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { useAppStore } from '../store/appStore'
+import SEOHead from '../components/ui/SEOHead'
 
 type Mode = 'login' | 'register'
 
@@ -20,6 +21,7 @@ export default function AuthPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [acceptedTerms, setAcceptedTerms] = useState(false)
 
   const switchMode = (m: Mode) => {
     setMode(m)
@@ -51,6 +53,10 @@ export default function AuthPage() {
   }
 
   const handleRegister = async () => {
+    if (!acceptedTerms) {
+      setError('Debes aceptar los términos para registrarte.')
+      return
+    }
     if (password !== confirmPassword) {
       setError('Las contraseñas no coinciden.')
       return
@@ -103,6 +109,11 @@ export default function AuthPage() {
 
   return (
     <div className="min-h-screen bg-zinc-950 flex items-center justify-center px-4">
+      <SEOHead
+        title="Iniciar Sesión — SalesFlow"
+        description="Accede a tu cuenta de SalesFlow para monitorear el riesgo comercial de tu equipo de ventas."
+        noindex
+      />
       <div className="w-full max-w-[420px]">
         {/* Logo */}
         <div className="flex flex-col items-center mb-8">
@@ -206,10 +217,32 @@ export default function AuthPage() {
               </p>
             )}
 
+            {/* Checkbox de términos — solo en registro */}
+            {mode === 'register' && (
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={acceptedTerms}
+                  onChange={(e) => setAcceptedTerms(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 rounded border-zinc-600 accent-[#00B894] cursor-pointer"
+                />
+                <span className="text-sm text-zinc-400">
+                  Acepto los{' '}
+                  <Link to="/terminos" target="_blank" className="text-emerald-400 hover:underline">
+                    Términos de Servicio
+                  </Link>{' '}
+                  y la{' '}
+                  <Link to="/privacidad" target="_blank" className="text-emerald-400 hover:underline">
+                    Política de Privacidad
+                  </Link>
+                </span>
+              </label>
+            )}
+
             {/* Botón principal */}
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || (mode === 'register' && !acceptedTerms)}
               className="w-full bg-[#00B894] hover:bg-[#00a884] disabled:opacity-50 disabled:cursor-not-allowed text-black font-bold py-2.5 rounded-xl text-sm transition-colors flex items-center justify-center gap-2"
             >
               {loading && <Loader2 className="w-4 h-4 animate-spin" />}

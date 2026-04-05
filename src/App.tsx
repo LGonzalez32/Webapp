@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { HelmetProvider } from 'react-helmet-async'
 import AppLayout from './components/layout/AppLayout'
 import { RequireAuth } from './components/auth/RequireAuth'
 import { useAppStore, useStoreHydrated } from './store/appStore'
@@ -21,6 +22,10 @@ const AuthPage = lazy(() => import('./pages/AuthPage'))
 const AuthCallbackPage = lazy(() => import('./pages/AuthCallbackPage'))
 const OnboardingPage = lazy(() => import('./pages/OnboardingPage'))
 const InvitationPage = lazy(() => import('./pages/InvitationPage'))
+const LandingPage = lazy(() => import('./pages/LandingPage'))
+const PricingPage = lazy(() => import('./pages/PricingPage'))
+const TermsPage = lazy(() => import('./pages/TermsPage'))
+const PrivacyPage = lazy(() => import('./pages/PrivacyPage'))
 
 function LoadingFallback() {
   return (
@@ -41,10 +46,17 @@ export default function App() {
   }
 
   return (
+    <HelmetProvider>
     <BrowserRouter>
       <Suspense fallback={<LoadingFallback />}>
         <Routes>
-          {/* Rutas públicas */}
+          {/* Rutas públicas — marketing */}
+          <Route path="/" element={<LandingPage />} />
+          <Route path="/pricing" element={<PricingPage />} />
+          <Route path="/terminos" element={<TermsPage />} />
+          <Route path="/privacidad" element={<PrivacyPage />} />
+
+          {/* Rutas públicas — auth */}
           <Route path="/login" element={<AuthPage />} />
           <Route path="/auth/callback" element={<AuthCallbackPage />} />
           <Route path="/join/:orgId" element={<InvitationPage />} />
@@ -61,7 +73,7 @@ export default function App() {
             }
           >
             <Route
-              path="/"
+              path="/app"
               element={(isProcessed || dataSource !== 'none') ? <Navigate to="/dashboard" replace /> : <Navigate to="/cargar" replace />}
             />
             <Route path="/cargar" element={<UploadPage />} />
@@ -81,5 +93,6 @@ export default function App() {
         </Routes>
       </Suspense>
     </BrowserRouter>
+    </HelmetProvider>
   )
 }

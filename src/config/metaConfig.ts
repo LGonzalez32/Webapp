@@ -8,11 +8,11 @@ export const DIM_META: Record<string, { label: string; badge: string; color: str
   producto: { label: 'Producto', badge: 'PROD',  color: 'bg-teal-500/20 text-teal-300 border-teal-500/30' },
 }
 
-export const PIVOT_PRESETS: { label: string; dims: string[] }[] = [
-  { label: 'Mes · Vendedor',            dims: ['mes', 'vendedor'] },
-  { label: 'Vendedor · Mes',            dims: ['vendedor', 'mes'] },
-  { label: 'Canal · Cliente · Producto', dims: ['canal', 'cliente', 'producto'] },
-  { label: 'Canal · Cliente',           dims: ['canal', 'cliente'] },
+export const PIVOT_PRESETS: { id: string; label: string; icon: string; dims: string[]; requiresDim?: string }[] = [
+  { id: 'canal',    label: 'Por Canal',    icon: '🏪', dims: ['canal', 'vendedor'], requiresDim: 'canal' },
+  { id: 'vendedor', label: 'Por Vendedor', icon: '👤', dims: ['vendedor', 'cliente'] },
+  { id: 'producto', label: 'Por Producto', icon: '📦', dims: ['producto'], requiresDim: 'producto' },
+  { id: 'mensual',  label: 'Por Mes',      icon: '📅', dims: ['mes', 'canal'] },
 ]
 
 export const metaConfig = {

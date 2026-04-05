@@ -449,7 +449,54 @@ function insightClientesEnRiesgo(
       desc = `${d.cliente} · ${d.dias_sin_actividad} días sin comprar (frecuencia esperada: ${d.frecuencia_esperada_dias ?? 'N/A'} días). Recovery: ${d.recovery_label} (${d.recovery_score}/100).`
       if (da.has_venta_neta) totalImpacto += d.valor_historico
     } else {
-      desc = `${cr.cliente} · Cayó ${pct(Math.abs(cr.caida ?? 0))} vs ${month + 1}/${year - 1}. Compraba ${fmt(cr.histUnidades ?? 0)} uds en ese mes.`
+      const parts: string[] = [
+        `${cr.cliente} · Cayó ${pct(Math.abs(cr.caida ?? 0))} vs ${month + 1}/${year - 1}. Compraba ${fmt(cr.histUnidades ?? 0)} uds en ese mes.`,
+      ]
+      // Vendedor que atiende
+      if (cr.vendedor) parts.push(`Atendido por: ${cr.vendedor}.`)
+      // Top products that declined
+      if (da.has_producto) {
+        const curProds: Record<string, number> = {}
+        const prevProds: Record<string, number> = {}
+        salesInPeriod(sales, year, month).filter(s => s.cliente === cr.cliente && s.producto).forEach(s => {
+          curProds[s.producto!] = (curProds[s.producto!] ?? 0) + s.unidades
+        })
+        salesInPeriod(sales, prevYear.year, prevYear.month).filter(s => s.cliente === cr.cliente && s.producto).forEach(s => {
+          prevProds[s.producto!] = (prevProds[s.producto!] ?? 0) + s.unidades
+        })
+        const prodChanges = Object.keys({ ...curProds, ...prevProds }).map(p => ({
+          producto: p,
+          prev: prevProds[p] ?? 0,
+          cur: curProds[p] ?? 0,
+          diff: (curProds[p] ?? 0) - (prevProds[p] ?? 0),
+        })).filter(p => p.prev > 0 && p.diff < 0).sort((a, b) => a.diff - b.diff).slice(0, 3)
+        if (prodChanges.length > 0) {
+          parts.push(`Productos que más redujo: ${prodChanges.map(p => `${p.producto} (${p.prev > 0 ? `${Math.round(((p.cur - p.prev) / p.prev) * 100)}%` : '-100%'})`).join(', ')}.`)
+        }
+      }
+      // Consecutive months in decline
+      let mesesCaida = 0
+      for (let m = 0; m < 6; m++) {
+        const pm = prevPeriod(m === 0 ? year : (month - m < 0 ? year - 1 : year), m === 0 ? month : ((month - m + 12) % 12))
+        const curM = salesInPeriod(sales, pm.year === year - 1 && month - m >= 0 ? year : pm.year, (month - m + 12) % 12)
+          .filter(s => s.cliente === cr.cliente).reduce((a, s) => a + s.unidades, 0)
+        const prevM = salesInPeriod(sales, pm.year === year - 1 && month - m >= 0 ? year - 1 : pm.year - 1, (month - m + 12) % 12)
+          .filter(s => s.cliente === cr.cliente).reduce((a, s) => a + s.unidades, 0)
+        if (prevM > 0 && curM < prevM * 0.7) mesesCaida++
+        else break
+      }
+      if (mesesCaida >= 2) parts.push(`Tendencia: ${mesesCaida} meses consecutivos en caída.`)
+      // Canal
+      if (da.has_canal) {
+        const canalSales = sales.filter(s => s.cliente === cr.cliente && s.canal)
+        if (canalSales.length > 0) {
+          const canalMap: Record<string, number> = {}
+          canalSales.forEach(s => { canalMap[s.canal!] = (canalMap[s.canal!] ?? 0) + s.unidades })
+          const topCanal = Object.entries(canalMap).sort(([, a], [, b]) => b - a)[0]
+          if (topCanal) parts.push(`Canal: ${topCanal[0]}.`)
+        }
+      }
+      desc = parts.join(' ')
     }
     return {
       id: uid('cliente-riesgo'),
@@ -676,7 +723,8 @@ function insightProductosEnRiesgo(
       if (pr.vendedor) desc += ` Última venta: ${pr.vendedor}`
       if (pr.cliente) desc += ` a ${pr.cliente}`
       if (da.has_inventario && pr.unidadesActuales != null) {
-        desc += `. Stock: ${fmt(pr.unidadesActuales)} uds (${pr.diasInventario} días sin rotación)`
+        const rotLabel = (pr.diasInventario ?? 0) >= 9999 ? 'sin rotación registrada' : `${pr.diasInventario} días sin rotación`
+        desc += `. Stock: ${fmt(pr.unidadesActuales)} uds (${rotLabel})`
       }
     } else {
       desc = `${pr.producto} · Cayó ${pct(Math.abs(pr.caida ?? 0))} vs ${month + 1}/${year - 1} (vendía ${fmt(pr.ventasAnterior ?? 0)} uds).`
@@ -961,7 +1009,7 @@ function insightCaidaExplicada(
   return insights
 }
 
-// INSIGHT 13 — Cliente dormido × inventario estancado
+// INSIGHT 13 — Cliente dormido × inventario estancado (agrupado por cliente)
 function insightClienteDormidoInventario(
   dormidosNorm: DormidoNorm[],
   categoriasInventario: CategoriaInventario[],
@@ -976,23 +1024,33 @@ function insightClienteDormidoInventario(
   const dormidosRec = dormidosNorm.filter(c => c.recovery_label !== 'perdido')
   if (dormidosRec.length === 0) return []
 
-  type Cruce = { dormido: DormidoNorm; prod: CategoriaInventario; prioProd: number; priority: number }
-  const cruces: Cruce[] = []
+  // Group matching products by client
+  const clienteMap = new Map<string, { dormido: DormidoNorm; prods: CategoriaInventario[]; priority: number }>()
 
   for (const dormido of dormidosRec) {
     const productosComprados = productosPorCliente.get(dormido.clienteNorm) ?? new Set<string>()
+    const prodsMatch: CategoriaInventario[] = []
     for (const prod of lentos) {
       if (!productosComprados.has(normalizeStr(prod.producto))) continue
-      const prioProd = prod.clasificacion === 'sin_movimiento' ? 0 : 1
-      cruces.push({ dormido, prod, prioProd, priority: dormido.valor_historico * (prioProd === 0 ? 2 : 1) })
+      prodsMatch.push(prod)
     }
+    if (prodsMatch.length === 0) continue
+    const hasSinMov = prodsMatch.some(p => p.clasificacion === 'sin_movimiento')
+    const priority = dormido.valor_historico * (hasSinMov ? 2 : 1) * prodsMatch.length
+    clienteMap.set(dormido.clienteNorm, { dormido, prods: prodsMatch, priority })
   }
 
-  cruces.sort((a, b) => a.prioProd - b.prioProd || b.priority - a.priority)
+  // Sort by priority, take top 5 clients
+  const sorted = [...clienteMap.values()].sort((a, b) => b.priority - a.priority).slice(0, 5)
 
-  return cruces.slice(0, 3).map(({ dormido, prod }) => {
+  return sorted.map(({ dormido, prods }) => {
+    const prodListStr = prods.map(p => {
+      const diasLabel = (p.dias_inventario ?? 0) >= 9999 ? 'sin rotación registrada' : `${p.dias_inventario} días sin rotación`
+      return `${p.producto} (${fmt(p.unidades_actuales)} uds en stock, ${diasLabel})`
+    }).join(', ')
+
     const parts: string[] = [
-      `${dormido.cliente} lleva ${dormido.dias_sin_actividad} días sin comprar y compraba ${prod.producto} que hoy tiene ${prod.dias_inventario} días sin movimiento (${fmt(prod.unidades_actuales)} uds en stock).`,
+      `${dormido.cliente} lleva ${dormido.dias_sin_actividad} días sin comprar. Productos que compraba y tienen inventario estancado: ${prodListStr}.`,
       `Recovery: ${dormido.recovery_label} — compraba normalmente cada ${dormido.frecuencia_esperada_dias ?? 'N/A'} días.`,
     ]
     if (da.has_canal) {
@@ -1013,7 +1071,7 @@ function insightClienteDormidoInventario(
       descripcion: parts.join(' '),
       vendedor: dormido.vendedor,
       cliente: dormido.cliente,
-      producto: prod.producto,
+      producto: prods[0].producto,
       valor_numerico: dormido.dias_sin_actividad,
     }
   })
@@ -1103,8 +1161,8 @@ function insightCategoriaEnColapso(
         }
       }
 
-      if (da.has_metas && c.cumplimiento_pct != null) {
-        parts.push(`Cumplimiento de meta: ${c.cumplimiento_pct.toFixed(1)}%.`)
+      if (c.pm3 > 0 && c.ventas_periodo >= 0) {
+        parts.push(`Vendía ~${fmt(Math.round(c.pm3))} uds/mes, ahora ${fmt(c.ventas_periodo)} uds.`)
       }
 
       const insight: Insight = {
@@ -1187,67 +1245,71 @@ function insightDependenciaVendedor(
   const periodSales = salesInPeriod(sales, sp.year, sp.month)
   if (periodSales.length === 0) return []
 
-  const insights: Insight[] = []
+  type DepItem = { zona: string; vendedor: string; pctVendedor: number; uds: number; total: number }
+  const depItems: DepItem[] = []
 
   // Concentración por canal
   for (const canal of canalAnalysis) {
     if (!canal.activo_periodo || canal.ventas_periodo === 0) continue
     const salesCanal = periodSales.filter(s => s.canal === canal.canal)
     const byVendedor = new Map<string, number>()
-    for (const s of salesCanal) {
-      byVendedor.set(s.vendedor, (byVendedor.get(s.vendedor) ?? 0) + s.unidades)
-    }
+    for (const s of salesCanal) byVendedor.set(s.vendedor, (byVendedor.get(s.vendedor) ?? 0) + s.unidades)
     const totalCanal = [...byVendedor.values()].reduce((a, b) => a + b, 0)
     if (totalCanal === 0) continue
     for (const [vendedor, uds] of byVendedor) {
-      const pctVendedor = (uds / totalCanal) * 100
-      if (pctVendedor > 50) {
-        insights.push({
-          id: uid('hallazgo-dep-vendedor'),
-          tipo: 'hallazgo',
-          prioridad: pctVendedor > 65 ? 'ALTA' : 'MEDIA',
-          emoji: '💡',
-          titulo: `Dependencia de vendedor en ${canal.canal}`,
-          descripcion: `El ${pct(pctVendedor)} del volumen de ${canal.canal} depende de ${vendedor} (${fmt(uds)} de ${fmt(totalCanal)} uds) — riesgo alto de concentración.`,
-          vendedor,
-          valor_numerico: pctVendedor,
-          detector: 'dependencia_vendedor',
-        })
-      }
+      const pctV = (uds / totalCanal) * 100
+      if (pctV > 50) depItems.push({ zona: canal.canal, vendedor, pctVendedor: pctV, uds, total: totalCanal })
     }
   }
 
-  // Concentración por departamento (si hay datos)
+  // Concentración por departamento
   const deptos = new Set(periodSales.map(s => s.departamento).filter(Boolean) as string[])
   if (deptos.size > 1) {
     for (const depto of deptos) {
       const salesDepto = periodSales.filter(s => s.departamento === depto)
       const byVendedor = new Map<string, number>()
-      for (const s of salesDepto) {
-        byVendedor.set(s.vendedor, (byVendedor.get(s.vendedor) ?? 0) + s.unidades)
-      }
+      for (const s of salesDepto) byVendedor.set(s.vendedor, (byVendedor.get(s.vendedor) ?? 0) + s.unidades)
       const totalDepto = [...byVendedor.values()].reduce((a, b) => a + b, 0)
       if (totalDepto === 0) continue
       for (const [vendedor, uds] of byVendedor) {
-        const pctVendedor = (uds / totalDepto) * 100
-        if (pctVendedor > 50) {
-          insights.push({
-            id: uid('hallazgo-dep-depto'),
-            tipo: 'hallazgo',
-            prioridad: pctVendedor > 65 ? 'ALTA' : 'MEDIA',
-            emoji: '💡',
-            titulo: `Dependencia de vendedor en ${depto}`,
-            descripcion: `El ${pct(pctVendedor)} del volumen de ${depto} depende de ${vendedor} (${fmt(uds)} de ${fmt(totalDepto)} uds) — riesgo alto de concentración.`,
-            vendedor,
-            valor_numerico: pctVendedor,
-            detector: 'dependencia_vendedor',
-          })
-        }
+        const pctV = (uds / totalDepto) * 100
+        if (pctV > 50) depItems.push({ zona: depto, vendedor, pctVendedor: pctV, uds, total: totalDepto })
       }
     }
   }
 
-  return insights.slice(0, 3)
+  if (depItems.length === 0) return []
+
+  // Group by vendedor
+  const byVend = new Map<string, DepItem[]>()
+  for (const it of depItems) {
+    if (!byVend.has(it.vendedor)) byVend.set(it.vendedor, [])
+    byVend.get(it.vendedor)!.push(it)
+  }
+
+  const insights: Insight[] = []
+  for (const [vendedor, items] of byVend) {
+    items.sort((a, b) => b.pctVendedor - a.pctVendedor)
+    const maxPct = items[0].pctVendedor
+    const zonas = items.map(i => `${i.zona} (${pct(i.pctVendedor)})`)
+    insights.push({
+      id: uid('hallazgo-dep-vendedor'),
+      tipo: 'hallazgo',
+      prioridad: maxPct > 65 ? 'ALTA' : 'MEDIA',
+      emoji: '💡',
+      titulo: items.length > 1
+        ? `Concentración de vendedor en ${items.length} zonas`
+        : `Dependencia de vendedor en ${items[0].zona}`,
+      descripcion: items.length > 1
+        ? `${vendedor} concentra más del 50% del volumen en ${zonas.join(', ')} — riesgo alto de concentración en múltiples territorios.`
+        : `El ${pct(maxPct)} del volumen de ${items[0].zona} depende de ${vendedor} (${fmt(items[0].uds)} de ${fmt(items[0].total)} uds) — riesgo alto de concentración.`,
+      vendedor,
+      valor_numerico: maxPct,
+      detector: 'dependencia_vendedor',
+    })
+  }
+
+  return insights.sort((a, b) => (b.valor_numerico ?? 0) - (a.valor_numerico ?? 0)).slice(0, 3)
 }
 
 // HALLAZGO 2 — Migración de canal
@@ -1448,7 +1510,8 @@ function insightOportunidadNoExplotada(
     m.set(s.departamento!, (m.get(s.departamento!) ?? 0) + s.unidades)
   }
 
-  const insights: Insight[] = []
+  type OppItem = { producto: string; volTotal: number; depto: string; volEnDepto: number }
+  const items: OppItem[] = []
   const promedioVolProd = [...volProd.values()].reduce((a, b) => a + b, 0) / volProd.size
   for (const [producto, volTotal] of volProd) {
     if (volTotal < promedioVolProd * 0.5) continue
@@ -1457,24 +1520,36 @@ function insightOportunidadNoExplotada(
     for (const depto of deptos) {
       const volEnDepto = porDepto.get(depto) ?? 0
       if (volEnDepto < promPorDepto * 0.05) {
-        insights.push({
-          id: uid('hallazgo-oportunidad'),
-          tipo: 'hallazgo',
-          prioridad: 'MEDIA',
-          emoji: '💡',
-          titulo: `Oportunidad sin explotar — ${producto}`,
-          descripcion: `${producto} tiene ${fmt(volTotal)} uds a nivel general pero ${volEnDepto === 0 ? '0 ventas' : `solo ${fmt(volEnDepto)} uds`} en ${depto} — territorio sin cobertura.`,
-          producto,
-          valor_numerico: volTotal,
-          detector: 'oportunidad_no_explotada',
-        })
+        items.push({ producto, volTotal, depto, volEnDepto })
       }
     }
   }
 
-  return insights
-    .sort((a, b) => (b.valor_numerico ?? 0) - (a.valor_numerico ?? 0))
-    .slice(0, 3)
+  if (items.length === 0) return []
+
+  // Group by product, keep highest-volume first
+  const byProd = new Map<string, OppItem[]>()
+  for (const it of items) {
+    if (!byProd.has(it.producto)) byProd.set(it.producto, [])
+    byProd.get(it.producto)!.push(it)
+  }
+  const sorted = [...byProd.entries()].sort(([, a], [, b]) => b[0].volTotal - a[0].volTotal).slice(0, 5)
+
+  const listStr = sorted.map(([prod, its]) => {
+    const deptoStr = its.map(i => i.volEnDepto === 0 ? `sin ventas en ${i.depto}` : `solo ${fmt(i.volEnDepto)} uds en ${i.depto}`).join(', ')
+    return `${prod} (${fmt(its[0].volTotal)} uds general, ${deptoStr})`
+  }).join('; ')
+
+  return [{
+    id: uid('hallazgo-oportunidad'),
+    tipo: 'hallazgo' as const,
+    prioridad: 'MEDIA' as const,
+    emoji: '💡',
+    titulo: `Productos con territorios sin cobertura`,
+    descripcion: `${sorted.length} producto${sorted.length > 1 ? 's' : ''} tiene${sorted.length > 1 ? 'n' : ''} ventas a nivel general pero 0 cobertura en algunos departamentos: ${listStr}.`,
+    valor_numerico: sorted.reduce((a, [, its]) => a + its[0].volTotal, 0),
+    detector: 'oportunidad_no_explotada',
+  }]
 }
 
 // ─── FUNCIÓN PRINCIPAL ────────────────────────────────────────────────────────

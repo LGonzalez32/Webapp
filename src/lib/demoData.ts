@@ -1,7 +1,8 @@
 import type { SaleRecord, MetaRecord, InventoryItem } from '../types'
 
-// ─── Distribuidora Los Pinos S.A. ─────────────────────────────────────────────
-// 24 meses · 8 vendedores · 30 clientes · 20 productos · ~75-80K registros
+// ─── Comercializadora Los Pinos S.A. ──────────────────────────────────────────
+// Ene 2024 – Dic 2028 · 8 vendedores · 30 clientes · 20 productos
+// Ventas filtradas ≤ hoy · Metas completas 2024-2028 · Semilla determinística
 // Insights engineered: deterioro Carlos, dependencia Ana, mono-categoría Sandra,
 // subejecución Miguel Ángel, colapso Snacks, clientes dormidos, concentración
 
@@ -77,14 +78,14 @@ const CLIENTES: Cliente[] = [
   { codigo: 'CLI020', nombre: 'Abarrotería El Sol',      canal: 'Mostrador',    vendedor: 'María Castillo',    dpto: 'La Paz'       },
   // Mayoreo
   { codigo: 'CLI021', nombre: 'Mayoreo del Norte',       canal: 'Mayoreo',      vendedor: 'Ana González',      dpto: 'Ahuachapán'   },
-  { codigo: 'CLI022', nombre: 'Distribuidora Central',   canal: 'Mayoreo',      vendedor: 'Luis Hernández',    dpto: 'San Salvador' },
+  { codigo: 'CLI022', nombre: 'Comercial Central',   canal: 'Mayoreo',      vendedor: 'Luis Hernández',    dpto: 'San Salvador' },
   { codigo: 'CLI023', nombre: 'Mayorista El Salvador',   canal: 'Mayoreo',      vendedor: 'María Castillo',    dpto: 'La Libertad'  },
-  { codigo: 'CLI024', nombre: 'Distribuidora Sur',       canal: 'Mayoreo',      vendedor: 'Sandra Morales',    dpto: 'La Paz'       },
+  { codigo: 'CLI024', nombre: 'Comercial Sur',       canal: 'Mayoreo',      vendedor: 'Sandra Morales',    dpto: 'La Paz'       },
   { codigo: 'CLI025', nombre: 'Mayoreo Oriente',         canal: 'Mayoreo',      vendedor: 'Miguel Ángel Díaz', dpto: 'San Miguel'   },
-  { codigo: 'CLI026', nombre: 'Distribuidora La Unión',  canal: 'Mayoreo',      vendedor: 'Patricia Vásquez',  dpto: 'La Unión'     },
+  { codigo: 'CLI026', nombre: 'Comercial La Unión',  canal: 'Mayoreo',      vendedor: 'Patricia Vásquez',  dpto: 'La Unión'     },
   { codigo: 'CLI027', nombre: 'Mayorista Occidente',     canal: 'Mayoreo',      vendedor: 'Roberto Cruz',      dpto: 'Sonsonate'    },
   { codigo: 'CLI028', nombre: 'Central de Abastos',      canal: 'Mayoreo',      vendedor: 'Carlos Ramírez',    dpto: 'San Salvador' },
-  { codigo: 'CLI029', nombre: 'Distribuidora Pacífico',  canal: 'Mayoreo',      vendedor: 'Luis Hernández',    dpto: 'La Paz'       },
+  { codigo: 'CLI029', nombre: 'Comercial Pacífico',  canal: 'Mayoreo',      vendedor: 'Luis Hernández',    dpto: 'La Paz'       },
   { codigo: 'CLI030', nombre: 'Mayoreo Santa Ana',       canal: 'Mayoreo',      vendedor: 'Ana González',      dpto: 'Santa Ana'    },
 ]
 
@@ -182,12 +183,23 @@ const VENDORS: VendorProfile[] = [
   },
 ]
 
+// ─── PRNG DETERMINISTA (semilla fija → datos idénticos en cada carga) ────────
+// Implementación mulberry32 — misma semilla siempre produce la misma secuencia
+let _seed = 0x9A7B4C1D
+function rng(): number {
+  _seed |= 0
+  _seed = _seed + 0x6D2B79F5 | 0
+  let t = Math.imul(_seed ^ (_seed >>> 15), 1 | _seed)
+  t = t + Math.imul(t ^ (t >>> 7), 61 | t) ^ t
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+}
+
 // ─── UTILIDADES ───────────────────────────────────────────────────────────────
 
-function rb(lo: number, hi: number): number { return lo + Math.random() * (hi - lo) }
+function rb(lo: number, hi: number): number { return lo + rng() * (hi - lo) }
 
 function pickWeighted<T>(items: T[], weights: number[]): T {
-  let r = Math.random() * weights.reduce((a, b) => a + b, 0)
+  let r = rng() * weights.reduce((a, b) => a + b, 0)
   for (let i = 0; i < items.length; i++) {
     r -= weights[i]
     if (r <= 0) return items[i]
@@ -195,33 +207,40 @@ function pickWeighted<T>(items: T[], weights: number[]): T {
   return items[items.length - 1]
 }
 
-function pickRandom<T>(arr: T[]): T { return arr[Math.floor(Math.random() * arr.length)] }
+function pickRandom<T>(arr: T[]): T { return arr[Math.floor(rng() * arr.length)] }
 
 // ─── TENDENCIA ────────────────────────────────────────────────────────────────
-// mesIndex: 0 = mes más antiguo, 23 = mes actual
+// monthsFromRef: distancia en meses desde fechaReferencia (negativo = pasado)
+// totalMonths: total de meses generados (para normalizar tendencias de crecimiento)
 
-function tendencia(nombre: string, mesIndex: number, calMonth: number): number {
+function tendencia(nombre: string, monthsFromRef: number, calMonth: number, totalMonths: number): number {
+  // Normalizar posición 0..1 dentro de los 60 meses para tendencias graduales
+  const pos = Math.max(0, Math.min(1, (totalMonths + monthsFromRef) / totalMonths))
   switch (nombre) {
-    case 'Carlos Ramírez':    return mesIndex >= 22 ? 0.55 : 1.0
-    case 'María Castillo':    return 1.0 + 0.025 * mesIndex
-    case 'Miguel Ángel Díaz': return mesIndex >= 21 ? 0.75 : 1.0
+    case 'Carlos Ramírez':    return monthsFromRef >= -1 ? 0.55 : 1.0  // caída últimos 2 meses
+    case 'María Castillo':    return 1.0 + 0.6 * pos   // crecimiento gradual a lo largo de todo el rango
+    case 'Miguel Ángel Díaz': return monthsFromRef >= -2 ? 0.75 : 1.0  // caída últimos 3 meses
     case 'Patricia Vásquez':  return PATRICIA_CYCLE[(calMonth - 1) % 12]
-    case 'Roberto Cruz':      return 1.0 + 0.04 * mesIndex
+    case 'Roberto Cruz':      return 1.0 + 0.96 * pos   // crecimiento fuerte gradual
     default:                  return rb(0.95, 1.05)   // Luis + Sandra: estable con micro-variación
   }
 }
 
 // ─── GENERADOR PRINCIPAL ──────────────────────────────────────────────────────
+// Genera datos de Ene 2024 a Dic 2028, filtra ventas ≤ hoy al retornar
+
+const START_YEAR = 2024
+const END_YEAR = 2028
+const TOTAL_MONTHS = (END_YEAR - START_YEAR + 1) * 12 // 60
 
 export function getDemoData(): { sales: SaleRecord[]; metas: MetaRecord[]; inventory: InventoryItem[] } {
-  const sales: SaleRecord[] = []
+  // Reset seed para datos determinísticos en cada llamada
+  _seed = 0x9A7B4C1D
+
+  const allSales: SaleRecord[] = []
   const today = new Date()
-  const todayYear = today.getFullYear()
-  const todayMonth = today.getMonth() + 1
-  const todayDay = today.getDate()
 
   // ── Precompute category baselines for meta estimation ─────────────────────
-  // Expected daily units per category (sum over all vendedores of baseDiaria × catWeight)
   const CAT_BASELINE_DAILY: Record<string, number> = { Lácteos: 0, Refrescos: 0, Snacks: 0, Limpieza: 0 }
   for (const v of VENDORS) {
     for (const [cat, w] of Object.entries(v.catWeights)) {
@@ -229,122 +248,129 @@ export function getDemoData(): { sales: SaleRecord[]; metas: MetaRecord[]; inven
     }
   }
 
+  // Referencia: el mes/año de "hoy" para calcular distancias
+  const refYear = today.getFullYear()
+  const refMonth = today.getMonth() + 1 // 1-based
+
   // ── Sales generation ──────────────────────────────────────────────────────
-  // agoMonths 23 = 23 months ago (oldest), 0 = current month (partial)
-  for (let agoMonths = 23; agoMonths >= 0; agoMonths--) {
-    const mesIndex = 23 - agoMonths   // 0..23
+  for (let y = START_YEAR; y <= END_YEAR; y++) {
+    for (let m = 1; m <= 12; m++) {
+      // Distancia en meses desde la fecha de referencia (negativo = pasado, positivo = futuro)
+      const monthsFromRef = (y - refYear) * 12 + (m - refMonth)
 
-    let m = todayMonth - agoMonths
-    let y = todayYear
-    while (m <= 0) { m += 12; y-- }
+      const daysInMonth = new Date(y, m, 0).getDate()
+      const seasonal = ESTACIONAL[m]
 
-    const daysInMonth = new Date(y, m, 0).getDate()
-    const maxDay = agoMonths === 0 ? todayDay - 1 : daysInMonth
-    const seasonal = ESTACIONAL[((m - 1) % 12) + 1]
+      // Factor de crecimiento anual: 3% menos por año antes de 2026, 5% más por año después
+      const yearDiff = y - 2026
+      const growthFactor = yearDiff < 0 ? 1 + yearDiff * 0.03 : 1 + yearDiff * 0.05
 
-    // Snacks colapso en mes actual: categoría × 0.45 → dispara "Categoría en colapso"
-    const snacksCollapso = agoMonths === 0
+      // Snacks colapso: solo en el mes actual (monthsFromRef === 0)
+      const snacksCollapso = monthsFromRef === 0
 
-    for (let day = 1; day <= maxDay; day++) {
-      const date = new Date(y, m - 1, day)
-      if (date.getDay() === 0) continue  // skip Sundays
+      for (let day = 1; day <= daysInMonth; day++) {
+        const date = new Date(y, m - 1, day)
+        if (date.getDay() === 0) continue  // skip Sundays
 
-      for (const vendor of VENDORS) {
-        const t = tendencia(vendor.nombre, mesIndex, m)
-        const nTrans = Math.max(1, Math.round(vendor.baseDiaria * seasonal * t * rb(0.7, 1.3)))
+        for (const vendor of VENDORS) {
+          const t = tendencia(vendor.nombre, monthsFromRef, m, TOTAL_MONTHS)
+          const nTrans = Math.max(1, Math.round(vendor.baseDiaria * seasonal * t * growthFactor * rb(0.7, 1.3)))
 
-        // Active clients: CLI001 + CLI011 dormidos last 2 months (Carlos)
-        let activeClients = vendor.clients
-        if (vendor.nombre === 'Carlos Ramírez' && agoMonths <= 1) {
-          activeClients = vendor.clients.filter(c => c.codigo !== 'CLI001' && c.codigo !== 'CLI011')
-          if (activeClients.length === 0) continue
-        }
-
-        const cCodes = activeClients.map(c => c.codigo)
-        const cWeights = activeClients.map(c => c.w)
-
-        // Category weights, adjusted for Snacks colapso
-        let catW = { ...vendor.catWeights }
-        // Snacks colapsa a peso fijo 0.05 — otras categorías mantienen su peso original exacto
-        if (snacksCollapso && catW.Snacks) {
-          catW = { ...catW, Snacks: 0.05 }
-        }
-        const cats = Object.keys(catW)
-        const catWvals = cats.map(k => catW[k])
-
-        for (let tx = 0; tx < nTrans; tx++) {
-          const cat = pickWeighted(cats, catWvals)
-
-          // SNA003/004/005 frozen last 6 months → last sale ~Oct 2025 → >120 days → sin_movimiento
-          let prodPool: Prod[]
-          if (cat === 'Snacks') {
-            prodPool = agoMonths <= 5 ? SNACKS_ACTIVOS : BY_CAT['Snacks']
-            if (prodPool.length === 0) continue
-          } else {
-            prodPool = BY_CAT[cat]
+          // Active clients: CLI001 + CLI011 dormidos last 2 months (Carlos)
+          let activeClients = vendor.clients
+          if (vendor.nombre === 'Carlos Ramírez' && monthsFromRef >= -1 && monthsFromRef <= 0) {
+            activeClients = vendor.clients.filter(c => c.codigo !== 'CLI001' && c.codigo !== 'CLI011')
+            if (activeClients.length === 0) continue
           }
-          const prod = pickRandom(prodPool)
 
-          const clientCode = pickWeighted(cCodes, cWeights)
-          const cliente = CLI_MAP[clientCode]
+          const cCodes = activeClients.map(c => c.codigo)
+          const cWeights = activeClients.map(c => c.w)
 
-          // 5% devoluciones (unidades negativas)
-          const esDevolucion = Math.random() < 0.05
-          const unidades = esDevolucion
-            ? -(Math.ceil(Math.random() * 5))
-            : Math.ceil(Math.random() * 14) + 1
+          // Category weights, adjusted for Snacks colapso
+          let catW = { ...vendor.catWeights }
+          if (snacksCollapso && catW.Snacks) {
+            catW = { ...catW, Snacks: 0.05 }
+          }
+          const cats = Object.keys(catW)
+          const catWvals = cats.map(k => catW[k])
 
-          const venta_neta = Math.round(unidades * prod.precio * rb(0.92, 1.08) * 100) / 100
+          for (let tx = 0; tx < nTrans; tx++) {
+            const cat = pickWeighted(cats, catWvals)
 
-          sales.push({
-            fecha: date,
-            vendedor: vendor.nombre,
-            producto: prod.nombre,
-            codigo_producto: prod.codigo,
-            cliente: cliente.nombre,
-            codigo_cliente: cliente.codigo,
-            unidades,
-            venta_neta,
-            categoria: prod.cat,
-            canal: cliente.canal,
-            departamento: cliente.dpto,
-            supervisor: vendor.supervisor,
-          })
+            // SNA003/004/005 frozen last 6 months → sin_movimiento
+            let prodPool: Prod[]
+            if (cat === 'Snacks') {
+              prodPool = (monthsFromRef >= -5 && monthsFromRef <= 0) ? SNACKS_ACTIVOS : BY_CAT['Snacks']
+              if (prodPool.length === 0) continue
+            } else {
+              prodPool = BY_CAT[cat]
+            }
+            const prod = pickRandom(prodPool)
+
+            const clientCode = pickWeighted(cCodes, cWeights)
+            const cliente = CLI_MAP[clientCode]
+
+            // 5% devoluciones (unidades negativas)
+            const esDevolucion = rng() < 0.05
+            const unidades = esDevolucion
+              ? -(Math.ceil(rng() * 5))
+              : Math.ceil(rng() * 14) + 1
+
+            const venta_neta = Math.round(unidades * prod.precio * rb(0.92, 1.08) * 100) / 100
+
+            allSales.push({
+              fecha: date,
+              vendedor: vendor.nombre,
+              producto: prod.nombre,
+              codigo_producto: prod.codigo,
+              cliente: cliente.nombre,
+              codigo_cliente: cliente.codigo,
+              unidades,
+              venta_neta,
+              categoria: prod.cat,
+              canal: cliente.canal,
+              departamento: cliente.dpto,
+              supervisor: vendor.supervisor,
+            })
+          }
         }
       }
     }
   }
 
-  // ── METAS ─────────────────────────────────────────────────────────────────
+  // ── Filtrar ventas: solo hasta hoy ─────────────────────────────────────────
+  const sales = allSales.filter(s => s.fecha <= today)
+
+  // ── METAS (Ene 2024 – Dic 2028, sin filtrar — metas futuras son válidas) ──
   const metas: MetaRecord[] = []
 
-  for (let agoMonths = 23; agoMonths >= 0; agoMonths--) {
-    let m = todayMonth - agoMonths
-    let y = todayYear
-    while (m <= 0) { m += 12; y-- }
+  for (let y = START_YEAR; y <= END_YEAR; y++) {
+    for (let m = 1; m <= 12; m++) {
+      const seasonal = ESTACIONAL[m]
+      const yearDiff = y - 2026
+      const growthFactor = yearDiff < 0 ? 1 + yearDiff * 0.03 : 1 + yearDiff * 0.05
+      const supervisorAcum: Record<string, number> = {}
 
-    const seasonal = ESTACIONAL[((m - 1) % 12) + 1]
-    const supervisorAcum: Record<string, number> = {}
+      // Por vendedor
+      for (const vendor of VENDORS) {
+        const meta = Math.round(vendor.baseDiaria * 8 * 26 * seasonal * 0.95 * growthFactor)
+        metas.push({ mes: m, anio: y, vendedor: vendor.nombre, meta, tipo_meta: 'unidades' })
+        supervisorAcum[vendor.supervisor] = (supervisorAcum[vendor.supervisor] ?? 0) + meta
+      }
 
-    // Por vendedor
-    for (const vendor of VENDORS) {
-      const meta = Math.round(vendor.baseDiaria * 8 * 26 * seasonal * 0.95)
-      metas.push({ mes: m, anio: y, vendedor: vendor.nombre, meta, tipo_meta: 'unidades' })
-      supervisorAcum[vendor.supervisor] = (supervisorAcum[vendor.supervisor] ?? 0) + meta
-    }
+      // Por supervisor
+      for (const [supervisor, sum] of Object.entries(supervisorAcum)) {
+        metas.push({ mes: m, anio: y, supervisor, meta: Math.round(sum * 1.02), tipo_meta: 'unidades' })
+      }
 
-    // Por supervisor
-    for (const [supervisor, sum] of Object.entries(supervisorAcum)) {
-      metas.push({ mes: m, anio: y, supervisor, meta: Math.round(sum * 1.02), tipo_meta: 'unidades' })
-    }
-
-    // Por categoría (baselines × estacional × 1.05)
-    for (const [cat, dailyBase] of Object.entries(CAT_BASELINE_DAILY)) {
-      metas.push({
-        mes: m, anio: y, categoria: cat,
-        meta: Math.round(dailyBase * 26 * seasonal * 1.05),
-        tipo_meta: 'unidades',
-      })
+      // Por categoría
+      for (const [cat, dailyBase] of Object.entries(CAT_BASELINE_DAILY)) {
+        metas.push({
+          mes: m, anio: y, categoria: cat,
+          meta: Math.round(dailyBase * 26 * seasonal * 1.05 * growthFactor),
+          tipo_meta: 'unidades',
+        })
+      }
     }
   }
 
@@ -381,8 +407,8 @@ export function getDemoData(): { sales: SaleRecord[]; metas: MetaRecord[]; inven
   return { sales, metas, inventory }
 }
 
-export const DEMO_EMPRESA = 'Distribuidora Los Pinos S.A.'
+export const DEMO_EMPRESA = 'Comercializadora Los Pinos S.A.'
 export const DEMO_PERIODO = (() => {
   const t = new Date()
-  return { year: t.getFullYear(), month: t.getMonth() }
+  return { year: t.getFullYear(), month: t.getMonth() } // 0-indexed month, matches last filtered sale date
 })()

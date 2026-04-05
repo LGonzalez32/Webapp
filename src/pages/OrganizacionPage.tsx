@@ -38,28 +38,40 @@ export default function OrganizacionPage() {
   const [members, setMembers] = useState<MemberRow[]>([])
   const [loadingMembers, setLoadingMembers] = useState(true)
   const [membersError, setMembersError] = useState<string | null>(null)
+  const [supabaseAvailable, setSupabaseAvailable] = useState(true)
 
   const [copied, setCopied] = useState(false)
   const [allowOpenJoin, setAllowOpenJoin] = useState<boolean>(org?.allow_open_join ?? true)
   const [joinPolicyUpdating, setJoinPolicyUpdating] = useState(false)
 
+  const [inviteRole, setInviteRole] = useState<'editor' | 'viewer'>('viewer')
+
   // Confirm delete
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!org) return
+    if (!org) {
+      setLoadingMembers(false)
+      return
+    }
     loadData()
-  }, [org])
+  }, [org]) // eslint-disable-line
 
   async function loadData() {
     if (!org) return
     setLoadingMembers(true)
     setMembersError(null)
     try {
-      const m = await getOrgMembersWithEmail(org.id)
+      // Timeout de 5s para evitar loading infinito
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('timeout')), 5000)
+      )
+      const m = await Promise.race([getOrgMembersWithEmail(org.id), timeoutPromise])
       setMembers(m)
+      setSupabaseAvailable(true)
     } catch {
-      setMembersError('No se pudieron cargar los miembros.')
+      setSupabaseAvailable(false)
+      setMembersError('No se pudieron cargar los miembros. Mostrando funcionalidad básica.')
     } finally {
       setLoadingMembers(false)
     }
@@ -111,8 +123,21 @@ export default function OrganizacionPage() {
 
   if (!org) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <p style={{ color: 'var(--color-text-secondary)' }}>Cargando organización...</p>
+      <div className="flex flex-col items-center justify-center h-full min-h-[60vh] gap-5 px-4">
+        <Users size={48} style={{ color: 'var(--sf-t6)' }} />
+        <div className="text-center space-y-2">
+          <h1 className="text-xl font-bold" style={{ color: 'var(--sf-t1)' }}>Gestión de equipo</h1>
+          <p className="text-sm max-w-xs" style={{ color: 'var(--sf-t5)' }}>
+            Próximamente podrás administrar vendedores, supervisores y permisos desde aquí.
+          </p>
+        </div>
+        <a
+          href="/dashboard"
+          className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+          style={{ background: 'var(--sf-green-bg)', color: 'var(--sf-green)' }}
+        >
+          Volver al dashboard
+        </a>
       </div>
     )
   }
@@ -145,15 +170,28 @@ export default function OrganizacionPage() {
               Link de acceso
             </h2>
             <p className="text-xs mt-1" style={{ color: 'var(--color-text-secondary)' }}>
-              Comparte este link. Cualquier persona puede usarlo para unirse como Solo lectura.
+              Comparte este link. Elige el rol que tendrá quien acceda.
             </p>
+          </div>
+          {/* Role selector for invite */}
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-medium" style={{ color: 'var(--color-text-secondary)' }}>Rol de invitado:</span>
+            <select
+              value={inviteRole}
+              onChange={e => setInviteRole(e.target.value as 'editor' | 'viewer')}
+              className="rounded-lg text-xs py-1 px-2 outline-none cursor-pointer"
+              style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text-primary)' }}
+            >
+              <option value="viewer">Visor (solo lectura)</option>
+              <option value="editor">Editor (puede subir archivos)</option>
+            </select>
           </div>
           <div className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)' }}>
             <code className="flex-1 text-xs truncate" style={{ color: allowOpenJoin ? 'var(--color-text-secondary)' : 'var(--color-text-secondary)', opacity: allowOpenJoin ? 1 : 0.4 }}>
-              {`${window.location.origin}/join/${org.id}`}
+              {`${window.location.origin}/join/${org.id}?role=${inviteRole}`}
             </code>
             <button
-              onClick={() => allowOpenJoin && handleCopyLink(`${window.location.origin}/join/${org.id}`)}
+              onClick={() => allowOpenJoin && handleCopyLink(`${window.location.origin}/join/${org.id}?role=${inviteRole}`)}
               disabled={!allowOpenJoin}
               className="flex items-center gap-1 px-2 py-1 rounded text-xs flex-shrink-0 transition-colors disabled:opacity-40"
               style={{ color: copied ? 'var(--color-primary)' : 'var(--color-text-secondary)' }}

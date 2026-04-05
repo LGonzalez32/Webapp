@@ -1,10 +1,12 @@
-import { useMemo } from 'react'
+import { useMemo, useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
 import { salesInPeriod, periodKey } from '../lib/analysis'
 import { Target, TrendingUp, TrendingDown } from 'lucide-react'
 import { cn } from '../lib/utils'
+import { callAI } from '../lib/chatService'
+import AnalysisDrawer from '../components/ui/AnalysisDrawer'
 
 const MESES_SHORT = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
 
@@ -23,20 +25,72 @@ function CumplimientoBadge({ pct }: { pct: number | null }) {
 export default function MetasPage() {
   useAnalysis()
   const navigate = useNavigate()
-  const { sales, metas, dataAvailability, selectedPeriod, configuracion, vendorAnalysis } = useAppStore()
+  const { sales, metas, dataAvailability, selectedPeriod, configuracion, vendorAnalysis, isProcessed } = useAppStore()
 
-  if (!dataAvailability.has_metas) {
-    navigate('/dashboard')
-    return null
-  }
+  useEffect(() => {
+    if (isProcessed && !dataAvailability.has_metas) navigate('/dashboard')
+  }, [isProcessed, dataAvailability.has_metas, navigate])
 
   const currentYear = selectedPeriod.year
   const currentMonth = selectedPeriod.month
   const moneda = configuracion.moneda
+  const [metaAnalysisMap, setMetaAnalysisMap] = useState<Record<string, { loading: boolean; text: string | null }>>({})
+  const [expandedMetaVendedor, setExpandedMetaVendedor] = useState<string | null>(null)
 
-  // All vendors from metas
+  // Día máximo con datos en el período actual (para "en curso")
+  const maxDayInPeriod = useMemo(() => {
+    const periodSales = sales.filter(s => {
+      const d = new Date(s.fecha)
+      return d.getFullYear() === currentYear && d.getMonth() === currentMonth
+    })
+    if (periodSales.length === 0) return 0
+    return periodSales.reduce((max, s) => Math.max(max, new Date(s.fecha).getDate()), 0)
+  }, [sales, currentYear, currentMonth])
+  const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate()
+
+  const handleAnalyzeMetaVendedor = useCallback(async (vendor: string, pct: number | null, realVal: number, metaVal: number | null) => {
+    setExpandedMetaVendedor(vendor)
+    setMetaAnalysisMap(prev => ({ ...prev, [vendor]: { loading: true, text: null } }))
+
+    const va = vendorAnalysis.find(v => v.vendedor === vendor)
+    const systemPrompt = `Eres un analista comercial de ${configuracion.empresa}.
+Responde en este formato exacto:
+
+📊 RESUMEN: [Hallazgo principal en máximo 15 palabras]
+
+📈 CUMPLIMIENTO:
+- [Estado actual vs meta — máximo 2 bullets con números]
+
+⚠️ RIESGO:
+- [Riesgo de no cumplir o factor clave — máximo 2 bullets]
+
+💡 ACCIÓN: [Una acción concreta para mejorar cumplimiento]
+
+Reglas: máximo 100 palabras, cada bullet con número concreto, sin instrucciones operativas, moneda: ${moneda}, español.`
+
+    const userPrompt = [
+      `Vendedor: ${vendor}`,
+      `Cumplimiento: ${pct != null ? `${pct.toFixed(1)}%` : 'N/A'}`,
+      `Real: ${realVal.toLocaleString()} uds | Meta: ${metaVal?.toLocaleString() ?? 'N/A'} uds`,
+      va?.variacion_ytd_pct != null ? `Variación YTD: ${va.variacion_ytd_pct.toFixed(1)}%` : '',
+      va ? `Estado: ${va.riesgo.toUpperCase()}` : '',
+      `Día ${maxDayInPeriod} de ${daysInMonth} del mes`,
+    ].filter(Boolean).join('\n')
+
+    try {
+      const json = await callAI(
+        [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+        { model: 'deepseek-chat', max_tokens: 250, temperature: 0.3 },
+      )
+      setMetaAnalysisMap(prev => ({ ...prev, [vendor]: { loading: false, text: json.choices?.[0]?.message?.content ?? 'Sin respuesta' } }))
+    } catch {
+      setMetaAnalysisMap(prev => ({ ...prev, [vendor]: { loading: false, text: 'No se pudo conectar con el asistente IA.' } }))
+    }
+  }, [configuracion, vendorAnalysis, moneda, maxDayInPeriod, daysInMonth])
+
+  // All vendors from metas — excluir nombres vacíos/blancos
   const vendors = useMemo(() => {
-    const s = new Set(metas.map((m) => m.vendedor))
+    const s = new Set(metas.map((m) => m.vendedor).filter(v => v && v.trim() !== ''))
     return Array.from(s).sort()
   }, [metas])
 
@@ -69,6 +123,8 @@ export default function MetasPage() {
 
       return { vendor, va, monthData }
     })
+    // Excluir filas donde no hay meta ni ventas reales en ningún período visible
+    .filter(row => row.monthData.some(d => (d.metaVal ?? 0) > 0 || d.realVal > 0))
   }, [vendors, histMonths, metas, sales, vendorAnalysis, currentYear, currentMonth])
 
   // Team totals for current month
@@ -80,6 +136,8 @@ export default function MetasPage() {
     .reduce((a, s) => a + s.unidades, 0)
 
   const teamPct = teamMeta > 0 ? (teamReal / teamMeta) * 100 : null
+
+  if (!dataAvailability.has_metas) return null
 
   return (
     <div className="max-w-5xl mx-auto space-y-6 pb-20 animate-in fade-in duration-700">
@@ -144,6 +202,33 @@ export default function MetasPage() {
         </div>
       </div>
 
+      {/* Analyze with AI */}
+      <button
+        onClick={() => navigate('/chat', {
+          state: {
+            prefill: `Analiza el cumplimiento de metas del equipo. Progreso actual: ${teamReal.toLocaleString()} de ${teamMeta.toLocaleString()} (${teamPct !== null ? teamPct.toFixed(1) : '?'}%). ¿Quién está en riesgo de no cumplir y qué acciones recomiendas?`,
+            displayPrefill: `✦ Analizar cumplimiento con IA`,
+            source: 'Metas',
+          },
+        })}
+        style={{
+          width: '100%',
+          padding: '10px 20px',
+          border: '1px solid #10B981',
+          borderRadius: '10px',
+          background: 'transparent',
+          color: '#10B981',
+          fontSize: '14px',
+          fontWeight: 500,
+          cursor: 'pointer',
+          transition: 'all 0.2s ease',
+        }}
+        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(16,185,129,0.05)')}
+        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+      >
+        ✦ Analizar cumplimiento con IA →
+      </button>
+
       {/* Current month — individual progress */}
       <div className="space-y-3">
         <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-600">
@@ -168,11 +253,23 @@ export default function MetasPage() {
                   />
                   <span className="font-bold text-zinc-200 text-sm">{vendor}</span>
                 </div>
-                <div className="flex items-center gap-4 text-xs">
+                <div className="flex items-center gap-3 text-xs">
                   <span className="text-zinc-500">
                     {curr.realVal.toLocaleString()} / {curr.metaVal?.toLocaleString() ?? '—'} uds
                   </span>
                   <CumplimientoBadge pct={pct} />
+                  <button
+                    onClick={() => handleAnalyzeMetaVendedor(vendor, pct, curr.realVal, curr.metaVal)}
+                    disabled={metaAnalysisMap[vendor]?.loading}
+                    className="cursor-pointer transition-all"
+                    style={{
+                      fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 5,
+                      border: '1px solid rgba(16,185,129,0.2)', background: 'rgba(16,185,129,0.06)',
+                      color: '#10b981', opacity: metaAnalysisMap[vendor]?.loading ? 0.5 : 1,
+                    }}
+                  >
+                    {metaAnalysisMap[vendor]?.loading ? '...' : '✦'}
+                  </button>
                 </div>
               </div>
               <div className="h-2 bg-zinc-800 rounded-full overflow-hidden">
@@ -215,8 +312,10 @@ export default function MetasPage() {
                     )}
                   >
                     {label}
-                    {year === currentYear && month === currentMonth && (
-                      <span className="ml-1 text-[8px] opacity-60">●</span>
+                    {year === currentYear && month === currentMonth && maxDayInPeriod > 0 && (
+                      <span className="block text-[8px] opacity-50 font-normal normal-case tracking-normal mt-0.5">
+                        Día {maxDayInPeriod}/{daysInMonth}
+                      </span>
                     )}
                   </th>
                 ))}
@@ -227,7 +326,9 @@ export default function MetasPage() {
                 <tr key={vendor} className="border-b border-zinc-800/50 hover:bg-zinc-900/50 transition-colors">
                   <td className="px-5 py-3 font-bold text-zinc-300">{vendor}</td>
                   {monthData.map((m, i) => (
-                    <td key={i} className={cn('px-4 py-3 text-center', m.isCurrent ? 'bg-[#00B894]/5' : '')}>
+                    <td key={i} className={cn('px-4 py-3 text-center', m.isCurrent ? 'bg-[#00B894]/5' : '')}
+                      style={m.isCurrent ? { opacity: 0.7 } : undefined}
+                    >
                       {m.metaVal === null ? (
                         <span className="text-zinc-700">—</span>
                       ) : (
@@ -235,6 +336,7 @@ export default function MetasPage() {
                           <CumplimientoBadge pct={m.pct} />
                           <span className="text-[9px] text-zinc-700">
                             {m.realVal.toLocaleString()}
+                            {m.isCurrent && <span className="text-[8px] text-zinc-600 ml-0.5">⏳</span>}
                           </span>
                         </div>
                       )}
@@ -265,6 +367,36 @@ export default function MetasPage() {
           </table>
         </div>
       </div>
+
+      {/* Drawer for individual meta analysis */}
+      {(() => {
+        const va = expandedMetaVendedor ? vendorAnalysis.find(v => v.vendedor === expandedMetaVendedor) : null
+        const analysis = expandedMetaVendedor ? metaAnalysisMap[expandedMetaVendedor] : null
+        const isOpen = !!expandedMetaVendedor && !!analysis?.text && !analysis?.loading
+        const curr = expandedMetaVendedor ? matrix.find(m => m.vendor === expandedMetaVendedor)?.monthData.at(-1) : null
+
+        return (
+          <AnalysisDrawer
+            isOpen={isOpen}
+            onClose={() => setExpandedMetaVendedor(null)}
+            title={expandedMetaVendedor ?? ''}
+            subtitle={curr?.pct != null ? `${curr.pct.toFixed(0)}% de meta` : undefined}
+            badges={va ? [{
+              label: va.riesgo.toUpperCase(),
+              color: va.riesgo === 'critico' ? '#ef4444' : va.riesgo === 'riesgo' ? '#eab308' : va.riesgo === 'superando' ? '#22c55e' : '#71717a',
+              bg: va.riesgo === 'critico' ? 'rgba(239,68,68,0.12)' : va.riesgo === 'riesgo' ? 'rgba(234,179,8,0.12)' : va.riesgo === 'superando' ? 'rgba(34,197,94,0.12)' : 'rgba(113,113,122,0.12)',
+            }] : []}
+            analysisText={analysis?.text ?? null}
+            onDeepen={expandedMetaVendedor && analysis?.text ? () => {
+              navigate('/chat', { state: {
+                prefill: `Profundizar sobre cumplimiento de meta de ${expandedMetaVendedor}: ${curr?.realVal?.toLocaleString() ?? '?'} de ${curr?.metaVal?.toLocaleString() ?? '?'} uds (${curr?.pct?.toFixed(1) ?? '?'}%). ${analysis.text}`,
+                displayPrefill: `Profundizar: meta de ${expandedMetaVendedor}`,
+                source: 'Metas',
+              }})
+            } : undefined}
+          />
+        )
+      })()}
     </div>
   )
 }

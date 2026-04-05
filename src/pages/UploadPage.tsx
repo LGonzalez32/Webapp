@@ -13,8 +13,9 @@ import StepIndicator from '../components/upload/StepIndicator'
 import FileDropzone from '../components/upload/FileDropzone'
 import DataPreview from '../components/upload/DataPreview'
 import { cn } from '../lib/utils'
-import { FileDown, Trash2, ChevronRight, ChevronLeft, ShieldOff, Check, Plus, AlertTriangle, X } from 'lucide-react'
+import { FileDown, Trash2, ChevronRight, ChevronLeft, ShieldOff, Check, Plus, AlertTriangle, X, Lock } from 'lucide-react'
 import type { UploadStep, ParseResult, ParseError, DiscardedRow } from '../types'
+import { useUserRole } from '../lib/useUserRole'
 
 /** Type guard: estrecha ParseResult<T> al branch de error */
 function parseErr<T>(r: ParseResult<T>): r is { success: false; error: ParseError } {
@@ -63,11 +64,11 @@ const VENTAS_HEADERS = [
 ]
 const VENTAS_ROWS = [
   ['2026-03-01','ANA MARIA LOPEZ','24','SUPER SELECTOS S.A.','ACEITE CORONA 1L','142.80','RUTEO','ALIMENTOS','CENTRAL','CARLOS HERNANDEZ','ACE-001','CLI-0234'],
-  ['2026-03-01','CARLOS MENDOZA','15','DISTRIBUIDORA NORTE','DETERGENTE ARIEL 2KG','89.25','MAYOREO','LIMPIEZA','NORTE','MARIA SANTOS','DET-002','CLI-0891'],
+  ['2026-03-01','CARLOS MENDOZA','15','COMERCIAL NORTE','DETERGENTE ARIEL 2KG','89.25','MAYOREO','LIMPIEZA','NORTE','MARIA SANTOS','DET-002','CLI-0891'],
   ['2026-03-02','ANA MARIA LOPEZ','8','TIENDA LA UNION','ACEITE CORONA 1L','47.60','RUTEO','ALIMENTOS','CENTRAL','CARLOS HERNANDEZ','ACE-001','CLI-0156'],
   ['2026-03-03','ROBERTO CHAVEZ','31','SUPER SELECTOS S.A.','SHAMPOO PANTENE 400ML','198.40','MODERNO','CUIDADO PERSONAL','SUR','PEDRO MOLINA','SHA-003','CLI-0234'],
   ['2026-03-04','MARIA GONZALEZ','19','MERCADO CENTRAL','DETERGENTE ARIEL 2KG','113.05','RUTEO','LIMPIEZA','CENTRAL','CARLOS HERNANDEZ','DET-002','CLI-0445'],
-  ['2026-03-05','CARLOS MENDOZA','42','DISTRIBUIDORA NORTE','ACEITE CORONA 1L','249.90','MAYOREO','ALIMENTOS','NORTE','MARIA SANTOS','ACE-001','CLI-0891'],
+  ['2026-03-05','CARLOS MENDOZA','42','COMERCIAL NORTE','ACEITE CORONA 1L','249.90','MAYOREO','ALIMENTOS','NORTE','MARIA SANTOS','ACE-001','CLI-0891'],
   ['2026-03-06','ROBERTO CHAVEZ','7','TIENDA EL SOL','SHAMPOO PANTENE 400ML','44.80','RUTEO','CUIDADO PERSONAL','SUR','PEDRO MOLINA','SHA-003','CLI-0778'],
   ['2026-03-07','ANA MARIA LOPEZ','28','SUPER SELECTOS S.A.','DETERGENTE ARIEL 2KG','166.60','MODERNO','LIMPIEZA','CENTRAL','CARLOS HERNANDEZ','DET-002','CLI-0234'],
 ]
@@ -166,9 +167,10 @@ function TablaEjemplo({ headers, rows }: { headers: { col: string; req: boolean 
 }
 
 export default function UploadPage() {
-  const { setSales, setMetas, setInventory, setIsProcessed, setSelectedPeriod, setDataSource, resetAll, configuracion, setConfiguracion } = useAppStore()
+  const { setSales, setMetas, setInventory, setIsProcessed, setSelectedPeriod, setDataSource, resetAll, configuracion, setConfiguracion, dataSource } = useAppStore()
   const { org } = useOrgStore()
   const canEdit = useOrgStore(s => s.canEdit())
+  const { canUpload } = useUserRole()
   const navigate = useNavigate()
 
   const [steps, setSteps] = useState<UploadStep[]>(INITIAL_STEPS)
@@ -342,7 +344,7 @@ export default function UploadPage() {
   }
 
   const handleLoadDemo = () => {
-    setLoading({ title: 'Cargando demo...', subtitle: 'Generando datos de Distribuidora Los Pinos', progress: 30 })
+    setLoading({ title: 'Cargando demo...', subtitle: 'Generando datos de Comercializadora Los Pinos', progress: 30 })
     setTimeout(() => {
       const { sales, metas, inventory } = getDemoData()
       setSales(sales)
@@ -378,9 +380,22 @@ export default function UploadPage() {
     XLSX.utils.book_append_sheet(
       wb,
       XLSX.utils.aoa_to_sheet([
-        ['fecha', 'vendedor', 'unidades', 'cliente', 'producto', 'venta_neta'],
-        ['2025-01-05', 'Carlos', 45, 'Tienda Norte', 'Aceite 1L', 202.50],
-        ['2025-01-08', 'Ana', 32, 'Supermercado López', 'Harina 1kg', 38.40],
+        ['fecha', 'vendedor', 'unidades', 'cliente', 'producto', 'venta_neta', 'canal', 'categoria', 'departamento', 'supervisor'],
+        ['2025-01-15', 'María Castillo',   120, 'Supermercado López',      'Agua Pura 500ml',       180.00, 'Mayoreo',         'Refrescos',        'San Salvador',  'Patricia Ruiz'],
+        ['2025-01-15', 'María Castillo',    85, 'Tienda La Esperanza',     'Detergente 1kg',        255.00, 'Mostrador',       'Limpieza',         'La Libertad',   'Patricia Ruiz'],
+        ['2025-01-16', 'Carlos Ramírez',   200, 'Abarrotería El Sol',      'Aceite 750ml',          500.00, 'Mayoreo',         'Abarrotes',        'Sonsonate',     'Roberto Méndez'],
+        ['2025-01-16', 'Carlos Ramírez',    45, 'Mini Super Doña Ana',     'Jabón Protex 3pk',      135.00, 'Visita directa',  'Higiene',          'Sonsonate',     'Roberto Méndez'],
+        ['2025-01-17', 'Laura Hernández',  150, 'Despensa Familiar',       'Arroz 2kg',             225.00, 'Mayoreo',         'Abarrotes',        'Santa Ana',     'Patricia Ruiz'],
+        ['2025-01-17', 'Laura Hernández',   60, 'Tienda Don Pedro',        'Agua Pura 500ml',        90.00, 'Mostrador',       'Refrescos',        'Santa Ana',     'Patricia Ruiz'],
+        ['2025-01-18', 'Jorge Martínez',    90, 'Supermercado López',      'Detergente 1kg',        270.00, 'Mayoreo',         'Limpieza',         'San Salvador',  'Roberto Méndez'],
+        ['2025-01-18', 'Jorge Martínez',    35, 'Farmacia San Martín',     'Shampoo Familiar 1L',   175.00, 'Visita directa',  'Higiene',          'San Miguel',    'Roberto Méndez'],
+        ['2025-01-19', 'Ana Morales',       75, 'Tiendas Económicas',      'Aceite 750ml',          187.50, 'Teléfono',        'Abarrotes',        'La Libertad',   'Patricia Ruiz'],
+        ['2025-01-19', 'Ana Morales',      110, 'Despensa Familiar',       'Arroz 2kg',             165.00, 'Mayoreo',         'Abarrotes',        'Santa Ana',     'Patricia Ruiz'],
+        ['2025-01-20', 'María Castillo',    95, 'Comercial Central',   'Jabón Protex 3pk',      285.00, 'Mayoreo',         'Higiene',          'San Salvador',  'Patricia Ruiz'],
+        ['2025-01-20', 'Carlos Ramírez',    55, 'Tienda La Esperanza',     'Shampoo Familiar 1L',   275.00, 'Mostrador',       'Higiene',          'La Libertad',   'Roberto Méndez'],
+        ['2025-01-21', 'Laura Hernández',  180, 'Abarrotería El Sol',      'Agua Pura 500ml',       270.00, 'Mayoreo',         'Refrescos',        'Sonsonate',     'Patricia Ruiz'],
+        ['2025-01-21', 'Jorge Martínez',    40, 'Mini Super Doña Ana',     'Arroz 2kg',              60.00, 'Visita directa',  'Abarrotes',        'Sonsonate',     'Roberto Méndez'],
+        ['2025-01-22', 'Ana Morales',       65, 'Farmacia San Martín',     'Detergente 1kg',        195.00, 'Visita directa',  'Limpieza',         'San Miguel',    'Patricia Ruiz'],
       ]),
       'Ventas'
     )
@@ -388,9 +403,12 @@ export default function UploadPage() {
     XLSX.utils.book_append_sheet(
       wb,
       XLSX.utils.aoa_to_sheet([
-        ['mes_periodo', 'vendedor', 'meta'],
-        ['2025-01', 'Carlos', 650],
-        ['2025-01', 'Ana', 720],
+        ['mes_periodo', 'vendedor', 'meta', 'canal'],
+        ['2025-01', 'María Castillo',   800, 'Mayoreo'],
+        ['2025-01', 'Carlos Ramírez',  1200, 'Mayoreo'],
+        ['2025-01', 'Laura Hernández',  950, 'Mayoreo'],
+        ['2025-01', 'Jorge Martínez',   750, 'Mayoreo'],
+        ['2025-01', 'Ana Morales',      700, 'Teléfono'],
       ]),
       'Metas'
     )
@@ -398,9 +416,13 @@ export default function UploadPage() {
     XLSX.utils.book_append_sheet(
       wb,
       XLSX.utils.aoa_to_sheet([
-        ['producto', 'unidades'],
-        ['Aceite 1L', 180],
-        ['Harina 1kg', 240],
+        ['producto', 'unidades', 'categoria', 'proveedor'],
+        ['Agua Pura 500ml',       320, 'Refrescos',  'La Constancia'],
+        ['Detergente 1kg',        145, 'Limpieza',   'Henkel'],
+        ['Aceite 750ml',          210, 'Abarrotes',  'Unilever'],
+        ['Arroz 2kg',             180, 'Abarrotes',  'Arrocera San Francisco'],
+        ['Jabón Protex 3pk',       95, 'Higiene',    'Colgate-Palmolive'],
+        ['Shampoo Familiar 1L',   120, 'Higiene',    'P&G'],
       ]),
       'Inventario'
     )
@@ -408,14 +430,14 @@ export default function UploadPage() {
     XLSX.writeFile(wb, 'plantilla-salesflow.xlsx')
   }
 
-  // Guard: solo owner/editor pueden subir archivos
-  if (!canEdit) {
+  // Guard: solo owner/editor pueden subir archivos (solo aplica si hay org activa)
+  if (org && !canEdit) {
     return (
       <div className="max-w-3xl mx-auto flex flex-col items-center justify-center py-24 space-y-4">
         <ShieldOff className="w-10 h-10 text-[var(--sf-t4)]" />
-        <h2 className="text-lg font-bold text-[var(--sf-t1)]">Sin permiso para cargar archivos</h2>
+        <h2 className="text-lg font-bold text-[var(--sf-t1)]">Necesitas permisos de editor</h2>
         <p className="text-sm text-[var(--sf-t3)] text-center max-w-sm">
-          Solo el propietario o un editor puede cargar archivos. Contacta al propietario de la organización.
+          Tu administrador puede darte acceso desde Configuración → Equipo.
         </p>
       </div>
     )
@@ -495,6 +517,21 @@ export default function UploadPage() {
   const step = steps[currentStep]
   const isLastStep = currentStep === steps.length - 1
 
+  // Viewer restriction: show message if user is viewer in an org
+  if (org && !canUpload) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-4 animate-in fade-in duration-500">
+        <Lock className="w-10 h-10" style={{ color: 'var(--sf-t5)' }} />
+        <div className="text-center">
+          <p className="text-lg font-bold" style={{ color: 'var(--sf-t1)' }}>No tienes permisos para subir archivos</p>
+          <p className="text-sm mt-1" style={{ color: 'var(--sf-t4)' }}>
+            Tu rol actual es <strong>Visor</strong>. Contacta al propietario de la organización para cambiar tu rol.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="max-w-3xl mx-auto space-y-8 pb-20 animate-in fade-in duration-700">
       <LoadingOverlay
@@ -520,10 +557,10 @@ export default function UploadPage() {
           </button>
           <button
             onClick={downloadTemplate}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-[var(--sf-border)] bg-[var(--sf-elevated)] text-[var(--sf-t2)] text-sm font-medium hover:bg-[var(--sf-hover)] transition-colors"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border-2 border-[var(--sf-green)] text-[var(--sf-green)] text-sm font-semibold hover:bg-[var(--sf-green-bg)] transition-colors"
           >
-            <FileDown className="w-3.5 h-3.5" />
-            Plantilla Excel
+            <FileDown className="w-4 h-4" />
+            Descargar plantilla
           </button>
         </div>
       </div>
@@ -534,7 +571,7 @@ export default function UploadPage() {
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold text-[var(--sf-t1)]">{'\u00BF'}Primera vez? Prueba con datos demo</p>
           <p className="text-xs text-[var(--sf-t3)] mt-0.5">
-            Distribuidora Los Pinos · 8 vendedores · 18 meses de historial
+            Comercializadora Los Pinos · 8 vendedores · 18 meses de historial
           </p>
         </div>
         <button
@@ -672,13 +709,14 @@ export default function UploadPage() {
                 headers={step.id === 'ventas' ? VENTAS_HEADERS : step.id === 'metas' ? METAS_HEADERS : INVENTARIO_HEADERS}
                 rows={step.id === 'ventas' ? VENTAS_ROWS : step.id === 'metas' ? METAS_ROWS : INVENTARIO_ROWS}
               />
-              <div className="flex justify-end mt-2">
+              <div className="flex items-center justify-between mt-2">
+                <p className="text-xs text-[var(--sf-t4)]">Usa esta plantilla como guía para preparar tu archivo</p>
                 <button
                   onClick={downloadTemplate}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-[var(--sf-border)] bg-[var(--sf-elevated)] text-[var(--sf-t2)] text-sm font-medium hover:bg-[var(--sf-hover)] transition-colors cursor-pointer"
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border-2 border-[var(--sf-green)] text-[var(--sf-green)] text-sm font-semibold hover:bg-[var(--sf-green-bg)] transition-colors cursor-pointer"
                 >
-                  <FileDown className="w-3.5 h-3.5" />
-                  Descargar plantilla {step.id}
+                  <FileDown className="w-4 h-4" />
+                  Descargar plantilla
                 </button>
               </div>
             </>

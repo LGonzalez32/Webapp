@@ -1,10 +1,12 @@
-import React, { useMemo, useState, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import React, { useMemo, useState, useCallback, useEffect } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
-import { Users, ChevronUp, ChevronDown } from 'lucide-react'
+import { Users, ChevronUp, ChevronDown, Search } from 'lucide-react'
 import type { ClienteDormido } from '../types'
 import { callAI } from '../lib/chatService'
+import AnalysisDrawer from '../components/ui/AnalysisDrawer'
+import ClientePanel from '../components/cliente/ClientePanel'
 
 
 function formatDays(d: number): string {
@@ -30,23 +32,41 @@ const RECOVERY_CONFIG = {
 export default function ClientesPage() {
   useAnalysis()
   const navigate = useNavigate()
+  const location = useLocation()
+  const locState = location.state as { highlight?: string; openCliente?: string } | null
+  const highlightCliente = locState?.highlight ?? null
+  const initialPanelCliente = locState?.openCliente ?? null
+
   const {
     clientesDormidos,
     sales,
     selectedPeriod,
     dataAvailability,
     configuracion,
+    isProcessed,
+    insights,
   } = useAppStore()
+
+  const [highlightActive, setHighlightActive] = useState<string | null>(highlightCliente)
+  const highlightRef = useCallback((node: HTMLTableRowElement | null) => {
+    if (node && highlightActive) {
+      setTimeout(() => node.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300)
+      setTimeout(() => setHighlightActive(null), 3000)
+    }
+  }, [highlightActive])
 
   const [sortKey, setSortKey] = useState<SortKey>('prioridad')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [tab, setTab] = useState<'dormidos' | 'pareto' | 'riesgo'>('dormidos')
   const [filterVendedor, setFilterVendedor] = useState<string>('all')
+  const [searchCliente, setSearchCliente] = useState('')
+  const [metrica, setMetrica] = useState<'unidades' | 'dolares'>('unidades')
   const [expandedClienteId, setExpandedClienteId] = useState<string | null>(null)
   const [analysisMap, setAnalysisMap] = useState<Record<string, { loading: boolean; text: string | null }>>({})
 
   const [expandedParetoId, setExpandedParetoId] = useState<string | null>(null)
   const [paretoAnalysisMap, setParetoAnalysisMap] = useState<Record<string, { loading: boolean; text: string | null }>>({})
+  const [panelCliente, setPanelCliente] = useState<string | null>(null)
 
   const handleAnalyzeTopCliente = useCallback(async (c: ParetoCliente) => {
     const id = `pareto-${c.nombre}`
@@ -54,7 +74,7 @@ export default function ClientesPage() {
     setExpandedParetoId(id)
 
     const systemPrompt =
-      `Eres un analista comercial de una distribuidora.\n` +
+      `Eres un analista comercial.\n` +
       `Responde SIEMPRE en este formato exacto, sin introducción ni cierre:\n\n` +
       `📊 RESUMEN: [Una oración de máximo 15 palabras con el hallazgo principal]\n\n` +
       `🔺 CRECIMIENTO:\n- [Dato positivo sobre este cliente — máximo 2 bullets]\n\n` +
@@ -84,7 +104,9 @@ export default function ClientesPage() {
       )
       setParetoAnalysisMap(prev => ({ ...prev, [id]: { loading: false, text: json.choices?.[0]?.message?.content ?? 'Sin respuesta' } }))
     } catch (err) {
-      setParetoAnalysisMap(prev => ({ ...prev, [id]: { loading: false, text: `Error: ${err instanceof Error ? err.message : 'Error al conectar.'}` } }))
+      const code = err instanceof Error ? err.message : ''
+      const msg = code === 'INVALID_KEY' ? 'API key no configurada. Ve a Configuración → Asistente IA.' : code === 'RATE_LIMIT' ? 'Límite de requests alcanzado. Intenta en unos segundos.' : 'No se pudo conectar con el asistente IA.'
+      setParetoAnalysisMap(prev => ({ ...prev, [id]: { loading: false, text: msg } }))
     }
   }, [configuracion, dataAvailability.has_venta_neta])
 
@@ -94,7 +116,7 @@ export default function ClientesPage() {
     setExpandedClienteId(id)
 
     const systemPrompt =
-      `Eres un analista comercial de una distribuidora.\n` +
+      `Eres un analista comercial.\n` +
       `Responde SIEMPRE en este formato exacto, sin introducción ni cierre:\n\n` +
       `📊 RESUMEN: [Una oración de máximo 15 palabras con el hallazgo principal]\n\n` +
       `🔺 CRECIMIENTO:\n- [Dato positivo sobre este cliente si existe — máximo 2 bullets]\n\n` +
@@ -125,13 +147,15 @@ export default function ClientesPage() {
       )
       setAnalysisMap(prev => ({ ...prev, [id]: { loading: false, text: json.choices?.[0]?.message?.content ?? 'Sin respuesta' } }))
     } catch (err) {
-      setAnalysisMap(prev => ({ ...prev, [id]: { loading: false, text: `Error: ${err instanceof Error ? err.message : 'Error al conectar.'}` } }))
+      const code = err instanceof Error ? err.message : ''
+      const msg = code === 'INVALID_KEY' ? 'API key no configurada. Ve a Configuración → Asistente IA.' : code === 'RATE_LIMIT' ? 'Límite de requests alcanzado. Intenta en unos segundos.' : 'No se pudo conectar con el asistente IA.'
+      setAnalysisMap(prev => ({ ...prev, [id]: { loading: false, text: msg } }))
     }
   }, [configuracion])
 
   const vendedores = useMemo(
-    () => [...new Set(clientesDormidos.map(c => c.vendedor))].sort(),
-    [clientesDormidos],
+    () => [...new Set([...clientesDormidos.map(c => c.vendedor), ...sales.map(s => s.vendedor)])].sort(),
+    [clientesDormidos, sales],
   )
 
   const paretoClientes = useMemo(() => {
@@ -218,10 +242,15 @@ export default function ClientesPage() {
     })
   }, [sales, clientesDormidos])
 
-  if (!dataAvailability.has_cliente) {
-    navigate('/dashboard')
-    return null
-  }
+  useEffect(() => {
+    if (initialPanelCliente) setPanelCliente(initialPanelCliente)
+  }, [initialPanelCliente])
+
+  useEffect(() => {
+    if (isProcessed && !dataAvailability.has_cliente) navigate('/dashboard')
+  }, [isProcessed, dataAvailability.has_cliente, navigate])
+
+  if (!dataAvailability.has_cliente) return null
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -239,9 +268,12 @@ export default function ClientesPage() {
       : <ChevronUp className="w-3 h-3 text-[#00B894]" />
   }
 
-  const filtered = filterVendedor === 'all'
-    ? clientesDormidos
-    : clientesDormidos.filter(c => c.vendedor === filterVendedor)
+  const searchQ = searchCliente.toLowerCase()
+  const filtered = clientesDormidos.filter(c => {
+    if (filterVendedor !== 'all' && c.vendedor !== filterVendedor) return false
+    if (searchQ && !c.cliente.toLowerCase().includes(searchQ)) return false
+    return true
+  })
 
   const sorted = [...filtered].sort((a, b) => {
     const mul = sortDir === 'desc' ? -1 : 1
@@ -255,14 +287,27 @@ export default function ClientesPage() {
 
   const totalValorEnRiesgo = clientesDormidos.reduce((a, c) => a + c.valor_historico, 0)
   const moneda = configuracion.moneda
+  const usaDolares = metrica === 'dolares' && dataAvailability.has_venta_neta
+
+  // Filtered versions for pareto and riesgo (base memos stay unfiltered for badges)
+  const filteredPareto = paretoClientes.filter(c => {
+    if (filterVendedor !== 'all' && c.vendedor !== filterVendedor) return false
+    if (searchQ && !c.nombre.toLowerCase().includes(searchQ)) return false
+    return true
+  })
+  const filteredRiesgo = riesgoTemprano.filter(c => {
+    if (filterVendedor !== 'all' && c.vendedor !== filterVendedor) return false
+    if (searchQ && !c.nombre.toLowerCase().includes(searchQ)) return false
+    return true
+  })
 
   return (
     <div className="max-w-5xl mx-auto space-y-6 pb-20 animate-in fade-in duration-700">
       {/* Header + inline badges */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
-          <h1 style={{ fontSize: '22px', fontWeight: 600, margin: 0 }}>Clientes</h1>
-          <p style={{ fontSize: '12px', color: 'var(--sf-t4)', margin: '3px 0 0' }}>Clientes dormidos, pareto y señales tempranas de riesgo</p>
+          <h1 className="text-2xl font-bold tracking-tight text-[var(--sf-t1)]">Clientes</h1>
+          <p style={{ fontSize: '12px', color: 'var(--sf-t5)', margin: '3px 0 0' }}>Clientes dormidos, pareto y señales tempranas de riesgo</p>
         </div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           <span style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'rgba(226,75,74,0.15)', color: '#E24B4A', border: '1px solid rgba(226,75,74,0.25)' }}>
@@ -289,8 +334,78 @@ export default function ClientesPage() {
       {/* Card: tabs + table */}
       <div style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '12px', padding: '16px', marginTop: '16px' }}>
 
-      {/* Tabs + filtro vendedor */}
-      <div className="flex flex-wrap items-center gap-3 justify-between">
+      {/* Filter bar */}
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none" style={{ color: 'var(--sf-t5)' }} />
+          <input
+            type="text"
+            placeholder="Buscar cliente..."
+            value={searchCliente}
+            onChange={e => setSearchCliente(e.target.value)}
+            className="focus:outline-none"
+            style={{
+              background: 'var(--sf-inset)',
+              border: '1px solid var(--sf-border)',
+              borderRadius: 8,
+              color: 'var(--sf-t1)',
+              fontSize: 13,
+              height: 36,
+              paddingLeft: 32,
+              paddingRight: 12,
+              width: 180,
+              transition: 'border-color 150ms ease',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.borderColor = '#1D9E7540')}
+            onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--sf-border)')}
+          />
+        </div>
+        {vendedores.length > 1 && (
+          <select
+            value={filterVendedor}
+            onChange={e => setFilterVendedor(e.target.value)}
+            style={{
+              background: 'var(--sf-inset)',
+              border: '1px solid var(--sf-border)',
+              borderRadius: 8,
+              color: 'var(--sf-t1)',
+              fontSize: 13,
+              height: 36,
+              padding: '0 12px',
+            }}
+            className="focus:outline-none"
+          >
+            <option value="all">Todos los vendedores</option>
+            {vendedores.map(v => <option key={v} value={v}>{v}</option>)}
+          </select>
+        )}
+        {dataAvailability.has_venta_neta && (
+          <div style={{ display: 'inline-flex', background: 'var(--sf-inset)', borderRadius: 8, padding: 2, gap: 2, border: '1px solid var(--sf-border)' }}>
+            {(['unidades', 'dolares'] as const).map(m => (
+              <button
+                key={m}
+                onClick={() => setMetrica(m)}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: 6,
+                  fontSize: 12,
+                  fontWeight: 500,
+                  background: metrica === m ? 'rgba(29,158,117,0.15)' : 'transparent',
+                  color: metrica === m ? '#1D9E75' : 'var(--sf-t4)',
+                  border: metrica === m ? '1px solid rgba(29,158,117,0.25)' : '1px solid transparent',
+                  cursor: 'pointer',
+                  transition: 'all 150ms',
+                }}
+              >
+                {m === 'unidades' ? 'Uds' : moneda}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Tabs */}
+      <div className="flex flex-wrap items-center gap-3">
         <div style={{ display: 'inline-flex', background: 'var(--sf-inset)', borderRadius: '8px', padding: '3px', gap: '2px' }}>
           {([
             { key: 'dormidos', label: `Dormidos (${clientesDormidos.length})` },
@@ -316,17 +431,10 @@ export default function ClientesPage() {
             </button>
           ))}
         </div>
-        {tab === 'dormidos' && vendedores.length > 1 && (
-          <select
-            value={filterVendedor}
-            onChange={e => setFilterVendedor(e.target.value)}
-            className="px-3 py-2 bg-[var(--sf-card)] border border-[var(--sf-border)] rounded-lg text-xs text-[var(--sf-t1)] focus:outline-none focus:border-[#1D9E75]/50"
-          >
-            <option value="all">Todos los vendedores</option>
-            {vendedores.map(v => <option key={v} value={v}>{v}</option>)}
-          </select>
-        )}
       </div>
+
+      {/* Tab content — keyed div triggers fade-in on tab switch */}
+      <div key={tab} className="animate-in fade-in duration-150">
 
       {/* Clientes dormidos table */}
       {tab === 'dormidos' && (
@@ -335,7 +443,7 @@ export default function ClientesPage() {
             <div className="flex flex-col items-center justify-center py-16 text-[var(--sf-t4)]">
               <Users className="w-10 h-10 mb-3 opacity-30" />
               <p className="font-bold text-sm">
-                {filterVendedor === 'all' ? 'Sin clientes dormidos' : `Sin clientes dormidos para ${filterVendedor}`}
+                {searchQ || filterVendedor !== 'all' ? 'Sin resultados para esta búsqueda' : 'Sin clientes dormidos'}
               </p>
               <p className="text-xs mt-1">Todos los clientes han comprado recientemente</p>
             </div>
@@ -366,6 +474,7 @@ export default function ClientesPage() {
                           borderLeft: i === 0 ? '3px solid #1D9E75' : undefined,
                           cursor: 'pointer',
                           userSelect: 'none',
+                          whiteSpace: 'nowrap',
                         }}
                       >
                         <span className="flex items-center gap-1" style={{ justifyContent: i > 1 ? 'flex-end' : 'flex-start' }}>
@@ -382,15 +491,24 @@ export default function ClientesPage() {
                     const score = c.recovery_score
                     const analysis = analysisMap[c.cliente]
                     const isExpanded = expandedClienteId === c.cliente
+                    const isHL = highlightActive === c.cliente
                     return (
                       <React.Fragment key={i}>
                       <tr
-                        style={{ borderBottom: isExpanded ? 'none' : '1px solid var(--sf-border)', transition: 'background 120ms' }}
-                        onMouseEnter={e => (e.currentTarget.style.background = 'var(--sf-hover)')}
-                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                        ref={isHL ? highlightRef : undefined}
+                        style={{ borderBottom: isExpanded ? 'none' : '1px solid var(--sf-border)', transition: 'background 120ms', ...(isHL ? { outline: '2px solid #f59e0b', outlineOffset: -1, background: 'rgba(245,158,11,0.08)' } : {}) }}
+                        onMouseEnter={e => { if (!isHL) e.currentTarget.style.background = 'var(--sf-hover)' }}
+                        onMouseLeave={e => { if (!isHL) e.currentTarget.style.background = 'transparent' }}
                       >
                         <td style={{ padding: '10px 16px' }}>
-                          <div style={{ fontSize: '13px', fontWeight: 500, color: 'var(--sf-t1)' }}>{c.cliente}</div>
+                          <div
+                            style={{ fontSize: '13px', fontWeight: 500, color: 'var(--sf-t1)', cursor: 'pointer' }}
+                            onClick={() => setPanelCliente(c.cliente)}
+                            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = 'var(--sf-green)' }}
+                            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = 'var(--sf-t1)' }}
+                          >
+                            {c.cliente} <span style={{ fontSize: '11px', opacity: 0.5 }}>{'\u2192'}</span>
+                          </div>
                           <div style={{ fontSize: '11px', color: 'var(--sf-t4)', marginTop: '1px', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.recovery_explicacion}>
                             {c.recovery_explicacion}
                           </div>
@@ -401,14 +519,15 @@ export default function ClientesPage() {
                             padding: '10px 12px',
                             fontWeight: 600,
                             fontVariantNumeric: 'tabular-nums',
+                            fontFamily: "'DM Mono', monospace",
                             textAlign: 'right',
                             color: c.dias_sin_actividad >= 90 ? '#E24B4A' : c.dias_sin_actividad >= 60 ? '#EF9F27' : 'var(--sf-t2)',
                           }}
                         >
                           {formatDays(c.dias_sin_actividad)}
                         </td>
-                        <td style={{ padding: '10px 12px', color: 'var(--sf-t3)', fontVariantNumeric: 'tabular-nums', textAlign: 'right' }}>{c.compras_historicas}</td>
-                        <td style={{ padding: '10px 12px', color: 'var(--sf-t1)', fontWeight: 500, fontVariantNumeric: 'tabular-nums', textAlign: 'right' }}>
+                        <td style={{ padding: '10px 12px', color: 'var(--sf-t3)', fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace", textAlign: 'right' }}>{c.compras_historicas}</td>
+                        <td style={{ padding: '10px 12px', color: 'var(--sf-t1)', fontWeight: 500, fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace", textAlign: 'right' }}>
                           {moneda} {c.valor_historico >= 1000
                             ? `${(c.valor_historico / 1000).toFixed(1)}k`
                             : c.valor_historico.toLocaleString(undefined, { maximumFractionDigits: 0 })}
@@ -520,7 +639,7 @@ export default function ClientesPage() {
                                         ``,
                                         `Con base en este análisis, profundiza: ¿por qué se durmió este cliente, qué productos compraba, hay patrón con otros clientes dormidos del mismo vendedor?`
                                       ].filter(Boolean).join('\n')
-                                      navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage } })
+                                      navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage, source: 'Clientes' } })
                                     }}
                                     style={{
                                       marginTop: '12px',
@@ -566,11 +685,28 @@ export default function ClientesPage() {
       {/* Pareto table */}
       {tab === 'pareto' && (
         <div style={{ overflow: 'hidden', marginTop: '12px' }}>
-          {paretoClientes.length === 0 ? (
+          {/* Legend */}
+          {paretoClientes.length > 0 && (
+            <div className="flex items-center gap-4 flex-wrap px-4 py-2 mb-1" style={{ fontSize: 10, color: 'var(--sf-t5)' }}>
+              <span className="flex items-center gap-1.5">
+                <span style={{ width: 8, height: 2, background: 'rgba(29,158,117,0.6)', display: 'inline-block', borderRadius: 1 }} />
+                ≤50% bajo riesgo
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span style={{ width: 8, height: 2, background: 'rgba(239,159,39,0.6)', display: 'inline-block', borderRadius: 1 }} />
+                50-80% concentración media
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span style={{ width: 8, height: 2, background: 'rgba(226,75,74,0.6)', display: 'inline-block', borderRadius: 1 }} />
+                &gt;80% alta concentración
+              </span>
+            </div>
+          )}
+          {filteredPareto.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-[var(--sf-t4)]">
               <Users className="w-10 h-10 mb-3 opacity-30" />
-              <p className="font-bold text-sm">Sin datos de clientes</p>
-              <p className="text-xs mt-1">Carga un archivo con columna de cliente para ver el pareto</p>
+              <p className="font-bold text-sm">{searchQ || filterVendedor !== 'all' ? 'Sin resultados para esta búsqueda' : 'Sin datos de clientes'}</p>
+              <p className="text-xs mt-1">{searchQ || filterVendedor !== 'all' ? 'Prueba con otros filtros' : 'Carga un archivo con columna de cliente para ver el pareto'}</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -605,14 +741,17 @@ export default function ClientesPage() {
                     const rows: React.ReactNode[] = []
                     let shown50 = false
                     let shown80 = false
-                    paretoClientes.forEach((c, idx) => {
+                    filteredPareto.forEach((c, idx) => {
                       const prevPct = idx > 0 ? paretoClientes[idx - 1].cumulativePct : 0
                       if (!shown50 && c.cumulativePct >= 50 && prevPct < 50) {
                         shown50 = true
                         rows.push(
                           <tr key="div50">
-                            <td colSpan={7} style={{ padding: '2px 12px', borderTop: '1px dashed rgba(29,158,117,0.3)' }}>
-                              <span style={{ fontSize: '10px', color: '#1D9E75', opacity: 0.6 }}>— 50% del volumen total</span>
+                            <td colSpan={7} style={{ padding: '4px 12px', borderTop: '2px dashed rgba(29,158,117,0.35)' }}>
+                              <div className="flex items-center gap-2">
+                                <span style={{ fontSize: '10px', color: '#1D9E75', fontWeight: 600 }}>▲ 50% del volumen</span>
+                                <span style={{ fontSize: '9px', color: 'var(--sf-t5)' }}>— {idx + 1} clientes concentran la mitad</span>
+                              </div>
                             </td>
                           </tr>
                         )
@@ -621,8 +760,11 @@ export default function ClientesPage() {
                         shown80 = true
                         rows.push(
                           <tr key="div80">
-                            <td colSpan={7} style={{ padding: '2px 12px', borderTop: '1px dashed rgba(239,159,39,0.3)' }}>
-                              <span style={{ fontSize: '10px', color: '#EF9F27', opacity: 0.6 }}>— 80% del volumen total</span>
+                            <td colSpan={7} style={{ padding: '4px 12px', borderTop: '2px dashed rgba(239,159,39,0.35)' }}>
+                              <div className="flex items-center gap-2">
+                                <span style={{ fontSize: '10px', color: '#EF9F27', fontWeight: 600 }}>▲ 80% del volumen</span>
+                                <span style={{ fontSize: '9px', color: 'var(--sf-t5)' }}>— {idx + 1} de {paretoClientes.length} clientes</span>
+                              </div>
                             </td>
                           </tr>
                         )
@@ -638,18 +780,25 @@ export default function ClientesPage() {
                           onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                         >
                           <td style={{ padding: '9px 16px' }}>
-                            <div style={{ fontSize: '13px', fontWeight: 500, color: 'var(--sf-t1)' }}>{c.nombre}</div>
+                            <div
+                              style={{ fontSize: '13px', fontWeight: 500, color: 'var(--sf-t1)', cursor: 'pointer' }}
+                              onClick={() => setPanelCliente(c.nombre)}
+                              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = 'var(--sf-green)' }}
+                              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = 'var(--sf-t1)' }}
+                            >
+                              {c.nombre} <span style={{ fontSize: '11px', opacity: 0.5 }}>{'\u2192'}</span>
+                            </div>
                           </td>
                           <td style={{ padding: '9px 12px', color: 'var(--sf-t3)', fontSize: '12px' }}>{c.vendedor}</td>
-                          <td style={{ padding: '9px 12px', textAlign: 'right', color: 'var(--sf-t2)', fontVariantNumeric: 'tabular-nums' }}>
+                          <td style={{ padding: '9px 12px', textAlign: 'right', color: 'var(--sf-t2)', fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace" }}>
                             {c.totalUnidades.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                           </td>
-                          <td style={{ padding: '9px 12px', textAlign: 'right', color: 'var(--sf-t1)', fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>
+                          <td style={{ padding: '9px 12px', textAlign: 'right', color: 'var(--sf-t1)', fontWeight: 500, fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace" }}>
                             {dataAvailability.has_venta_neta
                               ? `${moneda} ${c.totalVenta >= 1000 ? `${(c.totalVenta / 1000).toFixed(1)}k` : c.totalVenta.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
                               : '—'}
                           </td>
-                          <td style={{ padding: '9px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600,
+                          <td style={{ padding: '9px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace", fontWeight: 600,
                             color: c.varPct == null ? 'var(--sf-t4)' : c.varPct >= 0 ? '#1D9E75' : '#E24B4A' }}>
                             {c.varPct == null ? '—' : `${c.varPct >= 0 ? '+' : ''}${c.varPct.toFixed(1)}%`}
                           </td>
@@ -720,62 +869,16 @@ export default function ClientesPage() {
                             </button>
                           </td>
                         </tr>
-                        {/* Inline analysis panel */}
-                        {isParetoExpanded && (paretoAnalysis?.loading || paretoAnalysis?.text) && (
+                        {/* Loading indicator */}
+                        {isParetoExpanded && paretoAnalysis?.loading && (
                           <tr>
                             <td colSpan={7} style={{ padding: 0, borderBottom: '1px solid var(--sf-border)' }}>
-                              <div style={{ padding: '16px 24px', background: 'var(--sf-inset)', borderTop: '1px solid var(--sf-border)' }}>
-                                {paretoAnalysis.loading ? (
-                                  <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--sf-t4)' }}>
-                                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
-                                    </svg>
-                                    Analizando cliente…
-                                  </div>
-                                ) : paretoAnalysis.text ? (
-                                  <>
-                                    <div className="text-[13px] leading-relaxed whitespace-pre-line" style={{ color: 'var(--sf-t3)' }}>
-                                      {paretoAnalysis.text}
-                                    </div>
-                                    <button
-                                      onClick={() => {
-                                        const displayMessage = `Profundizar: cliente ${c.nombre} (${c.peso.toFixed(1)}% del total)`
-                                        const fullContext = [
-                                          `Profundizar sobre cliente top: ${c.nombre}`,
-                                          `Vendedor: ${c.vendedor}`,
-                                          `Unidades YTD: ${c.totalUnidades.toLocaleString()}`,
-                                          dataAvailability.has_venta_neta ? `Venta neta YTD: ${moneda} ${c.totalVenta.toLocaleString()}` : '',
-                                          `Variación YoY: ${c.varPct != null ? `${c.varPct.toFixed(1)}%` : 'N/A'}`,
-                                          `Peso: ${c.peso.toFixed(1)}% del total`,
-                                          paretoAnalysis.text ? `\nAnálisis previo:\n${paretoAnalysis.text}` : '',
-                                          ``,
-                                          `Con base en este análisis, profundiza: ¿este cliente está creciendo o decreciendo, qué productos compra, hay riesgo de concentración, qué vendedor lo atiende?`
-                                        ].filter(Boolean).join('\n')
-                                        navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage } })
-                                      }}
-                                      style={{
-                                        marginTop: '12px',
-                                        display: 'inline-flex',
-                                        alignItems: 'center',
-                                        gap: '6px',
-                                        padding: '6px 14px',
-                                        borderRadius: '8px',
-                                        border: '1px solid rgba(29,158,117,0.35)',
-                                        background: 'rgba(29,158,117,0.08)',
-                                        color: '#1D9E75',
-                                        fontSize: '12px',
-                                        fontWeight: 600,
-                                        cursor: 'pointer',
-                                        transition: 'all 150ms',
-                                      }}
-                                      onMouseEnter={e => (e.currentTarget.style.opacity = '0.8')}
-                                      onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
-                                    >
-                                      + Profundizar
-                                    </button>
-                                  </>
-                                ) : null}
+                              <div className="flex items-center gap-2 text-sm" style={{ padding: '12px 24px', background: 'var(--sf-inset)', color: 'var(--sf-t4)' }}>
+                                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                                </svg>
+                                Analizando {c.nombre}…
                               </div>
                             </td>
                           </tr>
@@ -795,11 +898,11 @@ export default function ClientesPage() {
       {/* Riesgo Temprano table */}
       {tab === 'riesgo' && (
         <div style={{ overflow: 'hidden', marginTop: '12px' }}>
-          {riesgoTemprano.length === 0 ? (
+          {filteredRiesgo.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-[var(--sf-t4)]">
               <Users className="w-10 h-10 mb-3 opacity-30" />
-              <p className="font-bold text-sm">Sin señales de riesgo temprano</p>
-              <p className="text-xs mt-1">Todos los clientes activos compran dentro de su frecuencia normal</p>
+              <p className="font-bold text-sm">{searchQ || filterVendedor !== 'all' ? 'Sin resultados para esta búsqueda' : 'Sin señales de riesgo temprano'}</p>
+              <p className="text-xs mt-1">{searchQ || filterVendedor !== 'all' ? 'Prueba con otros filtros' : 'Todos los clientes activos compran dentro de su frecuencia normal'}</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -830,7 +933,7 @@ export default function ClientesPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {riesgoTemprano.map((c, i) => (
+                  {filteredRiesgo.map((c, i) => (
                     <tr
                       key={i}
                       style={{ borderBottom: '1px solid var(--sf-border)', transition: 'background 120ms' }}
@@ -838,16 +941,23 @@ export default function ClientesPage() {
                       onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                     >
                       <td style={{ padding: '9px 16px' }}>
-                        <div style={{ fontSize: '13px', fontWeight: 500, color: 'var(--sf-t1)' }}>{c.nombre}</div>
+                        <div
+                          style={{ fontSize: '13px', fontWeight: 500, color: 'var(--sf-t1)', cursor: 'pointer' }}
+                          onClick={() => setPanelCliente(c.nombre)}
+                          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = 'var(--sf-green)' }}
+                          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = 'var(--sf-t1)' }}
+                        >
+                          {c.nombre} <span style={{ fontSize: '11px', opacity: 0.5 }}>{'\u2192'}</span>
+                        </div>
                       </td>
                       <td style={{ padding: '9px 12px', color: 'var(--sf-t3)', fontSize: '12px' }}>{c.vendedor}</td>
-                      <td style={{ padding: '9px 12px', textAlign: 'right', color: 'var(--sf-t3)', fontVariantNumeric: 'tabular-nums' }}>
+                      <td style={{ padding: '9px 12px', textAlign: 'right', color: 'var(--sf-t3)', fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace" }}>
                         {c.lastPurchase.toLocaleDateString('es-MX', { day: '2-digit', month: 'short' })}
                       </td>
-                      <td style={{ padding: '9px 12px', textAlign: 'right', color: 'var(--sf-t3)' }}>
+                      <td style={{ padding: '9px 12px', textAlign: 'right', color: 'var(--sf-t3)', fontFamily: "'DM Mono', monospace" }}>
                         cada {Math.round(c.avgDays)}d
                       </td>
-                      <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums',
+                      <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace",
                         color: c.signal === 'en riesgo' ? '#E24B4A' : '#EF9F27' }}>
                         +{c.atraso}d
                       </td>
@@ -861,7 +971,7 @@ export default function ClientesPage() {
                           {c.signal === 'en riesgo' ? 'En riesgo' : 'Desacelerando'}
                         </span>
                       </td>
-                      <td style={{ padding: '9px 12px', textAlign: 'right', color: 'var(--sf-t1)', fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>
+                      <td style={{ padding: '9px 12px', textAlign: 'right', color: 'var(--sf-t1)', fontWeight: 500, fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace" }}>
                         {moneda} {c.valorHistorico >= 1000
                           ? `${(c.valorHistorico / 1000).toFixed(1)}k`
                           : c.valorHistorico.toLocaleString(undefined, { maximumFractionDigits: 0 })}
@@ -875,7 +985,64 @@ export default function ClientesPage() {
         </div>
       )}
 
+      </div>{/* end tab fade wrapper */}
+
+      {/* Drawer for Top Clientes analysis */}
+      {(() => {
+        const drawerClienteName = expandedParetoId?.replace('pareto-', '') ?? null
+        const drawerCliente = drawerClienteName ? paretoClientes.find(c => c.nombre === drawerClienteName) : null
+        const analysis = expandedParetoId ? paretoAnalysisMap[expandedParetoId] : null
+        const isOpen = !!drawerCliente && !!analysis?.text && !analysis?.loading
+
+        return (
+          <AnalysisDrawer
+            isOpen={isOpen}
+            onClose={() => setExpandedParetoId(null)}
+            title={drawerCliente?.nombre ?? ''}
+            subtitle={drawerCliente?.varPct != null ? `${drawerCliente.varPct >= 0 ? '+' : ''}${drawerCliente.varPct.toFixed(1)}% YoY` : undefined}
+            badges={drawerCliente ? [
+              { label: `${drawerCliente.peso.toFixed(1)}% del total`, color: '#1D9E75', bg: 'rgba(29,158,117,0.12)' },
+            ] : []}
+            analysisText={analysis?.text ?? null}
+            onDeepen={drawerCliente && analysis?.text ? () => {
+              const displayMessage = `Profundizar: cliente ${drawerCliente.nombre} (${drawerCliente.peso.toFixed(1)}% del total)`
+              const fullContext = [
+                `Profundizar sobre cliente top: ${drawerCliente.nombre}`,
+                `Vendedor: ${drawerCliente.vendedor}`,
+                `Unidades YTD: ${drawerCliente.totalUnidades.toLocaleString()}`,
+                dataAvailability.has_venta_neta ? `Venta neta YTD: ${moneda} ${drawerCliente.totalVenta.toLocaleString()}` : '',
+                `Variación YoY: ${drawerCliente.varPct != null ? `${drawerCliente.varPct.toFixed(1)}%` : 'N/A'}`,
+                `Peso: ${drawerCliente.peso.toFixed(1)}% del total`,
+                analysis.text ? `\nAnálisis previo:\n${analysis.text}` : '',
+                '', `Con base en este análisis, profundiza: ¿este cliente está creciendo o decreciendo, qué productos compra, hay riesgo de concentración?`
+              ].filter(Boolean).join('\n')
+              navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage, source: 'Clientes' } })
+            } : undefined}
+            deepenLabel="+ Profundizar en Chat IA"
+          />
+        )
+      })()}
+
       </div>{/* end card */}
+
+      {/* ClientePanel slide-in */}
+      {panelCliente && (
+        <>
+          <div
+            className="fixed inset-0 bg-black/60 z-40"
+            onClick={() => setPanelCliente(null)}
+          />
+          <ClientePanel
+            clienteName={panelCliente}
+            sales={sales}
+            selectedPeriod={selectedPeriod}
+            clientesDormidos={clientesDormidos}
+            dataAvailability={dataAvailability}
+            insights={insights}
+            onClose={() => setPanelCliente(null)}
+          />
+        </>
+      )}
     </div>
   )
 }

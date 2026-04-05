@@ -4,7 +4,7 @@
 ---
 
 ## PRODUCTO
-B2B SaaS para distribuidores. Detecta riesgos comerciales
+B2B SaaS para empresas con equipos de ventas. Detecta riesgos comerciales
 antes de que afecten resultados. NO es un dashboard BI,
 es un motor de decisiones.
 
@@ -102,7 +102,7 @@ Insights con impacto_economico (solo si has_venta_neta):
 ---
 
 ## DATOS DEMO
-Empresa: Distribuidora Los Pinos S.A.
+Empresa: Comercializadora Los Pinos S.A.
 8 vendedores, 12 productos, 11 clientes, 18 meses historial
 3 canales: Mostrador, Visita directa, Teléfono
 Inventario demo: 5 categorías activas

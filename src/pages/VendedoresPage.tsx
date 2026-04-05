@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useCallback } from 'react'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
 import { useNavigate, useLocation } from 'react-router-dom'
@@ -6,6 +6,8 @@ import { cn } from '../lib/utils'
 import type { VendorAnalysis } from '../types'
 import VendedorPanel from '../components/vendedor/VendedorPanel'
 import { ChevronDown, ChevronRight, Search } from 'lucide-react'
+import AnalysisDrawer from '../components/ui/AnalysisDrawer'
+import { callAI } from '../lib/chatService'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -38,7 +40,17 @@ export default function VendedoresPage() {
     supervisorAnalysis, dataSource,
   } = useAppStore()
   const navigate = useNavigate()
-  const { search: locationSearch } = useLocation()
+  const location = useLocation()
+  const { search: locationSearch } = location
+  const highlightVendedor = (location.state as { highlight?: string } | null)?.highlight ?? null
+
+  const [highlightActive, setHighlightActive] = useState<string | null>(highlightVendedor)
+  const highlightRef = useCallback((node: HTMLDivElement | null) => {
+    if (node && highlightActive) {
+      setTimeout(() => node.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300)
+      setTimeout(() => setHighlightActive(null), 3000)
+    }
+  }, [highlightActive])
 
   const [selected, setSelected]         = useState<VendorAnalysis | null>(null)
   const [search, setSearch]             = useState('')
@@ -53,6 +65,8 @@ export default function VendedoresPage() {
     const param = new URLSearchParams(locationSearch).get('filter')
     return param ?? 'all'
   })
+  const [vendedorAnalysisMap, setVendedorAnalysisMap] = useState<Record<string, { loading: boolean; text: string | null }>>({})
+  const [expandedVendedor, setExpandedVendedor] = useState<string | null>(null)
 
   // Expand all supervisor zones on first data load
   useEffect(() => {
@@ -65,14 +79,6 @@ export default function VendedoresPage() {
     () => [...new Set(sales.map(s => s.canal).filter((c): c is string => !!c))].sort(),
     [sales],
   )
-
-  // Header counts (from full unfiltered list)
-  const counts = useMemo(() => ({
-    critico:   vendorAnalysis.filter(v => v.riesgo === 'critico').length,
-    riesgo:    vendorAnalysis.filter(v => v.riesgo === 'riesgo').length,
-    ok:        vendorAnalysis.filter(v => v.riesgo === 'ok').length,
-    superando: vendorAnalysis.filter(v => v.riesgo === 'superando').length,
-  }), [vendorAnalysis])
 
   // Filter only — sort applied separately in `sorted`
   const filtered = useMemo(() => {
@@ -90,6 +96,14 @@ export default function VendedoresPage() {
     }
     return data
   }, [vendorAnalysis, sales, search, filterEstado, filterCanal])
+
+  // Header counts — refleja el filtro activo
+  const counts = useMemo(() => ({
+    critico:   filtered.filter(v => v.riesgo === 'critico').length,
+    riesgo:    filtered.filter(v => v.riesgo === 'riesgo').length,
+    ok:        filtered.filter(v => v.riesgo === 'ok').length,
+    superando: filtered.filter(v => v.riesgo === 'superando').length,
+  }), [filtered])
 
   // Team total for PESO % denominator (always unfiltered)
   const teamTotal = useMemo(() => {
@@ -181,10 +195,83 @@ export default function VendedoresPage() {
       .filter(g => g.rows.length > 0)
   }, [supervisorAnalysis, sorted, hasSuper])
 
+  // ── IA analysis handlers (must be before early returns — React hooks rule) ──
+  const handleAnalyzeVendedor = useCallback(async (v: VendorAnalysis) => {
+    const key = v.vendedor
+    setExpandedVendedor(key)
+    setVendedorAnalysisMap(prev => ({ ...prev, [key]: { loading: true, text: null } }))
+
+    const dormidos = clientesDormidos.filter(c => c.vendedor === v.vendedor)
+    const vis = insights.filter(i => i.vendedor === v.vendedor)
+    const mon = configuracion.moneda
+
+    const userPrompt = [
+      `Vendedor: ${v.vendedor}`,
+      `Estado: ${v.riesgo.toUpperCase()}`,
+      `Unidades período: ${v.ventas_periodo}`,
+      v.variacion_pct != null ? `Variación vs anterior: ${v.variacion_pct.toFixed(1)}%` : '',
+      v.ytd_actual != null ? `YTD actual: ${v.ytd_actual.toLocaleString()}` : '',
+      v.ytd_anterior != null ? `YTD anterior: ${v.ytd_anterior.toLocaleString()}` : '',
+      v.variacion_ytd_pct != null ? `Variación YTD: ${v.variacion_ytd_pct.toFixed(1)}%` : '',
+      v.meta != null ? `Meta: ${v.meta} | Cumplimiento: ${v.cumplimiento_pct?.toFixed(1)}%` : '',
+      `Semanas bajo promedio: ${v.semanas_bajo_promedio}`,
+      dormidos.length > 0 ? `Clientes dormidos: ${dormidos.slice(0, 3).map(c => `${c.cliente} (${c.dias_sin_actividad}d)`).join(', ')}` : '',
+      vis.length > 0 ? `Alertas activas: ${vis.map(i => i.titulo).join('; ')}` : '',
+    ].filter(Boolean).join('\n')
+
+    const systemPrompt = `Eres un analista comercial de ${configuracion.empresa}.
+Responde SIEMPRE en este formato exacto, sin introducción ni cierre:
+
+📊 RESUMEN: [Una oración de máximo 15 palabras con el hallazgo principal]
+
+📈 RENDIMIENTO:
+- [Dato clave sobre su desempeño actual vs histórico — máximo 2 bullets]
+
+⚠️ RIESGO:
+- [Dato sobre el riesgo principal de este vendedor — máximo 2 bullets]
+
+💡 HALLAZGO: [Un dato concreto no obvio — con números. NUNCA preguntas ni instrucciones operativas.]
+
+Reglas:
+- Máximo 120 palabras en total
+- Cada bullet debe tener un número concreto
+- Si una sección no aplica, omítela
+- NUNCA des instrucciones operativas
+- Moneda: ${mon}
+- Responde en español`
+
+    try {
+      const json = await callAI(
+        [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+        { model: 'deepseek-chat', max_tokens: 300, temperature: 0.3 },
+      )
+      setVendedorAnalysisMap(prev => ({ ...prev, [key]: { loading: false, text: json.choices?.[0]?.message?.content ?? 'Sin respuesta' } }))
+    } catch (err) {
+      const code = err instanceof Error ? err.message : ''
+      const msg = code === 'INVALID_KEY' ? 'API key no configurada. Ve a Configuración → Asistente IA.' : code === 'RATE_LIMIT' ? 'Límite de requests alcanzado. Intenta en unos segundos.' : 'No se pudo conectar con el asistente IA.'
+      setVendedorAnalysisMap(prev => ({ ...prev, [key]: { loading: false, text: msg } }))
+    }
+  }, [configuracion, clientesDormidos, insights])
+
+  const handleProfundizarVendedor = useCallback((v: VendorAnalysis, analysisText: string) => {
+    const displayMessage = `Profundizar: ${v.vendedor} (${RIESGO_CONFIG[v.riesgo].label})`
+    const fullContext = [
+      `Profundizar sobre vendedor: ${v.vendedor}`,
+      `Estado: ${v.riesgo.toUpperCase()}`,
+      v.ytd_actual != null ? `YTD actual: ${v.ytd_actual.toLocaleString()}` : '',
+      v.variacion_ytd_pct != null ? `Variación YTD: ${v.variacion_ytd_pct.toFixed(1)}%` : '',
+      v.meta != null ? `Cumplimiento meta: ${v.cumplimiento_pct?.toFixed(1)}%` : '',
+      analysisText ? `\nAnálisis previo:\n${analysisText}` : '',
+      ``,
+      `Con base en este análisis, profundiza: ¿qué productos vendía antes que dejó de vender, qué clientes están dormidos, hay patrón en las semanas de caída?`,
+    ].filter(Boolean).join('\n')
+    navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage, source: 'Vendedores' } })
+  }, [navigate])
+
   // ── Redirect cuando no hay datos ──────────────────────────────────────────
   useEffect(() => {
-    if (sales.length === 0 && dataSource === 'none') navigate('/')
-  }, [sales.length, dataSource, navigate])
+    if (sales.length === 0 && dataSource === 'none') navigate('/cargar')
+  }, [sales.length, dataSource]) // eslint-disable-line
 
   // ── Early returns ──────────────────────────────────────────────────────────
   if (sales.length === 0) return null
@@ -224,16 +311,16 @@ export default function VendedoresPage() {
   const colYtd = metrica === 'dolares' ? '120px' : '90px'
   const colVar = metrica === 'dolares' ? '100px' : '80px'
   const gridCols = [
-    'minmax(160px, 1fr)', // VENDEDOR
+    'minmax(200px, 1fr)', // VENDEDOR
+    '100px',              // ESTADO
+    '80px',               // ALERTAS
     colYtd,               // YTD ACT.
     colYtd,               // YTD ANT.
     colVar,               // VAR
     '100px',              // VAR %
     '70px',               // PESO %
     ...(dataAvailability.has_metas ? ['70px'] : []), // META %
-    '80px',               // ALERTAS
-    '100px',              // ESTADO
-    '32px',               // →
+    '80px',               // IA
   ].join(' ')
 
   const colCls = 'text-[11px] font-medium uppercase tracking-[0.06em]'
@@ -301,6 +388,10 @@ export default function VendedoresPage() {
       <div style={{ paddingLeft: 16 }}>
         {hdrBtn('vendedor', 'Vendedor', 'start')}
       </div>
+      <div>{hdrBtn('estado', 'Estado', 'center')}</div>
+      <div style={{ borderLeft: '1px solid var(--sf-border)', paddingLeft: '16px' }}>
+        {hdrBtn('alertas', 'Alertas', 'center')}
+      </div>
       <div>{hdrBtn('ytd', selectedPeriod?.year ?? new Date().getFullYear())}</div>
       <div>{hdrBtn('ytd_ant', (selectedPeriod?.year ?? new Date().getFullYear()) - 1)}</div>
       <div>{hdrBtn('var', 'Var')}</div>
@@ -309,11 +400,7 @@ export default function VendedoresPage() {
       {dataAvailability.has_metas && (
         <div>{hdrBtn('meta', 'Meta %')}</div>
       )}
-      <div style={{ borderLeft: '1px solid var(--sf-border)', paddingLeft: '16px' }}>
-        {hdrBtn('alertas', 'Alertas', 'center')}
-      </div>
-      <div>{hdrBtn('estado', 'Estado', 'center')}</div>
-      <div />
+      <div className={cn(colCls, 'flex items-center justify-center')} style={{ color: 'var(--sf-t5)' }}>IA</div>
     </div>
   )
 
@@ -350,14 +437,17 @@ export default function VendedoresPage() {
 
     const mono = { fontFamily: "'DM Mono', monospace" } as const
 
-    return (
+    const isHighlighted = highlightActive === v.vendedor
+
+    return (<>
       <div
         key={v.vendedor}
+        ref={isHighlighted ? highlightRef : undefined}
         onClick={() => setSelected(v)}
         className={cn(
-          'group cursor-pointer transition-colors duration-150',
-          'border-b border-[var(--sf-border)]/10 hover:!bg-[var(--sf-inset)]',
-          index % 2 === 1 ? 'bg-[var(--sf-page)]' : 'bg-transparent',
+          'group cursor-pointer transition-all duration-150',
+          'border-b border-[var(--sf-border)]/10 hover:!bg-[var(--sf-inset)] active:!opacity-70 active:scale-[0.995]',
+          isHighlighted ? 'ring-2 ring-amber-400 dark:ring-amber-500 bg-amber-50 dark:bg-amber-900/20' : index % 2 === 1 ? 'bg-[var(--sf-page)]' : 'bg-transparent',
         )}
         style={{
           display: 'grid',
@@ -378,10 +468,40 @@ export default function VendedoresPage() {
           />
           <span
             className="truncate"
+            title={v.vendedor}
             style={{ fontSize: 13, fontWeight: 500, color: 'var(--sf-t1)' }}
           >
             {v.vendedor}
           </span>
+        </div>
+
+        {/* ESTADO */}
+        <div className="flex items-center justify-center">
+          <span style={{
+            background: rc.badgeBg, color: rc.badgeColor,
+            padding: '3px 8px', borderRadius: 4,
+            fontSize: 11, fontWeight: 500,
+          }}>
+            {rc.label}
+          </span>
+        </div>
+
+        {/* ALERTAS */}
+        <div className="flex items-center justify-center" style={{ borderLeft: '1px solid var(--sf-border)', paddingLeft: '16px' }}>
+          {vis.length > 0 ? (
+            <span
+              className="flex items-center justify-center tabular-nums"
+              style={{
+                width: 20, height: 20, borderRadius: '50%',
+                background: '#FF4D4D20', color: 'var(--sf-red)',
+                fontSize: 11, fontWeight: 600,
+              }}
+            >
+              {vis.length}
+            </span>
+          ) : (
+            <span style={{ color: 'var(--sf-t5)', fontSize: 14 }}>—</span>
+          )}
         </div>
 
         {/* YTD ACT. */}
@@ -426,40 +546,49 @@ export default function VendedoresPage() {
           </div>
         )}
 
-        {/* ALERTAS */}
-        <div className="flex items-center justify-center" style={{ borderLeft: '1px solid var(--sf-border)', paddingLeft: '16px' }}>
-          {vis.length > 0 ? (
-            <span
-              className="flex items-center justify-center tabular-nums"
-              style={{
-                width: 20, height: 20, borderRadius: '50%',
-                background: '#FF4D4D20', color: 'var(--sf-red)',
-                fontSize: 11, fontWeight: 600,
-              }}
-            >
-              {vis.length}
-            </span>
-          ) : (
-            <span style={{ color: 'var(--sf-t5)', fontSize: 14 }}>—</span>
-          )}
-        </div>
-
-        {/* ESTADO */}
+        {/* IA */}
         <div className="flex items-center justify-center">
-          <span style={{
-            background: rc.badgeBg, color: rc.badgeColor,
-            padding: '3px 8px', borderRadius: 4,
-            fontSize: 11, fontWeight: 500,
-          }}>
-            {rc.label}
-          </span>
-        </div>
-
-        {/* → */}
-        <div className="flex items-center justify-end" style={{ paddingRight: 12 }}>
-          <ChevronRight className="w-4 h-4 transition-all duration-150 text-[var(--sf-t5)] group-hover:text-[var(--sf-green)] group-hover:translate-x-0.5" />
+          {(() => {
+            const analysis = vendedorAnalysisMap[v.vendedor]
+            if (analysis?.loading) {
+              return (
+                <svg className="animate-spin" style={{ width: 14, height: 14, color: 'var(--sf-t4)' }} viewBox="0 0 24 24">
+                  <circle style={{ opacity: 0.25 }} cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                  <path style={{ opacity: 0.75 }} fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+              )
+            }
+            return (
+              <button
+                onClick={(e) => { e.stopPropagation(); handleAnalyzeVendedor(v) }}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 3,
+                  padding: '3px 8px', borderRadius: 5, fontSize: 10, fontWeight: 600,
+                  border: '1px solid rgba(16,185,129,0.2)', background: 'rgba(16,185,129,0.06)',
+                  color: '#10b981', cursor: 'pointer', whiteSpace: 'nowrap' as const,
+                  transition: 'background 0.15s',
+                }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(16,185,129,0.12)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'rgba(16,185,129,0.06)')}
+              >
+                ✦ Analizar
+              </button>
+            )
+          })()}
         </div>
       </div>
+
+      {/* Loading indicator below row */}
+      {expandedVendedor === v.vendedor && vendedorAnalysisMap[v.vendedor]?.loading && (
+        <div style={{ padding: '10px 20px', background: 'var(--sf-inset)', borderBottom: '1px solid var(--sf-border)', gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <svg className="animate-spin" style={{ width: 14, height: 14, color: 'var(--sf-t4)' }} viewBox="0 0 24 24">
+            <circle style={{ opacity: 0.25 }} cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+            <path style={{ opacity: 0.75 }} fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+          <span style={{ fontSize: 12, color: 'var(--sf-t4)' }}>Analizando {v.vendedor}...</span>
+        </div>
+      )}
+    </>
     )
   }
 
@@ -484,6 +613,15 @@ export default function VendedoresPage() {
           <span style={{ fontSize: 11, letterSpacing: '0.06em', color: 'var(--sf-t5)', fontWeight: 600 }}>
             EQUIPO TOTAL
           </span>
+        </div>
+
+        {/* ESTADO */}
+        <div />
+
+        {/* ALERTAS */}
+        <div className="flex items-center justify-center"
+          style={{ borderLeft: '1px solid var(--sf-border)', paddingLeft: '16px', color: 'var(--sf-t5)', fontSize: 14 }}>
+          —
         </div>
 
         {/* YTD ACT total */}
@@ -524,16 +662,7 @@ export default function VendedoresPage() {
           </div>
         )}
 
-        {/* ALERTAS */}
-        <div className="flex items-center justify-center"
-          style={{ borderLeft: '1px solid var(--sf-border)', paddingLeft: '16px', color: 'var(--sf-t5)', fontSize: 14 }}>
-          —
-        </div>
-
-        {/* ESTADO */}
-        <div />
-
-        {/* → */}
+        {/* IA */}
         <div />
       </div>
     )
@@ -606,6 +735,104 @@ export default function VendedoresPage() {
           })}
         </div>
       </div>
+
+      {/* ── Mini-dashboard: 3 cards ─────────────────────────────────────────── */}
+      {vendorAnalysis.length > 0 && (() => {
+        const mejorDelMes = [...vendorAnalysis].sort((a, b) => {
+          if (a.riesgo === 'superando' && b.riesgo !== 'superando') return -1
+          if (b.riesgo === 'superando' && a.riesgo !== 'superando') return 1
+          return (b.variacion_ytd_pct ?? -Infinity) - (a.variacion_ytd_pct ?? -Infinity)
+        })[0]
+        const necesitaAtencion = [...vendorAnalysis].sort((a, b) => {
+          const diff = (RIESGO_ORDER[a.riesgo] ?? 99) - (RIESGO_ORDER[b.riesgo] ?? 99)
+          if (diff !== 0) return diff
+          return (a.variacion_ytd_pct ?? 0) - (b.variacion_ytd_pct ?? 0)
+        })[0]
+        const totalVendedores = vendorAnalysis.length
+        const criticos = vendorAnalysis.filter(v => v.riesgo === 'critico').length
+        const enRiesgo = vendorAnalysis.filter(v => v.riesgo === 'riesgo').length
+        const okCount = vendorAnalysis.filter(v => v.riesgo === 'ok').length
+        const superando = vendorAnalysis.filter(v => v.riesgo === 'superando').length
+        const saludPct = totalVendedores > 0 ? Math.round(((okCount + superando) / totalVendedores) * 100) : 0
+        const saludColor = saludPct >= 70 ? 'var(--sf-green)' : saludPct >= 40 ? '#FFB800' : '#FF4D4D'
+
+        return (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {/* Mejor del mes */}
+            <div
+              className="rounded-xl p-4 cursor-pointer transition-all duration-200"
+              style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}
+              onClick={() => { const v = vendorAnalysis.find(x => x.vendedor === mejorDelMes.vendedor); if (v) setSelected(v) }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--sf-green)'; e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,214,143,0.08)' }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--sf-border)'; e.currentTarget.style.boxShadow = '' }}
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <span className="w-2 h-2 rounded-full" style={{ background: 'var(--sf-green)' }} />
+                <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--sf-t5)' }}>Mejor del mes</span>
+              </div>
+              <p className="text-[15px] font-semibold truncate" style={{ color: 'var(--sf-t1)' }}>{mejorDelMes.vendedor}</p>
+              <div className="flex items-center gap-2 mt-1">
+                {mejorDelMes.variacion_ytd_pct != null && (
+                  <span className="text-xs font-medium" style={{ color: mejorDelMes.variacion_ytd_pct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
+                    {mejorDelMes.variacion_ytd_pct >= 0 ? '+' : ''}{mejorDelMes.variacion_ytd_pct.toFixed(1)}% YTD
+                  </span>
+                )}
+                {mejorDelMes.cumplimiento_pct != null && (
+                  <span className="text-[11px]" style={{ color: 'var(--sf-t4)' }}>
+                    {'\u00B7'} {mejorDelMes.cumplimiento_pct.toFixed(0)}% meta
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Necesita atención */}
+            <div
+              className="rounded-xl p-4 cursor-pointer transition-all duration-200"
+              style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}
+              onClick={() => { const v = vendorAnalysis.find(x => x.vendedor === necesitaAtencion.vendedor); if (v) setSelected(v) }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = '#FF4D4D'; e.currentTarget.style.boxShadow = '0 2px 8px rgba(255,77,77,0.08)' }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--sf-border)'; e.currentTarget.style.boxShadow = '' }}
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <span className="w-2 h-2 rounded-full" style={{ background: '#FF4D4D' }} />
+                <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--sf-t5)' }}>Necesita atención</span>
+              </div>
+              <p className="text-[15px] font-semibold truncate" style={{ color: 'var(--sf-t1)' }}>{necesitaAtencion.vendedor}</p>
+              <div className="flex items-center gap-2 mt-1">
+                {necesitaAtencion.variacion_ytd_pct != null && (
+                  <span className="text-xs font-medium" style={{ color: necesitaAtencion.variacion_ytd_pct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
+                    {necesitaAtencion.variacion_ytd_pct >= 0 ? '+' : ''}{necesitaAtencion.variacion_ytd_pct.toFixed(1)}% YTD
+                  </span>
+                )}
+                <span className="text-[11px]" style={{ color: 'var(--sf-t4)' }}>
+                  {'\u00B7'} {insights.filter(i => i.vendedor === necesitaAtencion.vendedor).length} alertas
+                </span>
+              </div>
+            </div>
+
+            {/* Pulso del equipo */}
+            <div
+              className="rounded-xl p-4"
+              style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <span className="w-2 h-2 rounded-full" style={{ background: saludColor }} />
+                <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--sf-t5)' }}>Pulso del equipo</span>
+              </div>
+              <p style={{ fontFamily: "'DM Mono', monospace", fontSize: 28, color: saludColor, lineHeight: 1 }}>
+                {saludPct}%
+              </p>
+              <p className="text-[11px] mt-1" style={{ color: 'var(--sf-t4)' }}>en buen estado</p>
+              <div className="flex items-center gap-1.5 mt-2">
+                {criticos > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: '#FF4D4D15', color: '#FF4D4D', fontWeight: 600 }}>{criticos} crít.</span>}
+                {enRiesgo > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: '#FFB80015', color: '#FFB800', fontWeight: 600 }}>{enRiesgo} riesgo</span>}
+                {okCount > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: '#00D68F15', color: '#00D68F', fontWeight: 600 }}>{okCount} ok</span>}
+                {superando > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: '#60A5FA15', color: '#60A5FA', fontWeight: 600 }}>{superando} super.</span>}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ── Filtros ───────────────────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-2">
@@ -778,7 +1005,7 @@ export default function VendedoresPage() {
                   {/* Vendedor rows */}
                   {isOpen && (
                     <div style={{ background: 'var(--sf-overlay-subtle)', borderTop: '1px solid var(--sf-border-subtle)' }}>
-                      {group.rows.map((v, i) => renderRow(v, true, i))}
+                      {group.rows.map((v, i) => <div key={v.vendedor}>{renderRow(v, true, i)}</div>)}
                     </div>
                   )}
                 </div>
@@ -790,7 +1017,7 @@ export default function VendedoresPage() {
           <div>
             <TableHeader />
             <TotalsRow />
-            {sorted.map((v, i) => renderRow(v, false, i))}
+            {sorted.map((v, i) => <div key={v.vendedor}>{renderRow(v, false, i)}</div>)}
             {sorted.length === 0 && (
               <p style={{ fontSize: 14, color: 'var(--sf-t5)', textAlign: 'center', marginTop: 60, marginBottom: 60 }}>
                 No hay vendedores que coincidan con el filtro
@@ -808,6 +1035,26 @@ export default function VendedoresPage() {
           </p>
         )}
       </div>
+
+      {/* Slide-over drawer for IA analysis */}
+      {(() => {
+        const drawerVendedor = expandedVendedor ? vendorAnalysis.find(v => v.vendedor === expandedVendedor) : null
+        const analysis = expandedVendedor ? vendedorAnalysisMap[expandedVendedor] : null
+        const isOpen = !!drawerVendedor && !!analysis?.text && !analysis?.loading
+        const rc = drawerVendedor ? RIESGO_CONFIG[drawerVendedor.riesgo] : null
+
+        return (
+          <AnalysisDrawer
+            isOpen={isOpen}
+            onClose={() => setExpandedVendedor(null)}
+            title={drawerVendedor?.vendedor ?? ''}
+            subtitle={drawerVendedor?.variacion_ytd_pct != null ? `${drawerVendedor.variacion_ytd_pct >= 0 ? '+' : ''}${drawerVendedor.variacion_ytd_pct.toFixed(1)}% YTD` : undefined}
+            badges={rc ? [{ label: rc.label, color: rc.badgeColor, bg: rc.badgeBg }] : []}
+            analysisText={analysis?.text ?? null}
+            onDeepen={drawerVendedor && analysis?.text ? () => handleProfundizarVendedor(drawerVendedor, analysis.text!) : undefined}
+          />
+        )
+      })()}
     </div>
   )
 }

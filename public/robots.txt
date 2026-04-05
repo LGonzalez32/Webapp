@@ -1,0 +1,18 @@
+User-agent: *
+Allow: /
+Disallow: /app
+Disallow: /cargar
+Disallow: /dashboard
+Disallow: /vendedores
+Disallow: /rendimiento
+Disallow: /clientes
+Disallow: /rotacion
+Disallow: /metas
+Disallow: /departamentos
+Disallow: /chat
+Disallow: /organizacion
+Disallow: /configuracion
+Disallow: /onboarding
+Disallow: /auth/callback
+
+Sitemap: https://www.data-solutions-hub.com/sitemap.xml

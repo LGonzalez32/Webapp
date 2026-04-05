@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef, type CSSProperties, type Key } from 'react'
+import { useMemo, useState, useEffect, useRef, useCallback, type CSSProperties, type Key } from 'react'
 import { buildPivotTree, flattenPivot } from '../utils/pivotUtils'
 import type { DimKey, PivotNode } from '../utils/pivotUtils'
 import {
@@ -20,12 +20,39 @@ import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
 import { salesInPeriod } from '../lib/analysis'
 import { syncSalesData, getAnnualPerformance } from '../lib/forecastApi'
-import { TrendingUp, TrendingDown, Minus, Calendar, Loader2 } from 'lucide-react'
+import { TrendingUp, TrendingDown, Minus, Calendar, Loader2, Settings, ChevronRight, ChevronsDown, ChevronsUp } from 'lucide-react'
 import { cn } from '../lib/utils'
+import { callAI } from '../lib/chatService'
+import AnalysisDrawer from '../components/ui/AnalysisDrawer'
 import type { SaleRecord, MetaRecord, ForecastData } from '../types'
-import { DIM_META, PIVOT_PRESETS } from '../config/metaConfig'
+import { DIM_META } from '../config/metaConfig'
+
+const DIM_TOGGLES: { key: DimKey; label: string; icon: string; requiresDim?: string }[] = [
+  { key: 'canal',    label: 'Canal',    icon: '🏪', requiresDim: 'canal' },
+  { key: 'vendedor', label: 'Vendedor', icon: '👤' },
+  { key: 'producto', label: 'Producto', icon: '📦', requiresDim: 'producto' },
+  { key: 'mes',      label: 'Mes',      icon: '📅' },
+]
 
 const MESES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
+
+// Defined outside component to avoid infinite re-renders (React sees new component type each render)
+function RendimientoTooltip({ active, payload, label, useVentaNeta, moneda }: {
+  active?: boolean; payload?: any[]; label?: string; useVentaNeta: boolean; moneda: string
+}) {
+  if (!active || !payload?.length) return null
+  return (
+    <div style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderRadius: '8px', padding: '10px 14px', fontSize: '12px', color: 'var(--sf-t1)', minWidth: '160px', boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
+      <p style={{ fontWeight: 600, marginBottom: '8px', color: 'var(--sf-t1)' }}>{label}</p>
+      {payload.map((p: any) => (
+        <div key={p.name} className="flex justify-between gap-4">
+          <span style={{ color: p.color }}>{p.name}</span>
+          <span style={{ fontFamily: "'DM Mono', monospace", fontWeight: 500, color: 'var(--sf-t1)' }}>{useVentaNeta ? formatCurrency(p.value, moneda) : p.value?.toLocaleString()}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 function formatUnits(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -54,8 +81,8 @@ const FORECAST_BACKEND_ENABLED = false // TODO: reactivar cuando el backend est�
 // ─── SORTABLE PILL ────────────────────────────────────────────────────────────
 
 function SortablePill({
-  dim, index, onRemove,
-}: { dim: DimKey; index: number; onRemove: (dim: DimKey) => void; key?: Key }) {
+  dim, index,
+}: { dim: DimKey; index: number; key?: Key }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } =
     useSortable({ id: dim, transition: null })
 
@@ -66,27 +93,24 @@ function SortablePill({
     cursor: isDragging ? 'grabbing' : 'grab',
     background: 'var(--sf-card)',
     border: '1px solid var(--sf-border)',
+    borderLeft: '3px solid var(--sf-green)',
     borderRadius: '6px',
     padding: '6px 12px',
     touchAction: 'none',
+    transition: 'box-shadow 150ms',
   }
 
   return (
     <div
       ref={setNodeRef}
       style={style}
-      className="flex items-center gap-1.5 text-xs font-bold select-none"
+      className="flex items-center gap-1.5 text-xs font-bold select-none hover:shadow-md"
+      {...attributes}
+      {...listeners}
     >
-      <span style={{ color: 'var(--sf-t5)', lineHeight: 1, cursor: 'inherit' }} {...attributes} {...listeners}>⠿</span>
+      <span style={{ color: 'var(--sf-t5)', lineHeight: 1 }}>⋮⋮</span>
       <span style={{ color: 'var(--sf-t3)' }}>{DIM_META[dim]?.label ?? dim}</span>
       <span style={{ fontSize: '10px', opacity: 0.4, fontFamily: "'DM Mono', monospace" }}>{index + 1}</span>
-      <button
-        onClick={() => onRemove(dim)}
-        onPointerDown={e => e.stopPropagation()}
-        className="ml-0.5 transition-colors leading-none"
-        style={{ color: 'var(--sf-t5)' }}
-        title={`Quitar ${DIM_META[dim]?.label ?? dim}`}
-      >×</button>
     </div>
   )
 }
@@ -96,7 +120,7 @@ function SortablePill({
 export default function RendimientoPage() {
   useAnalysis()
   const navigate = useNavigate()
-  const { sales, metas, dataAvailability, selectedPeriod, configuracion, forecastData, forecastChartLoading, setForecastData, setForecastChartLoading, dataSource } = useAppStore()
+  const { sales, metas, dataAvailability, selectedPeriod, configuracion, forecastData, forecastChartLoading, setForecastData, setForecastChartLoading, dataSource, vendorAnalysis } = useAppStore()
   const [metric, setMetric] = useState<'unidades' | 'venta_neta'>('unidades')
   const [showBudget, setShowBudget] = useState(true)
   const [selectedVendor, setSelectedVendor] = useState<string>('todos')
@@ -104,6 +128,49 @@ export default function RendimientoPage() {
   const [selectedCliente, setSelectedCliente] = useState<string>('all')
   const [selectedCanal, setSelectedCanal] = useState<string>('all')
   const [selectedProducto, setSelectedProducto] = useState<string>('all')
+  const [showExtraFilters, setShowExtraFilters] = useState(false)
+  const [rendAnalysisMap, setRendAnalysisMap] = useState<Record<string, { loading: boolean; text: string | null }>>({})
+  const [expandedRendVendedor, setExpandedRendVendedor] = useState<string | null>(null)
+
+  const handleAnalyzeRendVendedor = useCallback(async (label: string, actual: number, prev: number, varPct: number | null, pctTotal: number) => {
+    setExpandedRendVendedor(label)
+    setRendAnalysisMap(p => ({ ...p, [label]: { loading: true, text: null } }))
+
+    const va = vendorAnalysis.find(v => v.vendedor === label)
+    const systemPrompt = `Eres un analista comercial de ${configuracion.empresa}.
+Responde en formato exacto:
+
+📊 RESUMEN: [Hallazgo principal — máximo 15 palabras]
+
+📈 RENDIMIENTO:
+- [Dato clave actual vs anterior — máximo 2 bullets]
+
+⚠️ RIESGO:
+- [Factor de riesgo o caída — máximo 2 bullets]
+
+💡 HALLAZGO: [Un dato no obvio con números]
+
+Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operativas, moneda: ${configuracion.moneda}, español.`
+
+    const userPrompt = [
+      `Vendedor: ${label}`,
+      `YTD actual: ${actual.toLocaleString()}`,
+      `YTD anterior: ${prev.toLocaleString()}`,
+      varPct != null ? `Variación: ${varPct.toFixed(1)}%` : '',
+      `Peso equipo: ${pctTotal.toFixed(1)}%`,
+      va ? `Estado: ${va.riesgo.toUpperCase()}` : '',
+    ].filter(Boolean).join('\n')
+
+    try {
+      const json = await callAI(
+        [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+        { model: 'deepseek-chat', max_tokens: 250, temperature: 0.3 },
+      )
+      setRendAnalysisMap(p => ({ ...p, [label]: { loading: false, text: json.choices?.[0]?.message?.content ?? 'Sin respuesta' } }))
+    } catch {
+      setRendAnalysisMap(p => ({ ...p, [label]: { loading: false, text: 'No se pudo conectar con el asistente IA.' } }))
+    }
+  }, [configuracion, vendorAnalysis])
 
   const currentYear  = selectedPeriod.year
   const currentMonth = selectedPeriod.month
@@ -163,7 +230,7 @@ export default function RendimientoPage() {
         if (Array.isArray(parsed) && parsed.length > 0) return parsed
       }
     } catch { /* ignore */ }
-    return ['mes']
+    return ['canal', 'vendedor']
   })
   const [pivotCols, setPivotCols] = useState<PivotCols>({
     unidades: true, venta_neta: true, meta: true, variacion: true, pct_total: false,
@@ -171,26 +238,33 @@ export default function RendimientoPage() {
   const [showSubtotals, setShowSubtotals] = useState(true)
   const [pivotConfigOpen, setPivotConfigOpen] = useState(false)
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
+  const userToggledKeys = useRef<Map<string, boolean>>(new Map()) // tracks explicit user expand/collapse choices
   const [sortCol, setSortCol] = useState<'unidades' | 'venta_neta' | null>(null)
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
-  const [addDimOpen, setAddDimOpen] = useState(false)
-  const addDimRef = useRef<HTMLDivElement>(null)
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [showMicrocopy, setShowMicrocopy] = useState(() => {
+    try { return !localStorage.getItem('sf_pivot_advanced_seen') } catch { return false }
+  })
+  const microcopyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const dismissMicrocopy = () => {
+    setShowMicrocopy(false)
+    try { localStorage.setItem('sf_pivot_advanced_seen', 'true') } catch { /* */ }
+    if (microcopyTimer.current) { clearTimeout(microcopyTimer.current); microcopyTimer.current = null }
+  }
+
+  // Auto-dismiss microcopy after 10s
+  useEffect(() => {
+    if (showAdvanced && showMicrocopy) {
+      microcopyTimer.current = setTimeout(dismissMicrocopy, 10000)
+      return () => { if (microcopyTimer.current) clearTimeout(microcopyTimer.current) }
+    }
+  }, [showAdvanced, showMicrocopy]) // eslint-disable-line
   const [pivotData, setPivotData] = useState<PivotNode[]>([])
   const [pivotLoading, setPivotLoading] = useState(false)
   const workerRef = useRef<Worker | null>(null)
   const dimsChangedRef = useRef(true)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
-
-  // Close + Agregar popover on outside click
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (addDimRef.current && !addDimRef.current.contains(e.target as Node)) {
-        setAddDimOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [])
 
   // Persist dims to localStorage
   useEffect(() => {
@@ -200,8 +274,6 @@ export default function RendimientoPage() {
   useEffect(() => {
     if (sales.length === 0 && dataSource === 'none') navigate('/cargar', { replace: true })
   }, [sales.length, navigate, dataSource])
-
-  if (sales.length === 0) return null
 
   const useVentaNeta = metric === 'venta_neta' && dataAvailability.has_venta_neta
 
@@ -356,15 +428,27 @@ export default function RendimientoPage() {
     workerRef.current.onmessage = (e: MessageEvent<PivotNode[]>) => {
       const data = e.data
       setPivotData(data)
-      // Auto-expand depth 0 and 1 only when dims changed (not on data-only change)
+      // When dims change, merge: respect user's explicit expand/collapse choices, default for the rest
       if (dimsChangedRef.current) {
         dimsChangedRef.current = false
-        const keysToExpand = new Set<string>()
-        data.forEach((n) => {
-          keysToExpand.add(n.id)
-          n.children.forEach((c) => keysToExpand.add(c.id))
-        })
-        setExpandedKeys(keysToExpand)
+        const toggled = userToggledKeys.current
+        const merged = new Set<string>()
+        const collectAndMerge = (nodes: PivotNode[]) => {
+          for (const n of nodes) {
+            if (n.children.length > 0) {
+              if (toggled.has(n.id)) {
+                // User explicitly set this key — respect their choice
+                if (toggled.get(n.id)) merged.add(n.id)
+              } else {
+                // No user choice — apply default (expand depth 0 and 1)
+                if (n.depth <= 1) merged.add(n.id)
+              }
+              collectAndMerge(n.children)
+            }
+          }
+        }
+        collectAndMerge(data)
+        setExpandedKeys(merged)
       }
       setPivotLoading(false)
     }
@@ -394,36 +478,41 @@ export default function RendimientoPage() {
   const toggleExpand = (id: string) => {
     setExpandedKeys((prev) => {
       const next = new Set(prev)
-      if (next.has(id)) next.delete(id); else next.add(id)
+      const willExpand = !next.has(id)
+      if (willExpand) next.add(id); else next.delete(id)
+      userToggledKeys.current.set(id, willExpand)
       return next
     })
   }
 
-  // Available dimensions (based on data)
-  const availableDims: { key: DimKey; label: string }[] = [
-    { key: 'mes', label: 'Mes' },
-    { key: 'vendedor', label: 'Vendedor' },
-    ...(dataAvailability.has_canal    ? [{ key: 'canal'    as DimKey, label: 'Canal'    }] : []),
-    ...(dataAvailability.has_cliente  ? [{ key: 'cliente'  as DimKey, label: 'Cliente'  }] : []),
-    ...(dataAvailability.has_producto ? [{ key: 'producto' as DimKey, label: 'Producto' }] : []),
-  ]
-
-  const moveDim = (idx: number, dir: -1 | 1) => {
-    const next = [...pivotDims]
-    const target = idx + dir
-    if (target < 0 || target >= next.length) return
-    ;[next[idx], next[target]] = [next[target], next[idx]]
-    setPivotDims(next)
+  const expandAll = () => {
+    const allParentKeys = new Set<string>()
+    const collect = (nodes: PivotNode[]) => {
+      for (const n of nodes) {
+        if (n.children.length > 0) {
+          allParentKeys.add(n.id)
+          collect(n.children)
+        }
+      }
+    }
+    collect(pivotData)
+    userToggledKeys.current.clear()
+    for (const k of allParentKeys) userToggledKeys.current.set(k, true)
+    setExpandedKeys(allParentKeys)
   }
 
-  const toggleDim = (key: DimKey) => {
-    setPivotDims((prev) =>
-      prev.includes(key) ? (prev.length > 1 ? prev.filter((d) => d !== key) : prev) : [...prev, key]
-    )
-  }
-
-  const removeDim = (key: DimKey) => {
-    setPivotDims((prev) => prev.length > 1 ? prev.filter((d) => d !== key) : prev)
+  const collapseAll = () => {
+    // Mark all current parent keys as explicitly collapsed
+    const collect = (nodes: PivotNode[]) => {
+      for (const n of nodes) {
+        if (n.children.length > 0) {
+          userToggledKeys.current.set(n.id, false)
+          collect(n.children)
+        }
+      }
+    }
+    collect(pivotData)
+    setExpandedKeys(new Set())
   }
 
   function handleDragEnd(event: DragEndEvent) {
@@ -450,20 +539,8 @@ export default function RendimientoPage() {
     pivotCols.pct_total,
   ].filter(Boolean).length
 
-  const CustomTooltip = ({ active, payload, label }: any) => {
-    if (!active || !payload?.length) return null
-    return (
-      <div style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderRadius: '8px', padding: '10px 14px', fontSize: '12px', color: 'var(--sf-t1)', minWidth: '160px', boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
-        <p style={{ fontWeight: 600, marginBottom: '8px', color: 'var(--sf-t1)' }}>{label}</p>
-        {payload.map((p: any) => (
-          <div key={p.name} className="flex justify-between gap-4">
-            <span style={{ color: p.color }}>{p.name}</span>
-            <span style={{ fontFamily: "'DM Mono', monospace", fontWeight: 500, color: 'var(--sf-t1)' }}>{useVentaNeta ? formatCurrency(p.value, configuracion.moneda) : p.value?.toLocaleString()}</span>
-          </div>
-        ))}
-      </div>
-    )
-  }
+  // Guard after all hooks — never move this above any hook call
+  if (sales.length === 0) return null
 
   return (
     <div className="max-w-5xl mx-auto space-y-6 pb-20 animate-in fade-in duration-700" style={{ color: 'var(--sf-t1)' }}>
@@ -488,49 +565,78 @@ export default function RendimientoPage() {
       </div>
 
       {/* Controls */}
-      <div className="flex flex-wrap gap-3 items-center justify-between">
-        <div className="flex flex-wrap gap-2">
-          {/* Año */}
-          <select value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '8px', color: 'var(--sf-t1)', fontSize: '13px', height: '36px', padding: '0 12px', outline: 'none' }}>
-            {años.map((a) => <option key={a} value={a}>{a}</option>)}
-          </select>
-          {/* Vendedor */}
-          <select value={selectedVendor} onChange={(e) => setSelectedVendor(e.target.value)} style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '8px', color: 'var(--sf-t1)', fontSize: '13px', height: '36px', padding: '0 12px', outline: 'none' }}>
-            {vendors.map((v) => <option key={v} value={v}>{v === 'todos' ? 'Todos los vendedores' : v}</option>)}
-          </select>
-          {/* Cliente */}
-          {dataAvailability.has_cliente && (
-            <select value={selectedCliente} onChange={(e) => setSelectedCliente(e.target.value)} style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '8px', color: 'var(--sf-t1)', fontSize: '13px', height: '36px', padding: '0 12px', outline: 'none' }}>
-              <option value="all">Todos los clientes</option>
-              {clientes.map((c) => <option key={c} value={c}>{c}</option>)}
+      <div className="space-y-2">
+        <div className="flex flex-wrap gap-3 items-center justify-between">
+          <div className="flex flex-wrap gap-2">
+            {/* Año */}
+            <select value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '8px', color: 'var(--sf-t1)', fontSize: '13px', height: '36px', padding: '0 12px', outline: 'none' }}>
+              {años.map((a) => <option key={a} value={a}>{a}</option>)}
             </select>
-          )}
-          {/* Canal */}
-          {dataAvailability.has_canal && (
-            <select value={selectedCanal} onChange={(e) => setSelectedCanal(e.target.value)} style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '8px', color: 'var(--sf-t1)', fontSize: '13px', height: '36px', padding: '0 12px', outline: 'none' }}>
-              <option value="all">Todos los canales</option>
-              {canales.map((c) => <option key={c} value={c}>{c}</option>)}
+            {/* Vendedor */}
+            <select value={selectedVendor} onChange={(e) => setSelectedVendor(e.target.value)} style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '8px', color: 'var(--sf-t1)', fontSize: '13px', height: '36px', padding: '0 12px', outline: 'none' }}>
+              {vendors.map((v) => <option key={v} value={v}>{v === 'todos' ? 'Todos los vendedores' : v}</option>)}
             </select>
-          )}
-          {/* Producto */}
-          {dataAvailability.has_producto && (
-            <select value={selectedProducto} onChange={(e) => setSelectedProducto(e.target.value)} style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '8px', color: 'var(--sf-t1)', fontSize: '13px', height: '36px', padding: '0 12px', outline: 'none' }}>
-              <option value="all">Todos los productos</option>
-              {productos.map((p) => <option key={p} value={p}>{p}</option>)}
-            </select>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex p-1 rounded-lg" style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)' }}>
-            <button onClick={() => setMetric('unidades')} className="px-3 py-1.5 rounded text-xs font-bold transition-all" style={metric === 'unidades' ? { background: '#00D68F', color: 'var(--sf-page)' } : { color: 'var(--sf-t5)' }}>Unidades</button>
-            {dataAvailability.has_venta_neta && (
-              <button onClick={() => setMetric('venta_neta')} className="px-3 py-1.5 rounded text-xs font-bold transition-all" style={metric === 'venta_neta' ? { background: '#00D68F', color: 'var(--sf-page)' } : { color: 'var(--sf-t5)' }}>Facturación</button>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="flex p-1 rounded-lg" style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)' }}>
+              <button onClick={() => setMetric('unidades')} className="px-3 py-1.5 rounded text-xs font-bold transition-all" style={metric === 'unidades' ? { background: '#00D68F', color: 'var(--sf-page)' } : { color: 'var(--sf-t5)' }}>Unidades</button>
+              {dataAvailability.has_venta_neta && (
+                <button onClick={() => setMetric('venta_neta')} className="px-3 py-1.5 rounded text-xs font-bold transition-all" style={metric === 'venta_neta' ? { background: '#00D68F', color: 'var(--sf-page)' } : { color: 'var(--sf-t5)' }}>Facturación</button>
+              )}
+            </div>
+            {dataAvailability.has_metas && (
+              <button onClick={() => setShowBudget(!showBudget)} className="px-3 py-2 rounded-lg text-xs font-bold transition-all" style={showBudget ? { background: '#FFB80018', border: '1px solid #FFB80040', color: 'var(--sf-amber)' } : { background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', color: 'var(--sf-t5)' }}>Meta</button>
             )}
           </div>
-          {dataAvailability.has_metas && (
-            <button onClick={() => setShowBudget(!showBudget)} className="px-3 py-2 rounded-lg text-xs font-bold transition-all" style={showBudget ? { background: '#FFB80018', border: '1px solid #FFB80040', color: 'var(--sf-amber)' } : { background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', color: 'var(--sf-t5)' }}>Meta</button>
-          )}
         </div>
+
+        {/* Secondary filters — collapsible */}
+        {(dataAvailability.has_cliente || dataAvailability.has_canal || dataAvailability.has_producto) && (() => {
+          const activeCount = [
+            selectedCliente !== 'all' ? 1 : 0,
+            selectedCanal !== 'all' ? 1 : 0,
+            selectedProducto !== 'all' ? 1 : 0,
+          ].reduce((a, b) => a + b, 0)
+          return (
+            <div>
+              <button
+                onClick={() => setShowExtraFilters(p => !p)}
+                className="text-xs font-medium transition-colors cursor-pointer flex items-center gap-1"
+                style={{ color: 'var(--sf-t4)', background: 'none', border: 'none', padding: 0 }}
+              >
+                <span>{showExtraFilters ? '\u25BE' : '\u25B8'}</span>
+                {showExtraFilters ? 'Menos filtros' : 'Más filtros'}
+                {!showExtraFilters && activeCount > 0 && (
+                  <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: 'var(--sf-green-bg)', color: 'var(--sf-green)', border: '1px solid var(--sf-green-border)' }}>
+                    {activeCount} {activeCount === 1 ? 'activo' : 'activos'}
+                  </span>
+                )}
+              </button>
+              {showExtraFilters && (
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {dataAvailability.has_cliente && (
+                    <select value={selectedCliente} onChange={(e) => setSelectedCliente(e.target.value)} style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '8px', color: 'var(--sf-t1)', fontSize: '13px', height: '36px', padding: '0 12px', outline: 'none' }}>
+                      <option value="all">Todos los clientes</option>
+                      {clientes.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  )}
+                  {dataAvailability.has_canal && (
+                    <select value={selectedCanal} onChange={(e) => setSelectedCanal(e.target.value)} style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '8px', color: 'var(--sf-t1)', fontSize: '13px', height: '36px', padding: '0 12px', outline: 'none' }}>
+                      <option value="all">Todos los canales</option>
+                      {canales.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  )}
+                  {dataAvailability.has_producto && (
+                    <select value={selectedProducto} onChange={(e) => setSelectedProducto(e.target.value)} style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '8px', color: 'var(--sf-t1)', fontSize: '13px', height: '36px', padding: '0 12px', outline: 'none' }}>
+                      <option value="all">Todos los productos</option>
+                      {productos.map((p) => <option key={p} value={p}>{p}</option>)}
+                    </select>
+                  )}
+                </div>
+              )}
+            </div>
+          )
+        })()}
       </div>
 
       {/* YTD Stats */}
@@ -584,6 +690,41 @@ export default function RendimientoPage() {
         )}
       </div>
 
+      {/* Contextual summary */}
+      {ytdStats.variacion !== null && (
+        <p style={{ fontSize: '13px', color: 'var(--sf-t4)', padding: '0 2px' }}>
+          {ytdStats.variacion >= 0 ? '📈' : '📉'} Vas <strong style={{ color: ytdStats.variacion >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>{ytdStats.variacion >= 0 ? '+' : ''}{ytdStats.variacion.toFixed(1)}%</strong> {ytdStats.variacion >= 0 ? 'arriba' : 'abajo'} del año pasado.
+          {ytdStats.bestMonth >= 0 && <> Tu mejor mes fue <strong style={{ color: 'var(--sf-t1)' }}>{MESES[ytdStats.bestMonth]}</strong> con {useVentaNeta ? formatCurrency(ytdStats.bestVal, configuracion.moneda) : formatUnits(ytdStats.bestVal)}.</>}
+        </p>
+      )}
+
+      {/* Analyze with AI */}
+      <button
+        onClick={() => navigate('/chat', {
+          state: {
+            prefill: `Analiza el rendimiento anual. YTD ${useVentaNeta ? formatCurrency(ytdStats.ytdCurr, configuracion.moneda) : formatUnits(ytdStats.ytdCurr)} vs ${useVentaNeta ? formatCurrency(ytdStats.ytdPrev, configuracion.moneda) : formatUnits(ytdStats.ytdPrev)} del año pasado (${ytdStats.variacion !== null ? (ytdStats.variacion >= 0 ? '+' : '') + ytdStats.variacion.toFixed(1) + '%' : 'sin comparación'}). Mejor mes: ${ytdStats.bestMonth >= 0 ? MESES[ytdStats.bestMonth] : '—'}. Proyección cierre: ${useVentaNeta ? formatCurrency(ytdStats.projected, configuracion.moneda) : formatUnits(ytdStats.projected)}. ¿Cuáles son las tendencias y qué recomiendas?`,
+            displayPrefill: '✦ Analizar rendimiento con IA',
+            source: 'Rendimiento',
+          },
+        })}
+        style={{
+          width: '100%',
+          padding: '10px 20px',
+          border: '1px solid #10B981',
+          borderRadius: '10px',
+          background: 'transparent',
+          color: '#10B981',
+          fontSize: '14px',
+          fontWeight: 500,
+          cursor: 'pointer',
+          transition: 'all 0.2s ease',
+        }}
+        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(16,185,129,0.05)')}
+        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+      >
+        ✦ Analizar rendimiento con IA →
+      </button>
+
       {/* Main chart */}
       <div className="relative" style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '12px', padding: '20px' }}>
         <p style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--sf-t5)', marginBottom: chartFilter ? '12px' : '24px' }}>Evolución mensual — {useVentaNeta ? 'Facturación' : 'Unidades vendidas'}</p>
@@ -598,7 +739,7 @@ export default function RendimientoPage() {
             <CartesianGrid strokeDasharray="2 4" stroke="var(--sf-border)" vertical={false} />
             <XAxis dataKey="mes" tick={{ fill: 'var(--sf-t5)', fontSize: 11, fontFamily: 'inherit' }} axisLine={false} tickLine={false} />
             <YAxis tick={{ fill: 'var(--sf-t5)', fontSize: 11, fontFamily: "'DM Mono', monospace" }} axisLine={false} tickLine={false} width={60} tickFormatter={(v) => useVentaNeta ? formatCurrency(v, '') : formatUnits(v)} />
-            <Tooltip content={<CustomTooltip />} />
+            <Tooltip content={(props) => <RendimientoTooltip {...props} useVentaNeta={useVentaNeta} moneda={configuracion.moneda} />} />
             {isCurrentYear && <ReferenceLine x={MESES[currentMonth]} stroke="var(--sf-border)" strokeDasharray="4 4" label={{ value: 'Hoy', fill: 'var(--sf-t5)', fontSize: 10, position: 'top' }} />}
             {showForecast && <Area type="monotone" dataKey="forecast" stroke="none" fill="#00D68F" fillOpacity={0.06} connectNulls={false} legendType="none" />}
             <Line type="monotone" dataKey="anterior" name={hasPrevYearData ? String(selectedYear - 1) : `${selectedYear - 1} — sin datos`} stroke={hasPrevYearData ? 'var(--sf-t5)' : 'var(--sf-border)'} strokeWidth={hasPrevYearData ? 1.5 : 1} strokeDasharray="4 4" opacity={hasPrevYearData ? 1 : 0.3} dot={false} connectNulls />
@@ -663,53 +804,84 @@ export default function RendimientoPage() {
       <div style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '12px', overflow: 'hidden' }}>
 
         {/* Pivot header bar */}
-        <div className="px-6 py-4 flex items-center gap-3" style={{ borderBottom: '1px solid var(--sf-border)' }}>
-          <p style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--sf-t5)' }}>Tabla Pivot</p>
+        <div className="px-6 py-4 flex items-center justify-between" style={{ borderBottom: '1px solid var(--sf-border)' }}>
+          <p style={{ fontSize: '13px', fontWeight: 600, color: 'var(--sf-t2)' }}>Analiza tus ventas</p>
+          <button
+            onClick={() => setShowAdvanced(v => !v)}
+            className="flex items-center gap-1.5 text-xs transition-colors rounded-lg px-2.5 py-1.5"
+            style={{
+              color: showAdvanced ? 'var(--sf-green)' : 'var(--sf-t5)',
+              background: showAdvanced ? 'rgba(0,214,143,0.08)' : 'transparent',
+            }}
+            title="Personalizar dimensiones"
+          >
+            <Settings className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Personalizar</span>
+          </button>
         </div>
 
-        {/* Always-visible dimension builder */}
-        <div className="px-6 py-4 space-y-3" style={{ borderBottom: '1px solid var(--sf-border)' }}>
-          {/* Drag pills + + Agregar */}
-          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd} modifiers={[restrictToHorizontalAxis, restrictToParentElement]}>
-            <SortableContext items={pivotDims} strategy={horizontalListSortingStrategy}>
-              <div className="flex items-center flex-wrap" style={{ gap: '8px' }}>
-                {pivotDims.map((dim, idx) => (
-                  <SortablePill key={dim} dim={dim} index={idx} onRemove={removeDim} />
-                ))}
+        {/* Dimension toggles — always visible */}
+        <div className="px-6 py-3 flex items-center flex-wrap gap-2" style={{ borderBottom: '1px solid var(--sf-border)' }}>
+          {DIM_TOGGLES
+            .filter(t => !t.requiresDim || (t.requiresDim === 'canal' && dataAvailability.has_canal) || (t.requiresDim === 'producto' && (dataAvailability.has_producto || dataAvailability.has_categoria)))
+            .map(toggle => {
+              const isActive = pivotDims.includes(toggle.key)
+              return (
+                <button
+                  key={toggle.key}
+                  onClick={() => {
+                    if (isActive) {
+                      if (pivotDims.length > 1) setPivotDims(prev => prev.filter(d => d !== toggle.key))
+                    } else {
+                      setPivotDims(prev => [...prev, toggle.key])
+                    }
+                  }}
+                  className="flex items-center gap-1.5 text-xs rounded-lg px-3 py-1.5 transition-all"
+                  style={{
+                    border: `1px solid ${isActive ? 'var(--sf-green)' : 'var(--sf-border)'}`,
+                    background: isActive ? 'rgba(0,214,143,0.08)' : 'transparent',
+                    color: isActive ? 'var(--sf-green)' : 'var(--sf-t4)',
+                    fontWeight: isActive ? 500 : 400,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <span>{toggle.icon}</span>
+                  <span>{toggle.label}</span>
+                </button>
+              )
+            })
+          }
+        </div>
 
-            {/* + Agregar popover */}
-            <div className="relative" ref={addDimRef} style={{ marginLeft: '4px', flexShrink: 0 }}>
-              <button
-                onClick={() => setAddDimOpen((v) => !v)}
-                disabled={pivotDims.length >= 4}
-                className="flex items-center gap-1 text-xs font-bold transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-                style={{ background: 'transparent', border: '1px dashed var(--sf-border)', borderRadius: '6px', padding: '6px 12px', color: 'var(--sf-t5)' }}
-              >
-                + Agregar ▾
-              </button>
-              {addDimOpen && (
-                <div className="absolute left-0 top-full mt-1 z-20 shadow-2xl p-1.5 min-w-[140px]" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderRadius: '12px' }}>
-                  {availableDims
-                    .filter(({ key }) => !pivotDims.includes(key))
-                    .map(({ key, label }) => (
-                      <button
-                        key={key}
-                        onClick={() => { setPivotDims((prev) => [...prev, key]); setAddDimOpen(false) }}
-                        className="w-full text-left px-3 py-2 text-xs rounded-lg transition-colors"
-                        style={{ color: 'var(--sf-t3)' }}
-                      >
-                        {label}
-                      </button>
+        {/* Advanced reorder panel — toggled by ⚙, smooth transition */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateRows: showAdvanced ? '1fr' : '0fr',
+            transition: 'grid-template-rows 300ms ease-in-out, opacity 200ms ease-in-out',
+            opacity: showAdvanced ? 1 : 0,
+            borderBottom: showAdvanced ? '1px solid var(--sf-border)' : 'none',
+          }}
+        >
+          <div style={{ overflow: 'hidden' }}>
+            <div className="px-6 py-4 space-y-2">
+              <p className="text-[10px] font-bold uppercase tracking-widest mb-2" style={{ color: 'var(--sf-t5)' }}>Orden de agrupación</p>
+              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={(e) => { handleDragEnd(e); dismissMicrocopy() }} modifiers={[restrictToHorizontalAxis, restrictToParentElement]}>
+                <SortableContext items={pivotDims} strategy={horizontalListSortingStrategy}>
+                  <div className="flex items-center flex-wrap" style={{ gap: '8px' }}>
+                    {pivotDims.map((dim, idx) => (
+                      <SortablePill key={dim} dim={dim} index={idx} />
                     ))}
-                  {availableDims.filter(({ key }) => !pivotDims.includes(key)).length === 0 && (
-                    <p className="px-3 py-2 text-[10px]" style={{ color: 'var(--sf-t5)' }}>Todas las dims activas</p>
-                  )}
-                </div>
+                  </div>
+                </SortableContext>
+              </DndContext>
+              {showMicrocopy && showAdvanced && (
+                <p className="text-xs italic ml-1" style={{ color: 'var(--sf-t5)' }}>
+                  Arrastra las etiquetas para cambiar el orden de agrupación
+                </p>
               )}
-              </div>
             </div>
-          </SortableContext>
-          </DndContext>
+          </div>
         </div>
 
 
@@ -731,7 +903,31 @@ export default function RendimientoPage() {
                 className="sticky top-0 z-10"
                 style={{ display: 'grid', gridTemplateColumns: pivotGrid, background: 'var(--sf-elevated)', borderBottom: '2px solid var(--sf-border)' }}
               >
-                <div style={{ ...hdrStyle, borderLeft: '3px solid #1D9E75' }}>Dimensión</div>
+                <div style={{ ...hdrStyle, borderLeft: '3px solid #1D9E75', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  Dimensión
+                  <span className="flex items-center gap-0.5 ml-auto">
+                    <button
+                      onClick={expandAll}
+                      className="p-1 rounded transition-colors cursor-pointer"
+                      style={{ color: 'var(--sf-t5)' }}
+                      onMouseEnter={e => { e.currentTarget.style.color = 'var(--sf-green)'; e.currentTarget.style.background = 'var(--sf-hover)' }}
+                      onMouseLeave={e => { e.currentTarget.style.color = 'var(--sf-t5)'; e.currentTarget.style.background = 'transparent' }}
+                      title="Expandir todo"
+                    >
+                      <ChevronsDown className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={collapseAll}
+                      className="p-1 rounded transition-colors cursor-pointer"
+                      style={{ color: 'var(--sf-t5)' }}
+                      onMouseEnter={e => { e.currentTarget.style.color = 'var(--sf-green)'; e.currentTarget.style.background = 'var(--sf-hover)' }}
+                      onMouseLeave={e => { e.currentTarget.style.color = 'var(--sf-t5)'; e.currentTarget.style.background = 'transparent' }}
+                      title="Colapsar todo"
+                    >
+                      <ChevronsUp className="w-3.5 h-3.5" />
+                    </button>
+                  </span>
+                </div>
                 <div style={{ ...hdrStyle, textAlign: 'right', cursor: 'pointer' }} onClick={() => handleSortCol('unidades')}>
                   {selectedYear}{' '}<span style={{ opacity: sortCol === 'unidades' ? 1 : 0.4, color: sortCol === 'unidades' ? 'var(--sf-green)' : undefined }}>{sortCol === 'unidades' ? (sortDir === 'desc' ? '↓' : '↑') : '↕'}</span>
                 </div>
@@ -772,54 +968,88 @@ export default function RendimientoPage() {
                 const isExpanded = expandedKeys.has(row.id)
                 const isRoot     = row.depth === 0
                 const isSelected = isRoot && chartFilter?.value === row.dimVal
-                const depthColors = ['#1D9E75', '#3B8BD4', '#9F77DD', '#E8593C']
+                const canExpand  = row.hasChildren
+                const isClickable = canExpand || isRoot
 
-                // Hierarchy backgrounds: root = card, children = elevated
+                // Per-level styling
+                const levelStyle = row.depth === 0
+                  ? { fontSize: '13px', fontWeight: 600 as const, color: 'var(--sf-t1)', py: '12px' }
+                  : row.depth === 1
+                  ? { fontSize: '13px', fontWeight: 500 as const, color: 'var(--sf-t1)', py: '10px' }
+                  : { fontSize: '12px', fontWeight: 400 as const, color: 'var(--sf-t2)', py: '8px' }
+
+                // Indentation: 16px base + 28px per depth for vertical line alignment
+                const indent = 16 + row.depth * 28
+
                 const rowBg = isSelected
                   ? 'rgba(29,158,117,0.08)'
-                  : isRoot ? 'var(--sf-card)' : 'var(--sf-elevated)'
+                  : 'var(--sf-card)'
 
                 return (
                   <div
                     key={row.id}
                     style={{
                       display: 'grid', gridTemplateColumns: pivotGrid, alignItems: 'center',
-                      borderBottom: isRoot ? '1px solid var(--sf-border)' : '1px solid var(--sf-border)',
-                      borderLeft: !isRoot ? `2px solid ${depthColors[row.depth] ?? '#1D9E75'}` : undefined,
+                      borderBottom: '1px solid var(--sf-border)',
                       background: rowBg, transition: 'background 150ms',
-                      cursor: isRoot ? 'pointer' : 'default',
+                      cursor: isClickable ? 'pointer' : 'default',
                     }}
-                    onClick={isRoot ? () => setChartFilter(prev => prev?.value === row.dimVal ? null : { dim: pivotDims[0], value: row.dimVal }) : undefined}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = isSelected ? 'rgba(29,158,117,0.12)' : 'var(--sf-hover)' }}
+                    onClick={isRoot
+                      ? () => { if (canExpand) toggleExpand(row.id); setChartFilter(prev => prev?.value === row.dimVal ? null : { dim: pivotDims[0], value: row.dimVal }) }
+                      : canExpand ? () => toggleExpand(row.id) : undefined}
+                    onMouseEnter={(e) => { if (isClickable) e.currentTarget.style.background = isSelected ? 'rgba(29,158,117,0.12)' : 'var(--sf-hover)' }}
                     onMouseLeave={(e) => { e.currentTarget.style.background = rowBg }}
                   >
                     {/* Label cell */}
-                    {isRoot ? (
-                      <div className="flex items-center overflow-hidden" style={{ padding: '11px 16px' }}>
-                        {row.hasChildren ? (
-                          <span
-                            style={{ width: '18px', height: '18px', borderRadius: '4px', border: '1px solid var(--sf-border)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', color: 'var(--sf-t3)', flexShrink: 0, marginRight: '8px', cursor: 'pointer' }}
-                            onClick={(e) => { e.stopPropagation(); toggleExpand(row.id) }}
-                          >
-                            {isExpanded ? '−' : '+'}
-                          </span>
-                        ) : <span style={{ display: 'inline-block', width: '18px', marginRight: '8px', flexShrink: 0 }} />}
-                        <span className="truncate" style={{ fontSize: '13px', fontWeight: 600, color: 'var(--sf-t1)' }}>{row.label}</span>
-                      </div>
-                    ) : (
-                      <div className="flex items-center overflow-hidden" style={{ padding: `9px 16px 9px ${16 + row.depth * 22}px` }}>
-                        <span className="truncate" style={{ fontSize: '12px', color: 'var(--sf-t2)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                          {row.hasChildren && (
-                            <span style={{ fontSize: '8px', color: 'var(--sf-t4)', cursor: 'pointer', flexShrink: 0 }} onClick={(e) => { e.stopPropagation(); toggleExpand(row.id) }}>
-                              {isExpanded ? '▾' : '▸'}
-                            </span>
-                          )}
-                          <span style={{ color: 'var(--sf-t4)', fontSize: '11px' }}>·</span>
-                          {row.label}
-                          {(() => { const d = DIM_META[row.dim]; return d ? <span className={cn('shrink-0 px-1 py-0.5 rounded text-[9px] font-bold border leading-none', d.color)}>{d.badge}</span> : null })()}
+                    <div className="flex items-center overflow-hidden" style={{
+                      padding: `${levelStyle.py} 16px ${levelStyle.py} ${indent}px`,
+                    }}>
+                      {/* Chevron for expandable rows */}
+                      {canExpand ? (
+                        <span
+                          style={{
+                            width: isRoot ? '20px' : '18px',
+                            height: isRoot ? '20px' : '18px',
+                            borderRadius: '4px',
+                            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                            flexShrink: 0, marginRight: '8px', cursor: 'pointer',
+                            transition: 'background 150ms',
+                          }}
+                          className="hover:bg-[var(--sf-inset)]"
+                          onClick={(e) => { e.stopPropagation(); toggleExpand(row.id) }}
+                        >
+                          <ChevronRight
+                            style={{
+                              width: isRoot ? '14px' : '12px',
+                              height: isRoot ? '14px' : '12px',
+                              color: isRoot ? 'var(--sf-t2)' : 'var(--sf-t3)',
+                              transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                              transition: 'transform 200ms ease',
+                            }}
+                          />
                         </span>
-                      </div>
-                    )}
+                      ) : (
+                        <span style={{ display: 'inline-block', width: isRoot ? '20px' : '18px', marginRight: '8px', flexShrink: 0 }} />
+                      )}
+                      <span className="truncate" style={{ fontSize: levelStyle.fontSize, fontWeight: levelStyle.fontWeight, color: levelStyle.color, display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                        {row.label}
+                        {row.depth > 0 && (() => { const d = DIM_META[row.dim]; return d ? <span className={cn('shrink-0 px-1 py-0.5 rounded text-[9px] font-bold border leading-none', d.color)}>{d.badge}</span> : null })()}
+                        {row.dim === 'vendedor' && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleAnalyzeRendVendedor(row.label, actual, prev, varPct, pctTotal) }}
+                            disabled={rendAnalysisMap[row.label]?.loading}
+                            className="shrink-0 cursor-pointer transition-all"
+                            style={{
+                              fontSize: 9, fontWeight: 600, padding: '1px 6px', borderRadius: 4,
+                              border: '1px solid rgba(16,185,129,0.2)', background: 'rgba(16,185,129,0.06)',
+                              color: '#10b981', opacity: rendAnalysisMap[row.label]?.loading ? 0.5 : 1,
+                            }}
+                          >
+                            {rendAnalysisMap[row.label]?.loading ? '...' : '✦'}
+                          </button>
+                        )}
+                      </span>
+                    </div>
                     {/* Actual (current year — primary emphasis) */}
                     <div style={{ ...mono, textAlign: 'right', paddingRight: 16, fontSize: '13px', fontWeight: isRoot ? 600 : 500, color: 'var(--sf-t1)' }}>{fmtVal(actual)}</div>
                     {/* Prev YTD (reference — less emphasis) */}
@@ -841,6 +1071,35 @@ export default function RendimientoPage() {
           )
         })()}
       </div>
+
+      {/* Drawer for rendimiento analysis */}
+      {(() => {
+        const va = expandedRendVendedor ? vendorAnalysis.find(v => v.vendedor === expandedRendVendedor) : null
+        const analysis = expandedRendVendedor ? rendAnalysisMap[expandedRendVendedor] : null
+        const isOpen = !!expandedRendVendedor && !!analysis?.text && !analysis?.loading
+
+        return (
+          <AnalysisDrawer
+            isOpen={isOpen}
+            onClose={() => setExpandedRendVendedor(null)}
+            title={expandedRendVendedor ?? ''}
+            subtitle={va?.variacion_ytd_pct != null ? `${va.variacion_ytd_pct >= 0 ? '+' : ''}${va.variacion_ytd_pct.toFixed(1)}% YTD` : undefined}
+            badges={va ? [{
+              label: va.variacion_ytd_pct != null && va.variacion_ytd_pct > 5 ? 'CRECIMIENTO' : va.variacion_ytd_pct != null && va.variacion_ytd_pct < -10 ? 'RIESGO' : 'ESTABLE',
+              color: va.variacion_ytd_pct != null && va.variacion_ytd_pct > 5 ? '#22c55e' : va.variacion_ytd_pct != null && va.variacion_ytd_pct < -10 ? '#ef4444' : '#eab308',
+              bg: va.variacion_ytd_pct != null && va.variacion_ytd_pct > 5 ? 'rgba(34,197,94,0.12)' : va.variacion_ytd_pct != null && va.variacion_ytd_pct < -10 ? 'rgba(239,68,68,0.12)' : 'rgba(234,179,8,0.12)',
+            }] : []}
+            analysisText={analysis?.text ?? null}
+            onDeepen={expandedRendVendedor && analysis?.text ? () => {
+              navigate('/chat', { state: {
+                prefill: `Profundizar sobre rendimiento de ${expandedRendVendedor}. ${analysis.text}`,
+                displayPrefill: `Profundizar: rendimiento de ${expandedRendVendedor}`,
+                source: 'Rendimiento',
+              }})
+            } : undefined}
+          />
+        )
+      })()}
     </div>
   )
 }

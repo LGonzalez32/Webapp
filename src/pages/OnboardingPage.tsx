@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Zap, Loader2, Building2, Link as LinkIcon, CheckCircle2, ShieldCheck, Eye } from 'lucide-react'
+import { useAppStore } from '../store/appStore'
 import { useAuthStore } from '../store/authStore'
 import { useOrgStore } from '../store/orgStore'
 import { createOrg, getUserOrg, getOrgPublicInfo } from '../lib/orgService'
+import { GIRO_OPTIONS } from '../lib/giroOptions'
 import { supabase } from '../lib/supabaseClient'
 import type { ReactNode } from 'react'
 import type { OrgRole } from '../types'
@@ -28,13 +30,29 @@ const ROLE_META: Record<OrgRole, { label: string; description: string; icon: Rea
   },
 }
 
+const CURRENCIES = [
+  { code: 'USD', name: 'Dólar Estadounidense' },
+  { code: 'MXN', name: 'Peso Mexicano' },
+  { code: 'GTQ', name: 'Quetzal Guatemalteco' },
+  { code: 'HNL', name: 'Lempira Hondureña' },
+  { code: 'CRC', name: 'Colón Costarricense' },
+  { code: 'COP', name: 'Peso Colombiano' },
+  { code: 'PEN', name: 'Sol Peruano' },
+  { code: 'ARS', name: 'Peso Argentino' },
+  { code: 'BRL', name: 'Real Brasileño' },
+]
+
 export default function OnboardingPage() {
   const navigate = useNavigate()
   const user = useAuthStore((s) => s.user)
   const { setOrg, setCurrentRole } = useOrgStore()
+  const setConfiguracion = useAppStore((s) => s.setConfiguracion)
 
   const [tab, setTab] = useState<Tab>('create')
   const [orgName, setOrgName] = useState('')
+  const [moneda, setMoneda] = useState('MXN')
+  const [giro, setGiro] = useState('')
+  const [giroCustom, setGiroCustom] = useState('')
   const [inviteInput, setInviteInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -70,6 +88,12 @@ export default function OnboardingPage() {
 
     setOrg(org)
     setCurrentRole('owner')
+    setConfiguracion({
+      empresa: orgName.trim(),
+      moneda,
+      giro,
+      giro_custom: giro === 'Otro' ? giroCustom : '',
+    })
     setWelcome({ orgName: org.name, role: 'owner' })
     setLoading(false)
   }
@@ -219,9 +243,47 @@ export default function OnboardingPage() {
                   value={orgName}
                   onChange={(e) => setOrgName(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
-                  placeholder="Distribuidora Ejemplo S.A."
+                  placeholder="Mi Empresa S.A."
                   className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-[#00B894] transition-colors"
                 />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
+                  Moneda
+                </label>
+                <select
+                  value={moneda}
+                  onChange={(e) => setMoneda(e.target.value)}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 text-sm text-zinc-100 focus:outline-none focus:border-[#00B894] transition-colors"
+                >
+                  {CURRENCIES.map((c) => (
+                    <option key={c.code} value={c.code}>{c.code} — {c.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
+                  Giro del negocio
+                </label>
+                <select
+                  value={giro}
+                  onChange={(e) => { setGiro(e.target.value); if (e.target.value !== 'Otro') setGiroCustom('') }}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 text-sm text-zinc-100 focus:outline-none focus:border-[#00B894] transition-colors"
+                >
+                  <option value="">Selecciona tu giro…</option>
+                  {GIRO_OPTIONS.map((g) => (
+                    <option key={g} value={g}>{g}</option>
+                  ))}
+                </select>
+                {giro === 'Otro' && (
+                  <input
+                    type="text"
+                    value={giroCustom}
+                    onChange={(e) => setGiroCustom(e.target.value)}
+                    placeholder="Describe tu giro de negocio"
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-[#00B894] transition-colors mt-2"
+                  />
+                )}
               </div>
 
               {error && (

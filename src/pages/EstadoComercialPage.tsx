@@ -1,4 +1,4 @@
-﻿import { useEffect, useState, useMemo, useCallback, useDeferredValue } from 'react'
+﻿import { useEffect, useState, useMemo, useCallback, useDeferredValue, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ResponsiveContainer, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts'
 import { useAppStore } from '../store/appStore'
@@ -7,6 +7,15 @@ import type { Insight, InsightTipo, InsightPrioridad, VendorAnalysis } from '../
 import { salesInPeriod } from '../lib/analysis'
 import { callAI } from '../lib/chatService'
 import VendedorPanel from '../components/vendedor/VendedorPanel'
+import { Database, Calendar, CheckCircle, RotateCcw, ChevronDown, Printer, GitCompare } from 'lucide-react'
+import { toast } from 'sonner'
+import { useAlertStatusStore } from '../store/alertStatusStore'
+import type { AlertStatus } from '../store/alertStatusStore'
+import { getAlertKey } from '../lib/alertKey'
+import FirstTimeTooltip from '../components/ui/FirstTimeTooltip'
+import ComparisonSummary from '../components/ui/ComparisonSummary'
+import { useSubscription } from '../lib/useSubscription'
+import UpgradePrompt from '../components/ui/UpgradePrompt'
 
 const MESES_CORTO = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic']
 const MESES_LARGO = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre']
@@ -15,6 +24,21 @@ const MESES_LARGO = ['enero','febrero','marzo','abril','mayo','junio','julio','a
 // â"€â"€â"€ Colores de prioridad â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 const PRIORIDAD_ORDER: Record<InsightPrioridad, number> = { CRITICA: 4, ALTA: 3, MEDIA: 2, BAJA: 1 }
+
+type ImpactLevel = 'alto' | 'medio' | 'bajo'
+
+function getImpactLevel(insight: Insight): ImpactLevel {
+  // ALTO: CRITICA priority, or ALTA cruzado/equipo types
+  if (insight.prioridad === 'CRITICA') return 'alto'
+  if (insight.prioridad === 'ALTA' && (insight.tipo === 'cruzado' || insight.tipo === 'riesgo_equipo')) return 'alto'
+  // BAJO: hallazgos (oportunidades) and BAJA priority
+  if (insight.tipo === 'hallazgo') return 'bajo'
+  if (insight.prioridad === 'BAJA') return 'bajo'
+  // MEDIO: everything else (ALTA vendedor/cliente/producto/meta, MEDIA anything)
+  return 'medio'
+}
+
+const IMPACT_ORDER: Record<ImpactLevel, number> = { alto: 3, medio: 2, bajo: 1 }
 
 function getAccentColor(tipo: InsightTipo): string {
   if (tipo === 'hallazgo') return '#22d3ee'
@@ -26,8 +50,8 @@ function getAccentColor(tipo: InsightTipo): string {
 
 function getFeedLabel(tipo: InsightTipo): string {
   switch (tipo) {
-    case 'hallazgo': return 'HALLAZGO'
-    case 'cruzado': return 'CRUZADO'
+    case 'hallazgo': return 'OPORTUNIDAD'
+    case 'cruzado': return 'COMBINADO'
     case 'riesgo_meta': return 'META'
     case 'riesgo_equipo': return 'EQUIPO'
     case 'riesgo_vendedor': return 'VENDEDOR'
@@ -37,18 +61,105 @@ function getFeedLabel(tipo: InsightTipo): string {
 }
 
 type FeedFilterKey = 'all' | 'riesgos' | 'hallazgo' | 'cruzado'
+type StatusFilterKey = 'notResolved' | 'following' | 'resolved'
 
 const FEED_FILTERS: { key: FeedFilterKey; label: string; color?: string; match: (t: InsightTipo) => boolean }[] = [
   { key: 'all', label: 'Todos', match: () => true },
   { key: 'riesgos', label: 'Riesgos', color: '#ef4444', match: t => t.startsWith('riesgo_') },
-  { key: 'hallazgo', label: 'Hallazgos', color: '#22d3ee', match: t => t === 'hallazgo' },
-  { key: 'cruzado', label: 'Cruzados', color: '#a78bfa', match: t => t === 'cruzado' },
+  { key: 'hallazgo', label: 'Oportunidades', color: '#22d3ee', match: t => t === 'hallazgo' },
+  { key: 'cruzado', label: 'Combinados', color: '#a78bfa', match: t => t === 'cruzado' },
 ]
 
 // â"€â"€â"€ InsightCard â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 
 // â"€â"€â"€ Página principal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+
+/** Resalta en negrita números con unidades o porcentajes dentro del texto de alertas */
+function boldifyDescription(text: string) {
+  const parts = text.split(/(\b\d[\d,\.]*(?:\s*%|\s*\buds?\b|\s*\bdías?\b|\s*\bmeses?\b|\s*\bsemanas?\b)?)/g)
+  return (
+    <>
+      {parts.map((part, i) =>
+        /^\d[\d,\.]*/.test(part)
+          ? <strong key={i} style={{ color: 'var(--sf-t1)', fontWeight: 600 }}>{part}</strong>
+          : <span key={i}>{part}</span>
+      )}
+    </>
+  )
+}
+
+// ─── Trend computation ──────────────────────────────────────────────────────
+type Trend = 'improving' | 'worsening' | 'stable'
+
+function computeInsightTrend(
+  insight: Insight,
+  vendorAnalysis: VendorAnalysis[],
+  clientesDormidos: { cliente: string; dias_sin_actividad: number; frecuencia_esperada_dias: number | null }[],
+): Trend {
+  // Vendedor: compare cumplimiento vs pm3 trend
+  if (insight.tipo === 'riesgo_vendedor' && insight.vendedor) {
+    const v = vendorAnalysis.find(va => va.vendedor === insight.vendedor)
+    if (v?.variacion_vs_promedio_pct != null) {
+      if (v.variacion_vs_promedio_pct > 5) return 'improving'
+      if (v.variacion_vs_promedio_pct < -5) return 'worsening'
+    }
+    return 'stable'
+  }
+  // Cliente dormido: more days = worsening
+  if (insight.tipo === 'riesgo_cliente' && insight.cliente) {
+    const d = clientesDormidos.find(c => c.cliente === insight.cliente)
+    if (d) {
+      const freq = d.frecuencia_esperada_dias ?? 30
+      if (d.dias_sin_actividad > freq * 3) return 'worsening'
+      if (d.dias_sin_actividad < freq * 2) return 'improving'
+    }
+    return 'stable'
+  }
+  // Meta/equipo: compare current period vs projection
+  if (insight.tipo === 'riesgo_meta' || insight.tipo === 'riesgo_equipo') {
+    if (insight.vendedor) {
+      const v = vendorAnalysis.find(va => va.vendedor === insight.vendedor)
+      if (v?.cumplimiento_pct != null) {
+        if (v.cumplimiento_pct > 85) return 'improving'
+        if (v.cumplimiento_pct < 50) return 'worsening'
+      }
+    }
+    return 'stable'
+  }
+  // Hallazgo / oportunidad: always stable (structural)
+  if (insight.tipo === 'hallazgo') return 'stable'
+  // Cruzado: worsening by default (these are compound risks)
+  if (insight.tipo === 'cruzado') return 'worsening'
+  // Product: stable
+  return 'stable'
+}
+
+const TREND_CONFIG: Record<Trend, { symbol: string; color: string; label: string }> = {
+  improving: { symbol: '\u2197', color: '#22c55e', label: 'Mejorando vs promedio' },
+  worsening: { symbol: '\u2198', color: '#ef4444', label: 'Empeorando vs promedio' },
+  stable:    { symbol: '\u2192', color: '#a1a1aa', label: 'Estable vs promedio' },
+}
+
+const STATUS_OPTIONS: { value: AlertStatus; label: string; emoji: string; color: string; bg: string; border: string }[] = [
+  { value: 'pending',   label: 'Pendiente',    emoji: '📋', color: 'var(--sf-t4)', bg: 'transparent', border: 'var(--sf-border-subtle)' },
+  { value: 'following', label: 'En trabajo',    emoji: '🔧', color: '#f59e0b', bg: 'rgba(245,158,11,0.08)', border: 'rgba(245,158,11,0.25)' },
+  { value: 'resolved',  label: 'Resuelta',      emoji: '✅', color: '#22c55e', bg: 'rgba(34,197,94,0.08)', border: 'rgba(34,197,94,0.25)' },
+]
+
+function relativeTime(isoString: string): string {
+  const diff = Date.now() - new Date(isoString).getTime()
+  const mins = Math.floor(diff / 60000)
+  if (mins < 1) return 'ahora'
+  if (mins < 60) return `hace ${mins}m`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `hace ${hrs}h`
+  const days = Math.floor(hrs / 24)
+  if (days === 1) return 'ayer'
+  if (days < 7) return `hace ${days}d`
+  const weeks = Math.floor(days / 7)
+  return `hace ${weeks}sem`
+}
 
 export default function EstadoComercialPage() {
   const navigate = useNavigate()
@@ -58,18 +169,29 @@ export default function EstadoComercialPage() {
     configuracion, selectedPeriod, setSelectedPeriod, sales, loadingMessage,
     clientesDormidos, concentracionRiesgo, categoriasInventario, supervisorAnalysis,
     canalAnalysis, categoriaAnalysis, dataSource,
+    comparisonEnabled, comparisonPeriod, toggleComparison, setComparisonPeriod,
   } = useAppStore()
+
+  const { canAccess } = useSubscription()
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false)
 
   const [vendedorPanel, setVendedorPanel] = useState<VendorAnalysis | null>(null)
   const [feedFilter, setFeedFilter] = useState<FeedFilterKey>('all')
-  const [feedVisible, setFeedVisible] = useState(5)
+  const [statusFilter, setStatusFilter] = useState<StatusFilterKey>('notResolved')
+  const [feedExpanded, setFeedExpanded] = useState(false)
   const [expandedInsightId, setExpandedInsightId] = useState<string | null>(null)
   const [analysisMap, setAnalysisMap] = useState<Record<string, { loading: boolean; text: string | null }>>({})
   const [mounted, setMounted] = useState(false)
   const [analysisStep, setAnalysisStep] = useState(0)
 
+  const { alertStatuses, setAlertStatus, checkReopened } = useAlertStatusStore()
+  const [openDropdownKey, setOpenDropdownKey] = useState<string | null>(null)
+  const [editingNoteKey, setEditingNoteKey] = useState<string | null>(null)
+  const [noteDraft, setNoteDraft] = useState('')
+  const dropdownRef = useRef<HTMLDivElement>(null)
+
   useEffect(() => {
-    if (sales.length === 0 && dataSource === 'none') navigate('/', { replace: true })
+    if (sales.length === 0 && dataSource === 'none') navigate('/cargar', { replace: true })
   }, [sales, navigate, dataSource])
 
   useEffect(() => {
@@ -90,12 +212,51 @@ export default function EstadoComercialPage() {
     return () => clearTimeout(t)
   }, [teamStats])
 
+  // Reabrir automáticamente alertas resueltas hace >7 días que siguen activas
+  useEffect(() => {
+    if (insights.length === 0) return
+    const activeKeys = insights.map(getAlertKey)
+    const reopened = checkReopened(activeKeys)
+    if (reopened.length > 0) {
+      toast(`↻ ${reopened.length} alerta${reopened.length > 1 ? 's reabierta(s)' : ' reabierta'} — el riesgo continúa`, {
+        duration: 5000,
+      })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [insights])
+
+  // Cerrar dropdown al clic fuera
+  useEffect(() => {
+    if (!openDropdownKey) return
+    const handleClick = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setOpenDropdownKey(null)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [openDropdownKey])
+
 
   // â"€â"€ Chips de mes â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const maxDate = useMemo(() =>
     sales.reduce((max, s) => { const d = new Date(s.fecha); return d > max ? d : max }, new Date(0)),
   [sales])
   const maxChipMonth = maxDate.getFullYear() === selectedPeriod.year ? maxDate.getMonth() : selectedPeriod.month
+
+  // ── Meses disponibles para el filtro de periodo ──────────────────────────
+  const availableMonths = useMemo(() => {
+    const months = new Set<string>()
+    for (const s of sales) {
+      const y = s.fecha.getFullYear()
+      const m = s.fecha.getMonth()
+      months.add(`${y}-${m}`)
+    }
+    return [...months]
+      .map(k => { const [y, m] = k.split('-').map(Number); return { year: y, month: m } })
+      .sort((a, b) => b.year - a.year || b.month - a.month)
+      .slice(0, 18) // últimos 18 meses como máximo
+  }, [sales])
 
   // â"€â"€ Slices de ventas cacheados (evitar llamadas repetidas a salesInPeriod) â"€
   const salesActual = useMemo(() =>
@@ -237,6 +398,88 @@ export default function EstadoComercialPage() {
   }, [estadoMes, deferredSales, selectedPeriod, deferredVendorAnalysis, dataAvailability])
 
   // â"€â"€ Focos de riesgo críticos â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+  // ── Comparación mes vs mes anterior ───────────────────────────────────────
+  const comparacionMes = useMemo(() => {
+    const fmtK = (n: number) => n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : n.toLocaleString()
+    const { year, month } = selectedPeriod // month 0-based
+
+    // Helper para calcular total de unidades en un mes/año
+    const totalMes = (y: number, m: number) => sales
+      .filter(s => { const d = new Date(s.fecha); return d.getFullYear() === y && d.getMonth() === m })
+      .reduce((sum, s) => sum + s.unidades, 0)
+
+    // Helper para calcular total de unidades en un mes/año hasta un día máximo
+    const totalMesHastaDia = (y: number, m: number, maxDia: number) => sales
+      .filter(s => { const d = new Date(s.fecha); return d.getFullYear() === y && d.getMonth() === m && d.getDate() <= maxDia })
+      .reduce((sum, s) => sum + s.unidades, 0)
+
+    // Determinar si el mes seleccionado está incompleto (es el mes "en curso" de los datos)
+    const maxSaleDate = sales.reduce((max, s) => { const d = new Date(s.fecha); return d > max ? d : max }, new Date(0))
+    const isCurrentMonth = year === maxSaleDate.getFullYear() && month === maxSaleDate.getMonth()
+    const maxDay = maxSaleDate.getDate()
+
+    // Mes anterior
+    const mesPrevIdx = month === 0 ? 11 : month - 1
+    const mesPrevYear = month === 0 ? year - 1 : year
+
+    const mesActualTotal = totalMes(year, month)
+    const mesPrevTotal = totalMes(mesPrevYear, mesPrevIdx)
+
+    // Mismo mes del año anterior (hasta el mismo día para comparación justa)
+    const mesAnioAnteriorTotal = isCurrentMonth ? totalMesHastaDia(year - 1, month, maxDay) : totalMes(year - 1, month)
+    const mesAnioAnteriorCompleto = totalMes(year - 1, month)
+    const varVsAnioAnterior = mesAnioAnteriorTotal > 0 ? ((mesActualTotal - mesAnioAnteriorTotal) / mesAnioAnteriorTotal) * 100 : null
+
+    if (mesPrevTotal === 0 && mesAnioAnteriorTotal === 0) return null
+
+    const variacion = mesPrevTotal > 0 ? ((mesActualTotal - mesPrevTotal) / mesPrevTotal) * 100 : 0
+    const mesActualNombre = MESES_CORTO[month]
+    const mesPrevNombre = MESES_CORTO[mesPrevIdx]
+
+    // Tendencia trimestral: 3 meses completos más recientes
+    // Helper: retroceder N meses desde un punto (month 0-based, year)
+    const goBack = (m0: number, y0: number, n: number): [number, number] => {
+      let mm = m0 - n, yy = y0
+      while (mm < 0) { mm += 12; yy-- }
+      return [mm, yy]
+    }
+    // Último mes completo: si el mes seleccionado es parcial, es el anterior; si no, es el seleccionado
+    const [lcm, lcy] = isCurrentMonth ? goBack(month, year, 1) : [month, year]
+    const [tm1Idx, tm1Year] = goBack(lcm, lcy, 2)
+    const [tm2Idx, tm2Year] = goBack(lcm, lcy, 1)
+    const tm3Idx = lcm, tm3Year = lcy
+
+    const tm1Total = totalMes(tm1Year, tm1Idx)
+    const tm2Total = totalMes(tm2Year, tm2Idx)
+    const tm3Total = totalMes(tm3Year, tm3Idx)
+
+    const tendencia = tm1Total > 0 && tm2Total > 0 ? (() => {
+      const tipo = tm3Total > tm2Total && tm2Total > tm1Total ? 'creciente' as const
+        : tm3Total < tm2Total && tm2Total < tm1Total ? 'decreciente' as const
+        : 'mixta' as const
+      return {
+        m1: { nombre: MESES_CORTO[tm1Idx], total: tm1Total },
+        m2: { nombre: MESES_CORTO[tm2Idx], total: tm2Total },
+        m3: { nombre: MESES_CORTO[tm3Idx], total: tm3Total },
+        tipo,
+      }
+    })() : null
+
+    return {
+      mesActualNombre, mesPrevNombre,
+      mesActualTotal, mesPrevTotal,
+      variacion,
+      isCurrentMonth,
+      diaActual: isCurrentMonth ? maxDay : null,
+      tendencia,
+      fmtK,
+      mesAnioAnteriorTotal,
+      mesAnioAnteriorCompleto,
+      varVsAnioAnterior,
+      year,
+    }
+  }, [sales, selectedPeriod])
+
   const focosRiesgo = useMemo(() =>
     insights.filter(i => i.prioridad === 'CRITICA' && i.impacto_economico).slice(0, 3),
   [insights])
@@ -251,7 +494,7 @@ export default function EstadoComercialPage() {
 
   // â"€â"€ Resumen ejecutivo automático â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const resumenEjecutivo = useMemo(() => {
-    const bullets: Array<{ texto: string; tipo: 'alerta' | 'neutro' | 'positivo' }> = []
+    const bullets: Array<{ texto: string; tipo: 'alerta' | 'neutro' | 'positivo'; sub?: string; subColor?: string }> = []
 
     // Bullet 1 — estado del mes con cuantificación
     if (estadoMes.estado !== 'sin_base' && estadoMes.gap_pct !== null) {
@@ -269,7 +512,54 @@ export default function EstadoComercialPage() {
       })
     }
 
-    // Bullet 2 — causa principal con impacto o vendedores superando
+    // Bullet 2 — comparación mes vs mes anterior
+    if (comparacionMes) {
+      const { mesActualNombre, mesPrevNombre, mesActualTotal, mesPrevTotal, variacion, isCurrentMonth, diaActual, fmtK, tendencia, varVsAnioAnterior, mesAnioAnteriorTotal, year } = comparacionMes
+      const varAbs = Math.abs(variacion).toFixed(1)
+      const signoVar = variacion >= 0 ? '+' : '-'
+      // Tendencia trimestral sub-text
+      const subTendencia = tendencia
+        ? `Tendencia trimestral: ${tendencia.m1.nombre} ${fmtK(tendencia.m1.total)} → ${tendencia.m2.nombre} ${fmtK(tendencia.m2.total)} → ${tendencia.m3.nombre} ${fmtK(tendencia.m3.total)}`
+        : undefined
+      const subArrow = (() => {
+        if (!tendencia) return ''
+        if (tendencia.tipo === 'creciente') return ' (📈 en alza)'
+        if (tendencia.tipo === 'decreciente') return ' (📉 en caída)'
+        // mixta — analyze pattern for more descriptive text
+        const { m1, m2, m3 } = tendencia
+        if (m1.total > m2.total && m2.total < m3.total && m3.total > m1.total) return ' (📈 recuperándose)'
+        if (m1.total > m2.total && m2.total < m3.total && m3.total <= m1.total) return ' (↕ irregular)'
+        if (m1.total < m2.total && m2.total > m3.total && m3.total < m1.total) return ' (📉 desacelerándose)'
+        if (m1.total < m2.total && m2.total > m3.total && m3.total >= m1.total) return ' (↕ irregular)'
+        return ' (↕ estable)'
+      })()
+      const subColor = tendencia?.tipo === 'creciente' ? 'var(--sf-green)'
+        : tendencia?.tipo === 'decreciente' ? 'var(--sf-red)'
+        : subArrow.includes('📈') ? 'var(--sf-green)'
+        : subArrow.includes('📉') ? 'var(--sf-red)'
+        : 'var(--sf-t5)'
+      if (isCurrentMonth && diaActual) {
+        const bulletTexto = varVsAnioAnterior !== null
+          ? `📊 ${mesActualNombre} lleva ${fmtK(mesActualTotal)} uds al día ${diaActual} — ${varVsAnioAnterior >= 0 ? '+' : ''}${varVsAnioAnterior.toFixed(1)}% vs misma fecha ${year - 1} (${fmtK(mesAnioAnteriorTotal)} uds). ${mesPrevNombre} ${year} cerró en ${fmtK(mesPrevTotal)}.`
+          : `📊 ${mesActualNombre} lleva ${fmtK(mesActualTotal)} uds al día ${diaActual}. ${mesPrevNombre} cerró en ${fmtK(mesPrevTotal)}.`
+        bullets.push({
+          texto: bulletTexto,
+          tipo: varVsAnioAnterior !== null ? (varVsAnioAnterior >= 0 ? 'positivo' : 'alerta') : 'neutro',
+          sub: subTendencia ? subTendencia + subArrow : undefined,
+          subColor,
+        })
+      } else {
+        const emoji = variacion >= 0 ? '📈' : '📉'
+        bullets.push({
+          texto: `${emoji} ${mesActualNombre} cerró con ${fmtK(mesActualTotal)} uds — ${signoVar}${varAbs}% vs ${mesPrevNombre} (${fmtK(mesPrevTotal)}).`,
+          tipo: variacion >= 0 ? 'positivo' : 'alerta',
+          sub: subTendencia ? subTendencia + subArrow : undefined,
+          subColor,
+        })
+      }
+    }
+
+    // Bullet 3 — causa principal con impacto o vendedores superando
     if (estadoMes.estado === 'atrasado' && causasAtraso.length > 0) {
       const principal = causasAtraso[0]
       const dim = principal.dimension === 'canal' ? 'canal' : 'vendedor'
@@ -283,20 +573,36 @@ export default function EstadoComercialPage() {
     } else if (estadoMes.estado === 'adelantado') {
       const superando = deferredVendorAnalysis.filter(v => v.riesgo === 'superando')
       if (superando.length > 0) {
+        const nombres = superando.slice(0, 3).map(v => v.vendedor.split(' ')[0])
+        const extra = superando.length > 3 ? ` y ${superando.length - 3} más` : ''
         bullets.push({
-          texto: `${superando.length} vendedor${superando.length > 1 ? 'es están' : ' está'} superando su ritmo habitual — impulsando el avance del mes.`,
+          texto: `${superando.length} vendedor${superando.length > 1 ? 'es superando' : ' superando'} su ritmo: ${nombres.join(', ')}${extra} — impulsando el avance del mes.`,
           tipo: 'positivo',
         })
       }
     }
 
+    // Bullet — vendedores rezagados (por debajo del ritmo)
+    const rezagados = deferredVendorAnalysis.filter(v => v.riesgo === 'critico' || v.riesgo === 'riesgo')
+    if (rezagados.length > 0 && rezagados.length < deferredVendorAnalysis.length) {
+      const nombresRez = rezagados.slice(0, 3).map(v => v.vendedor)
+      const extraRez = rezagados.length > 3 ? ` y ${rezagados.length - 3} más` : ''
+      bullets.push({
+        texto: `⚠ ${nombresRez.join(', ')}${extraRez} por debajo del ritmo esperado — necesitan atención.`,
+        tipo: 'alerta',
+      })
+    }
+
     // Bullet 3 — vendedores críticos con porcentaje
-    const nCriticos = deferredVendorAnalysis.filter(v => v.riesgo === 'critico').length
+    const criticos = deferredVendorAnalysis.filter(v => v.riesgo === 'critico')
+    const nCriticos = criticos.length
     const nTotal = deferredVendorAnalysis.length
     if (nCriticos > 0) {
       const pctCriticos = Math.round((nCriticos / nTotal) * 100)
+      const nombres = criticos.slice(0, 3).map(v => v.vendedor.split(' ')[0])
+      const extra = nCriticos > 3 ? ` y ${nCriticos - 3} más` : ''
       bullets.push({
-        texto: `${nCriticos} de ${nTotal} vendedores (${pctCriticos}%) presentan riesgo crítico — sin ventas o muy por debajo de su promedio histórico.`,
+        texto: `${nCriticos} de ${nTotal} vendedores (${pctCriticos}%) en riesgo crítico: ${nombres.join(', ')}${extra}.`,
         tipo: 'alerta',
       })
     }
@@ -321,8 +627,8 @@ export default function EstadoComercialPage() {
       })
     }
 
-    return bullets.slice(0, 4)
-  }, [estadoMes, causasAtraso, deferredVendorAnalysis, deferredClientesDormidos, concentracionRiesgo])
+    return bullets.slice(0, 6)
+  }, [estadoMes, causasAtraso, comparacionMes, deferredVendorAnalysis, deferredClientesDormidos, concentracionRiesgo])
 
   // â"€â"€ Escenario de mejora con clientes recuperables â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const escenarioMejora = useMemo(() => {
@@ -987,10 +1293,45 @@ export default function EstadoComercialPage() {
     [insights]
   )
 
+  // Helper: obtiene el estado de un insight desde el store
+  const getStatus = useCallback((insight: Insight): AlertStatus => {
+    return alertStatuses[getAlertKey(insight)]?.status ?? 'pending'
+  }, [alertStatuses])
+
+  // Helper: indica si un insight fue reabierto automáticamente
+  const isReopened = useCallback((insight: Insight): boolean => {
+    const key = getAlertKey(insight)
+    return !!alertStatuses[key]?.reopenedAt && alertStatuses[key]?.status === 'pending'
+  }, [alertStatuses])
+
   const feedFiltered = useMemo(() => {
     const filterDef = FEED_FILTERS.find(f => f.key === feedFilter) ?? FEED_FILTERS[0]
-    return feedInsights.filter(i => filterDef.match(i.tipo))
-  }, [feedInsights, feedFilter])
+    const byType = feedInsights.filter(i => filterDef.match(i.tipo))
+
+    // Filtrar por estado
+    const byStatus = byType.filter(i => {
+      const s = alertStatuses[getAlertKey(i)]?.status ?? 'pending'
+      if (statusFilter === 'notResolved') return s !== 'resolved'
+      if (statusFilter === 'following')   return s === 'following'
+      if (statusFilter === 'resolved')    return s === 'resolved'
+      return true
+    })
+
+    // Las resueltas van al final cuando se ven en modo notResolved (no aplica porque las filtramos)
+    // Al ver "todas" sin filtro de estado: resueltas al final
+    let result: Insight[]
+    if (statusFilter === 'notResolved') {
+      result = [
+        ...byStatus.filter(i => getStatus(i) === 'pending'),
+        ...byStatus.filter(i => getStatus(i) === 'following'),
+      ]
+    } else {
+      result = byStatus
+    }
+    // Sort by impact level within each status group
+    result.sort((a, b) => IMPACT_ORDER[getImpactLevel(b)] - IMPACT_ORDER[getImpactLevel(a)])
+    return result
+  }, [feedInsights, feedFilter, alertStatuses, statusFilter, getStatus])
 
   const feedFilterCounts = useMemo(() => {
     const counts: Record<FeedFilterKey, number> = { all: feedInsights.length, riesgos: 0, hallazgo: 0, cruzado: 0 }
@@ -1001,6 +1342,49 @@ export default function EstadoComercialPage() {
     })
     return counts
   }, [feedInsights])
+
+  const statusCounts = useMemo(() => {
+    const counts = { notResolved: 0, following: 0, resolved: 0 }
+    feedInsights.forEach(i => {
+      const filterDef = FEED_FILTERS.find(f => f.key === feedFilter) ?? FEED_FILTERS[0]
+      if (!filterDef.match(i.tipo)) return
+      const s = alertStatuses[getAlertKey(i)]?.status ?? 'pending'
+      if (s === 'resolved') counts.resolved++
+      else if (s === 'following') { counts.following++; counts.notResolved++ }
+      else counts.notResolved++
+    })
+    return counts
+  }, [feedInsights, alertStatuses, feedFilter])
+
+  const pendingCount = useMemo(() =>
+    feedInsights.filter(i => {
+      const s = alertStatuses[getAlertKey(i)]?.status ?? 'pending'
+      return s === 'pending'
+    }).length,
+  [feedInsights, alertStatuses])
+
+  const urgentPendingCount = useMemo(() =>
+    feedInsights.filter(i => {
+      const s = alertStatuses[getAlertKey(i)]?.status ?? 'pending'
+      return s === 'pending' && (i.prioridad === 'CRITICA' || i.prioridad === 'ALTA')
+    }).length,
+  [feedInsights, alertStatuses])
+
+  const handleStatusChange = useCallback(async (
+    insight: Insight,
+    newStatus: AlertStatus,
+    note?: string,
+  ) => {
+    const key = getAlertKey(insight)
+    await setAlertStatus(key, newStatus, note)
+    const labels: Record<AlertStatus, string> = {
+      pending:   '📋 Alerta marcada como pendiente',
+      following: '🔧 Alerta en trabajo',
+      resolved:  '✅ Alerta resuelta',
+    }
+    toast(labels[newStatus])
+    setOpenDropdownKey(null)
+  }, [setAlertStatus])
 
   const handleAnalyzeInsight = useCallback(async (insight: Insight) => {
     setAnalysisMap(prev => ({ ...prev, [insight.id]: { loading: true, text: null } }))
@@ -1016,7 +1400,7 @@ export default function EstadoComercialPage() {
       (insight.accion_sugerida ? `Acción sugerida: ${insight.accion_sugerida}\n` : '')
 
     const systemPrompt =
-      `Eres un analista comercial de una distribuidora.\n` +
+      `Eres un analista comercial.\n` +
       `Responde SIEMPRE en este formato exacto, sin introducción ni cierre:\n\n` +
       `📊 RESUMEN: [Una oración de máximo 15 palabras con el hallazgo principal]\n\n` +
       `🔺 CRECIMIENTO:\n- [Bullet con dato específico si aplica]\n\n` +
@@ -1037,7 +1421,13 @@ export default function EstadoComercialPage() {
       )
       setAnalysisMap(prev => ({ ...prev, [insight.id]: { loading: false, text: json.choices?.[0]?.message?.content ?? 'Sin respuesta' } }))
     } catch (err) {
-      setAnalysisMap(prev => ({ ...prev, [insight.id]: { loading: false, text: `Error: ${err instanceof Error ? err.message : 'Error al conectar.'}` } }))
+      const code = err instanceof Error ? err.message : ''
+      const msg = code === 'INVALID_KEY'
+        ? 'API key no configurada. Ve a Configuración → Asistente IA.'
+        : code === 'RATE_LIMIT'
+          ? 'Límite de requests alcanzado. Intenta en unos segundos.'
+          : 'No se pudo conectar con el asistente IA.'
+      setAnalysisMap(prev => ({ ...prev, [insight.id]: { loading: false, text: msg } }))
     }
   }, [configuracion])
 
@@ -1047,17 +1437,28 @@ export default function EstadoComercialPage() {
     const currentYear = selectedPeriod.year
     const previousYear = currentYear - 1
     const currentMonth = selectedPeriod.month // 0-based in store
+    const maxDay = maxDate.getDate() // día máximo del mes actual para comparación justa
 
-    const data: { month: string; actual: number; anterior: number }[] = []
+    const data: { month: string; actual: number; anterior: number; isPartial: boolean; daysElapsed: number; daysTotal: number }[] = []
     let totalActual = 0
     let totalAnterior = 0
 
     for (let m = 0; m <= currentMonth; m++) {
+      const isCurrentMonth = m === currentMonth
+      const daysInMonth = new Date(currentYear, m + 1, 0).getDate()
+
       const ventasActual = sales
         .filter(s => { const d = new Date(s.fecha); return d.getFullYear() === currentYear && d.getMonth() === m })
         .reduce((sum, s) => sum + s.unidades, 0)
+
+      // Para el mes actual: solo contar ventas del año anterior hasta el mismo día
       const ventasAnterior = sales
-        .filter(s => { const d = new Date(s.fecha); return d.getFullYear() === previousYear && d.getMonth() === m })
+        .filter(s => {
+          const d = new Date(s.fecha)
+          if (d.getFullYear() !== previousYear || d.getMonth() !== m) return false
+          if (isCurrentMonth && d.getDate() > maxDay) return false
+          return true
+        })
         .reduce((sum, s) => sum + s.unidades, 0)
 
       totalActual += ventasActual
@@ -1067,10 +1468,13 @@ export default function EstadoComercialPage() {
         month: MESES_CORTO[m],
         actual: ventasActual,
         anterior: ventasAnterior,
+        isPartial: isCurrentMonth,
+        daysElapsed: isCurrentMonth ? maxDay : daysInMonth,
+        daysTotal: daysInMonth,
       })
     }
-    return { data, totalActual, totalAnterior }
-  }, [sales, selectedPeriod.year, selectedPeriod.month])
+    return { data, totalActual, totalAnterior, maxDay }
+  }, [sales, selectedPeriod.year, selectedPeriod.month, maxDate])
 
   if (!teamStats) {
     if (sales.length === 0) return null // el useEffect redirige a /cargar
@@ -1150,15 +1554,16 @@ export default function EstadoComercialPage() {
   const rawMesLabel = new Date(selectedPeriod.year, selectedPeriod.month, 1).toLocaleDateString('es-MX', { month: 'long', year: 'numeric' })
   const mesLabel = rawMesLabel.charAt(0).toUpperCase() + rawMesLabel.slice(1)
 
-  // FIX 1: proyección y YTD en dólares si has_venta_neta
-  const proyeccion_neta = dataAvailability.has_venta_neta
-    ? vendorAnalysis.reduce((sum, v) => sum + (v.proyeccion_cierre ?? 0) * (v.ticket_promedio ?? 0), 0)
+  // proyección de ingresos: misma lógica diaria que proyeccion_cierre en unidades
+  const proyeccion_neta = dataAvailability.has_venta_neta && estadoMes.diasTranscurridos > 0
+    ? Math.round((estadoMes.ingreso_actual / estadoMes.diasTranscurridos) * estadoMes.diasTotales)
     : 0
+  // YTD en dólares: usar los campos _neto calculados en el motor (suma directa de venta_neta)
   const ytd_neto = dataAvailability.has_venta_neta
-    ? vendorAnalysis.reduce((sum, v) => sum + (v.ytd_actual ?? 0) * (v.ticket_promedio ?? 0), 0)
+    ? vendorAnalysis.reduce((sum, v) => sum + (v.ytd_actual_neto ?? 0), 0)
     : 0
   const ytd_anterior_neto = dataAvailability.has_venta_neta
-    ? vendorAnalysis.reduce((sum, v) => sum + (v.ytd_anterior ?? 0) * (v.ticket_promedio ?? 0), 0)
+    ? vendorAnalysis.reduce((sum, v) => sum + (v.ytd_anterior_neto ?? 0), 0)
     : 0
 
   // FIX 2: fecha de comparación YTD año anterior
@@ -1210,155 +1615,417 @@ export default function EstadoComercialPage() {
 
       {/* â"€â"€ CONTEXT HEADER â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€ */}
       <div
-        className="intel-fade border-b border-[var(--sf-border)] pb-3 mb-6"
+        className="intel-fade border-b border-[var(--sf-border)] pb-3 mb-6 flex items-center gap-3 flex-wrap"
         style={{ animationDelay: '0ms' }}
       >
-        <p className="text-[12px] tracking-wide" style={{ color: 'var(--sf-t5)' }}>
-          {configuracion.empresa} · {mesLabel} · Día {teamStats.dias_transcurridos} de {teamStats.dias_totales} · {sales.length.toLocaleString()} registros analizados
-        </p>
+        <span className="text-[13px] font-semibold" style={{ color: 'var(--sf-t2)' }}>
+          {configuracion.empresa}
+        </span>
+        {urgentPendingCount > 0 ? (
+          <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.2)' }}>
+            ⚠ Atención — {urgentPendingCount} alerta{urgentPendingCount > 1 ? 's' : ''} urgente{urgentPendingCount > 1 ? 's' : ''}
+          </span>
+        ) : insights.length > 0 ? (
+          <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: 'var(--sf-green-bg)', color: 'var(--sf-green)', border: '1px solid var(--sf-green-border)' }}>
+            ✓ En orden
+          </span>
+        ) : null}
+        <div className="sf-no-print relative flex items-center">
+          <Calendar className="absolute left-2 w-3 h-3 pointer-events-none" style={{ color: 'var(--sf-t5)' }} />
+          <select
+            value={`${selectedPeriod.year}-${selectedPeriod.month}`}
+            onChange={e => {
+              const [y, m] = e.target.value.split('-').map(Number)
+              setSelectedPeriod({ year: y, month: m })
+            }}
+            className="appearance-none focus:outline-none cursor-pointer"
+            style={{
+              background: 'var(--sf-inset)',
+              border: '1px solid var(--sf-border)',
+              borderRadius: 20,
+              color: 'var(--sf-t2)',
+              fontSize: 11,
+              fontWeight: 500,
+              padding: '4px 24px 4px 24px',
+              height: 28,
+            }}
+          >
+            {availableMonths.map(({ year, month }) => {
+              const label = `${MESES_CORTO[month]} ${year}`
+              return <option key={`${year}-${month}`} value={`${year}-${month}`}>{label}</option>
+            })}
+          </select>
+          <ChevronDown className="absolute right-2 w-3 h-3 pointer-events-none" style={{ color: 'var(--sf-t5)' }} />
+        </div>
+        {/* Comparison toggle */}
+        <button
+          className="sf-no-print flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium cursor-pointer transition-colors"
+          style={{
+            background: comparisonEnabled ? 'var(--sf-green-bg)' : 'var(--sf-inset)',
+            color: comparisonEnabled ? 'var(--sf-green)' : 'var(--sf-t4)',
+            border: comparisonEnabled ? '1px solid var(--sf-green-border)' : '1px solid var(--sf-border)',
+          }}
+          onClick={() => {
+            if (!comparisonEnabled && !canAccess('period_comparison')) {
+              setShowUpgradeModal(true)
+              return
+            }
+            toggleComparison()
+          }}
+          title="Comparar con período anterior"
+        >
+          <GitCompare className="w-3 h-3" />
+          {comparisonEnabled && comparisonPeriod
+            ? `vs ${MESES_CORTO[comparisonPeriod.month]} ${comparisonPeriod.year}`
+            : 'Comparar'}
+        </button>
+        {comparisonEnabled && comparisonPeriod && (
+          <div className="sf-no-print relative flex items-center">
+            <select
+              value={`${comparisonPeriod.year}-${comparisonPeriod.month}`}
+              onChange={e => {
+                const [y, m] = e.target.value.split('-').map(Number)
+                setComparisonPeriod({ year: y, month: m })
+              }}
+              className="appearance-none focus:outline-none cursor-pointer"
+              style={{
+                background: 'var(--sf-green-bg)',
+                border: '1px solid var(--sf-green-border)',
+                borderRadius: 20,
+                color: 'var(--sf-green)',
+                fontSize: 10,
+                fontWeight: 500,
+                padding: '3px 20px 3px 8px',
+                height: 26,
+              }}
+            >
+              {availableMonths
+                .filter(({ year, month }) => !(year === selectedPeriod.year && month === selectedPeriod.month))
+                .map(({ year, month }) => (
+                  <option key={`c-${year}-${month}`} value={`${year}-${month}`}>
+                    {MESES_CORTO[month]} {year}
+                  </option>
+                ))
+              }
+            </select>
+            <ChevronDown className="absolute right-1.5 w-2.5 h-2.5 pointer-events-none" style={{ color: 'var(--sf-green)' }} />
+          </div>
+        )}
+        <span
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px]"
+          style={{ background: 'var(--sf-inset)', color: 'var(--sf-t4)' }}
+        >
+          <Calendar className="w-3 h-3" />
+          Día {teamStats.dias_transcurridos} de {teamStats.dias_totales}
+        </span>
+        <span
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium"
+          style={{ background: 'var(--sf-green-bg)', color: 'var(--sf-green)' }}
+          title="Registros procesados del archivo de ventas cargado"
+        >
+          <Database className="w-3 h-3" />
+          {sales.length.toLocaleString()} registros
+        </span>
+        <button
+          className="sf-no-print flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium cursor-pointer transition-colors ml-auto"
+          style={{ background: 'var(--sf-inset)', color: 'var(--sf-t4)', border: '1px solid var(--sf-border)' }}
+          onClick={() => window.print()}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--sf-green)'; e.currentTarget.style.color = 'var(--sf-green)' }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--sf-border)'; e.currentTarget.style.color = 'var(--sf-t4)' }}
+          title="Exportar como PDF (Ctrl+P)"
+        >
+          <Printer className="w-3 h-3" />
+          Exportar PDF
+        </button>
+      </div>
+
+      {/* ── COMPARISON SUMMARY ────────────────────────────────────────────── */}
+      {comparisonEnabled && comparisonPeriod && (
+        <ComparisonSummary sales={sales} insights={insights} compPeriod={comparisonPeriod} />
+      )}
+      {showUpgradeModal && (
+        <UpgradePrompt feature="period_comparison" onClose={() => setShowUpgradeModal(false)} />
+      )}
+
+      {/* ── KPI CARDS ──────────────────────────────────────────────────────── */}
+      <div className="intel-fade grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6" style={{ animationDelay: '30ms' }}>
+        {/* Card 1 — VENTAS YTD */}
+        <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
+          <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t5)' }}>Ventas YTD</p>
+          <p className="text-2xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-t1)' }}>
+            {ytdChart.totalActual >= 1_000_000 ? `${(ytdChart.totalActual / 1_000_000).toFixed(1)}M` : ytdChart.totalActual >= 1000 ? `${(ytdChart.totalActual / 1000).toFixed(1)}k` : ytdChart.totalActual.toLocaleString()}
+            <span className="text-sm font-normal ml-1" style={{ color: 'var(--sf-t5)' }}>uds</span>
+          </p>
+          {dataAvailability.has_venta_neta && ytd_neto > 0 && (
+            <p className="text-xs mt-1" style={{ color: 'var(--sf-t4)' }}>{configuracion.moneda} {Math.round(ytd_neto).toLocaleString('es-SV')}</p>
+          )}
+        </div>
+
+        {/* Card 2 — VS AÑO ANTERIOR */}
+        <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
+          <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t5)' }}>Vs misma fecha {selectedPeriod.year - 1}</p>
+          <p className="text-2xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: ytdVar == null ? 'var(--sf-t5)' : ytdVar >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
+            {ytdVar == null ? '—' : `${ytdVar >= 0 ? '+' : ''}${ytdVar.toFixed(1)}%`}
+          </p>
+          <p className="text-xs mt-1" style={{ color: 'var(--sf-t5)' }}>
+            {dataAvailability.has_venta_neta && ytd_anterior_neto > 0
+              ? `${configuracion.moneda} ${Math.round(ytd_anterior_neto).toLocaleString('es-SV')} al ${fechaCompLabel}`
+              : teamStats.ytd_anterior_equipo
+                ? `${Math.round(teamStats.ytd_anterior_equipo).toLocaleString('es-SV')} uds al ${fechaCompLabel}`
+                : ''}
+          </p>
+        </div>
+
+        {/* Card 3 — PROYECCIÓN CIERRE */}
+        {(() => {
+          const hasNeta = dataAvailability.has_venta_neta
+          const proyVal = hasNeta ? proyeccion_neta : estadoMes.proyeccion_cierre
+          const hasMeta = !!teamStats?.meta_equipo && teamStats.meta_equipo > 0
+          // Compare projection against meta (in units); for neta use proportional scaling
+          const metaVal = hasMeta ? teamStats!.meta_equipo! : 0
+          const proyVsMeta = hasMeta ? Math.round((proyVal / (hasNeta ? (metaVal * (proyeccion_neta / (estadoMes.proyeccion_cierre || 1))) : metaVal)) * 100) : null
+          // Simpler: compare proyFinal (units) vs meta_equipo (units)
+          const proyVsMetaPct = hasMeta ? Math.round((proyFinal / metaVal) * 100) : null
+          const metaColor = proyVsMetaPct !== null ? (proyVsMetaPct >= 100 ? 'var(--sf-green)' : 'var(--sf-red)') : 'var(--sf-t1)'
+          return (
+            <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
+              <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t5)' }}>Proyección cierre</p>
+              <p className="text-2xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: metaColor }}>
+                {hasNeta ? `${configuracion.moneda} ${Math.round(proyVal).toLocaleString('es-SV')}` : (
+                  <>{Math.round(proyVal).toLocaleString('es-SV')}<span className="text-sm font-normal ml-1" style={{ color: 'var(--sf-t5)' }}>uds</span></>
+                )}
+              </p>
+              {proyVsMetaPct !== null ? (
+                <p className="text-xs font-semibold mt-1" style={{ color: metaColor }}>
+                  vs meta: {proyVsMetaPct}%
+                </p>
+              ) : (
+                <p className="text-xs mt-1" style={{ color: 'var(--sf-t5)' }}>Sin meta configurada</p>
+              )}
+            </div>
+          )
+        })()}
+
+        {/* Card 4 — META DEL MES */}
+        <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
+          <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t5)' }}>Meta del mes</p>
+          {teamStats?.meta_equipo ? (
+            <>
+              <p className="text-2xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: cumplimientoFinal >= 100 ? 'var(--sf-green)' : cumplimientoFinal >= 70 ? 'var(--sf-t1)' : 'var(--sf-red)' }}>
+                {Math.round(cumplimientoFinal)}%
+              </p>
+              <p className="text-xs mt-1" style={{ color: 'var(--sf-t4)' }}>
+                {estadoMes.actual.toLocaleString()} / {teamStats.meta_equipo.toLocaleString()} uds
+              </p>
+              <div className="mt-2 rounded-full overflow-hidden" style={{ height: 4, background: 'var(--sf-inset)' }}>
+                <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(cumplimientoFinal, 100)}%`, background: cumplimientoFinal >= 100 ? 'var(--sf-green)' : cumplimientoFinal >= 70 ? '#eab308' : 'var(--sf-red)' }} />
+              </div>
+            </>
+          ) : (
+            <p className="text-sm mt-1" style={{ color: 'var(--sf-t5)' }}>Sin meta configurada</p>
+          )}
+        </div>
       </div>
 
       <div className="space-y-8">
 
-      {/* â"€â"€ MOMENTO 1 — LA SITUACIÓN â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€ */}
-      <div className="intel-fade" style={{ animationDelay: '80ms' }}>
-        <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 280px' }}>
-
-          {/* Chart card — ocupa espacio restante */}
-          <div className="rounded-2xl p-4 flex flex-col" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
-            {/* Header compacto */}
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-[11px] font-bold uppercase tracking-[0.15em]" style={{ color: 'var(--sf-t5)' }}>Evolución YTD</p>
-              <div className="flex items-center gap-4 text-xs">
-                <span className="flex items-center gap-1.5">
-                  <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: '#22c55e' }} />
-                  <span style={{ color: 'var(--sf-t3)' }}>{selectedPeriod.year} sobre anterior</span>
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: '#ef4444' }} />
-                  <span style={{ color: 'var(--sf-t3)' }}>{selectedPeriod.year} bajo anterior</span>
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: 'var(--sf-t5, #b5ada4)', opacity: 0.4 }} />
-                  <span style={{ color: 'var(--sf-t4)' }}>{selectedPeriod.year - 1}</span>
-                </span>
-              </div>
+      {/* ── EVOLUCIÓN YTD (ancho completo) ─────────────────────────────────── */}
+      <div className="intel-fade" style={{ animationDelay: '60ms' }}>
+        <div className="rounded-2xl p-4 flex flex-col" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-[11px] font-bold uppercase tracking-[0.15em]" style={{ color: 'var(--sf-t5)' }}>Evolución YTD</p>
+            <div className="flex items-center gap-4 text-xs">
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: '#22c55e' }} />
+                <span style={{ color: 'var(--sf-t3)' }}>{selectedPeriod.year} sobre anterior</span>
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: '#ef4444' }} />
+                <span style={{ color: 'var(--sf-t3)' }}>{selectedPeriod.year} bajo anterior</span>
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: 'var(--sf-t5, #b5ada4)', opacity: 0.4 }} />
+                <span style={{ color: 'var(--sf-t4)' }}>{selectedPeriod.year - 1}</span>
+              </span>
             </div>
-
-            {/* Chart */}
-            {ytdChart.data.length > 0 ? (
-              <div className="flex-1" style={{ minHeight: 180 }}>
-                <ResponsiveContainer width="100%" height={180}>
-                  <BarChart data={ytdChart.data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }} barGap={2} barCategoryGap="20%">
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--sf-border, rgba(255,255,255,0.06))" vertical={false} />
-                    <XAxis dataKey="month" tick={{ fontSize: 11, fill: 'var(--sf-t4, #8c857d)' }} axisLine={false} tickLine={false} />
-                    <YAxis tick={{ fontSize: 10, fill: 'var(--sf-t5, #b5ada4)' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)} width={40} />
-                    <Tooltip
-                      formatter={(value: number, name: string) => [
-                        `${Number(value).toLocaleString('es-SV')} uds`,
-                        name,
-                      ]}
-                      contentStyle={{ background: 'var(--sf-card, #1a1a2e)', border: '1px solid var(--sf-border, #e5e1db)', borderRadius: 8, fontSize: 12 }}
-                    />
-                    <Bar dataKey="anterior" name={String(selectedPeriod.year - 1)} fill="var(--sf-t5, #b5ada4)" fillOpacity={0.4} radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="actual" name={String(selectedPeriod.year)} radius={[4, 4, 0, 0]}>
-                      {ytdChart.data.map((entry, index) => (
-                        <Cell key={index} fill={entry.actual >= entry.anterior ? '#22c55e' : '#ef4444'} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            ) : (
-              <p className="text-[12px] italic flex-1 flex items-center" style={{ color: 'var(--sf-t5)' }}>Primer período analizado — sin historial comparable</p>
-            )}
-
-            {/* Footer */}
-            {ytdChart.totalActual > 0 && (
-              <div className="flex items-center justify-between mt-2 text-xs">
-                <span style={{ color: 'var(--sf-t3)' }}>
-                  {ytdChart.totalActual.toLocaleString('es-SV')} uds acumuladas
-                </span>
-                {ytdChartPct !== null && (
-                  <span style={{ fontFamily: "'DM Mono', monospace", fontWeight: 600, color: ytdChartUp ? '#22c55e' : '#ef4444' }}>
-                    {ytdChartUp ? '+' : ''}{ytdChartPct.toFixed(1)}% vs {selectedPeriod.year - 1}
-                  </span>
-                )}
-              </div>
-            )}
           </div>
 
-          {/* KPIs stack — columna derecha 280px */}
-          <div className="flex flex-col gap-3">
-            {/* Proyección cierre */}
-            <div className="flex-1 rounded-2xl p-3 flex flex-col gap-1.5" style={{ background: 'var(--sf-elevated)', border: '1px solid var(--sf-border)' }}>
-              <p className="text-[10px] font-bold uppercase tracking-[0.15em]" style={{ color: 'var(--sf-t5)' }}>Proyección cierre</p>
-              {dataAvailability.has_venta_neta ? (() => {
-                const refNeto = estadoMes.historico_neto
-                const color = estadoMes.anos_base > 0 && refNeto > 0
-                  ? proyeccion_neta >= refNeto ? 'var(--sf-green)' : 'var(--sf-red)'
-                  : 'var(--sf-t1)'
-                return (
-                  <>
-                    <p style={{ fontFamily: "'DM Mono', monospace", fontSize: '22px', fontWeight: 400, lineHeight: 1, color }}>
-                      {configuracion.moneda} {Math.round(proyeccion_neta).toLocaleString('es-SV')}
-                    </p>
-                    {estadoMes.anos_base > 0 && refNeto > 0 && (
-                      <>
-                        <p className="text-[10px]" style={{ color: 'var(--sf-t5)' }}>vs {configuracion.moneda} {Math.round(refNeto).toLocaleString('es-SV')} año anterior</p>
-                        <p className="text-[12px] font-bold" style={{ color }}>
-                          {proyeccion_neta >= refNeto ? '+' : ''}{Math.round(((proyeccion_neta - refNeto) / refNeto) * 100)}%
-                        </p>
-                      </>
-                    )}
-                  </>
-                )
-              })() : (
-                <>
-                  <p style={{
-                    fontFamily: "'DM Mono', monospace", fontSize: '22px', fontWeight: 400, lineHeight: 1,
-                    color: estadoMes.anos_base > 0 && estadoMes.historico_mes > 0
-                      ? estadoMes.proyeccion_cierre >= estadoMes.historico_mes ? 'var(--sf-green)' : 'var(--sf-red)'
-                      : 'var(--sf-t1)',
-                  }}>
-                    {Math.round(estadoMes.proyeccion_cierre).toLocaleString('es-SV')}
-                    <span style={{ fontSize: '13px', color: 'var(--sf-t5)', marginLeft: '4px', fontWeight: 400 }}>uds</span>
-                  </p>
-                  {estadoMes.anos_base > 0 && estadoMes.historico_mes > 0 && (
-                    <>
-                      <p className="text-[10px]" style={{ color: 'var(--sf-t5)' }}>vs {Math.round(estadoMes.historico_mes).toLocaleString('es-SV')} uds año anterior</p>
-                      <p className="text-[12px] font-bold" style={{ color: estadoMes.proyeccion_cierre >= estadoMes.historico_mes ? 'var(--sf-green)' : 'var(--sf-red)' }}>
-                        {estadoMes.proyeccion_cierre >= estadoMes.historico_mes ? '+' : ''}{Math.round(((estadoMes.proyeccion_cierre - estadoMes.historico_mes) / estadoMes.historico_mes) * 100)}%
-                      </p>
-                    </>
-                  )}
-                </>
+          {ytdChart.data.length > 0 ? (
+            <div className="flex-1" style={{ minHeight: 200 }}>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={ytdChart.data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }} barGap={2} barCategoryGap="20%">
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--sf-border, rgba(255,255,255,0.06))" vertical={false} />
+                  <XAxis
+                    dataKey="month"
+                    axisLine={false}
+                    tickLine={false}
+                    tick={(props: { x: number; y: number; payload: { value: string; index: number } }) => {
+                      const entry = ytdChart.data[props.payload.index]
+                      return (
+                        <g>
+                          <text x={props.x} y={props.y + 12} textAnchor="middle" fontSize={11} fill="var(--sf-t4, #8c857d)">
+                            {props.payload.value}
+                          </text>
+                          {entry?.isPartial && (
+                            <text x={props.x} y={props.y + 24} textAnchor="middle" fontSize={9} fill="var(--sf-t5, #b5ada4)">
+                              Día {entry.daysElapsed}/{entry.daysTotal}
+                            </text>
+                          )}
+                        </g>
+                      )
+                    }}
+                  />
+                  <YAxis tick={{ fontSize: 10, fill: 'var(--sf-t5, #b5ada4)' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)} width={40} />
+                  <Tooltip
+                    formatter={(value: number, name: string) => [
+                      `${Number(value).toLocaleString('es-SV')} uds`,
+                      name,
+                    ]}
+                    contentStyle={{ background: 'var(--sf-card, #1a1a2e)', border: '1px solid var(--sf-border, #e5e1db)', borderRadius: 8, fontSize: 12 }}
+                  />
+                  <Bar dataKey="anterior" name={String(selectedPeriod.year - 1)} radius={[4, 4, 0, 0]}>
+                    {ytdChart.data.map((entry, index) => (
+                      <Cell key={index} fill="var(--sf-t5, #b5ada4)" fillOpacity={entry.isPartial ? 0.2 : 0.4} strokeDasharray={entry.isPartial ? '3 2' : undefined} stroke={entry.isPartial ? 'var(--sf-t5, #b5ada4)' : 'none'} />
+                    ))}
+                  </Bar>
+                  <Bar dataKey="actual" name={String(selectedPeriod.year)} radius={[4, 4, 0, 0]}>
+                    {ytdChart.data.map((entry, index) => {
+                      const baseColor = entry.actual >= entry.anterior ? '#22c55e' : '#ef4444'
+                      return <Cell key={index} fill={baseColor} fillOpacity={entry.isPartial ? 0.4 : 1} strokeDasharray={entry.isPartial ? '3 2' : undefined} stroke={entry.isPartial ? baseColor : 'none'} />
+                    })}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <p className="text-[12px] italic flex-1 flex items-center" style={{ color: 'var(--sf-t5)' }}>Primer período analizado — sin historial comparable</p>
+          )}
+
+          {ytdChart.totalActual > 0 && (
+            <div className="flex items-center justify-between mt-2 text-xs">
+              <span style={{ color: 'var(--sf-t3)' }}>
+                {ytdChart.totalActual.toLocaleString('es-SV')} uds acumuladas
+              </span>
+              {ytdChartPct !== null && (
+                <span style={{ fontFamily: "'DM Mono', monospace", fontWeight: 600, color: ytdChartUp ? '#22c55e' : '#ef4444' }}>
+                  {ytdChartUp ? '+' : ''}{ytdChartPct.toFixed(1)}% vs misma fecha {selectedPeriod.year - 1}
+                </span>
               )}
             </div>
-
-            {/* YTD */}
-            <div className="flex-1 rounded-2xl p-3 flex flex-col gap-1.5" style={{ background: 'var(--sf-elevated)', border: '1px solid var(--sf-border)' }}>
-              <p className="text-[10px] font-bold uppercase tracking-[0.15em]" style={{ color: 'var(--sf-t5)' }}>YTD {ytdAnno} vs {ytdAnno - 1}</p>
-              <p style={{
-                fontFamily: "'DM Mono', monospace", fontSize: '22px', fontWeight: 400, lineHeight: 1,
-                color: ytdVar == null ? 'var(--sf-t5)' : ytdVar >= 0 ? 'var(--sf-green)' : 'var(--sf-red)',
-              }}>
-                {ytdVar == null ? '—' : `${ytdVar >= 0 ? '+' : ''}${ytdVar.toFixed(1)}%`}
-              </p>
-              <p className="text-[10px]" style={{ color: 'var(--sf-t5)' }}>
-                {dataAvailability.has_venta_neta
-                  ? `${configuracion.moneda} ${Math.round(ytd_neto).toLocaleString('es-SV')}`
-                  : `${Math.round(teamStats.ytd_actual_equipo ?? 0).toLocaleString('es-SV')} uds`}
-                {ytd_anterior_neto > 0 && dataAvailability.has_venta_neta
-                  ? ` vs ${configuracion.moneda} ${Math.round(ytd_anterior_neto).toLocaleString('es-SV')} al ${fechaCompLabel}`
-                  : teamStats.ytd_anterior_equipo
-                    ? ` vs ${Math.round(teamStats.ytd_anterior_equipo).toLocaleString('es-SV')} uds al ${fechaCompLabel}`
-                    : ''}
-              </p>
-            </div>
-          </div>
+          )}
         </div>
       </div>
+
+      {/* ── RESUMEN EJECUTIVO ──────────────────────────────────────────────── */}
+      {resumenEjecutivo.length > 0 && (
+        <div
+          className="intel-fade rounded-xl p-5"
+          style={{ animationDelay: '100ms', background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}
+        >
+          <div className="relative flex items-center gap-2 mb-3">
+            <span style={{ fontSize: 14, color: 'var(--sf-green)' }}>✦</span>
+            <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--sf-t5)' }}>Resumen del mes</p>
+            {estadoMes.estado !== 'sin_base' && (
+              <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded" style={{
+                color: estadoMes.estado === 'atrasado' ? '#ef4444' : estadoMes.estado === 'adelantado' ? '#22c55e' : 'var(--sf-t4)',
+                background: estadoMes.estado === 'atrasado' ? 'rgba(239,68,68,0.1)' : estadoMes.estado === 'adelantado' ? 'rgba(34,197,94,0.1)' : 'var(--sf-overlay-light)',
+              }}>
+                {estadoMes.estado === 'atrasado' ? '↓ Atraso' : estadoMes.estado === 'adelantado' ? '↑ Adelanto' : '→ En línea'}
+              </span>
+            )}
+            <FirstTimeTooltip
+              storageKey="sf_tip_resumen"
+              text="Este resumen se actualiza automaticamente cada vez que subes nuevos datos"
+            />
+          </div>
+          <div className="space-y-2">
+            {resumenEjecutivo.map((bullet, i) => (
+              <div key={i}>
+                <div className="flex items-start gap-2">
+                  <span
+                    className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0"
+                    style={{
+                      background: bullet.tipo === 'alerta' ? 'var(--sf-red)' : bullet.tipo === 'positivo' ? 'var(--sf-green)' : 'var(--sf-t5)',
+                    }}
+                  />
+                  <p
+                    className="text-[13px] leading-relaxed"
+                    style={{ color: bullet.tipo === 'alerta' ? 'var(--sf-t2)' : bullet.tipo === 'positivo' ? 'var(--sf-t2)' : 'var(--sf-t3)' }}
+                  >
+                    {bullet.texto}
+                  </p>
+                </div>
+                {bullet.sub && (
+                  <p className="text-[11px] ml-[18px] mt-0.5" style={{ color: bullet.subColor ?? 'var(--sf-t5)' }}>
+                    {bullet.sub}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 pt-3" style={{ borderTop: '1px solid var(--sf-border-subtle)' }}>
+            <button
+              onClick={() => navigate('/chat', { state: { prefill: 'Dame un análisis completo del equipo este mes: estado vs meta, vendedores críticos, clientes dormidos y recomendaciones concretas.', source: 'Estado Comercial' } })}
+              className="inline-flex items-center gap-1.5 text-[12px] font-medium cursor-pointer transition-opacity duration-150 hover:opacity-70"
+              style={{ color: 'var(--sf-green)', background: 'none', border: 'none', padding: 0 }}
+            >
+              ✦ Análisis completo con IA →
+            </button>
+            {(() => {
+              const alerts: { icon: string; text: string; prefill: string }[] = []
+
+              const vendedoresRiesgo = vendorAnalysis.filter(v => v.riesgo === 'riesgo' || v.riesgo === 'critico')
+              if (vendedoresRiesgo.length > 0) {
+                alerts.push({
+                  icon: '🔴',
+                  text: `${vendedoresRiesgo.length} vendedor${vendedoresRiesgo.length > 1 ? 'es' : ''} en riesgo necesita${vendedoresRiesgo.length > 1 ? 'n' : ''} atención`,
+                  prefill: `¿Por qué ${vendedoresRiesgo.map(v => v.vendedor).join(' y ')} están en riesgo? Dame un plan de acción para cada uno.`
+                })
+              }
+
+              const dormidosAltoValor = clientesDormidos
+                .filter(c => (c.valor_historico || 0) > 10000)
+                .sort((a, b) => (b.valor_historico || 0) - (a.valor_historico || 0))
+                .slice(0, 2)
+              if (dormidosAltoValor.length > 0) {
+                const nombres = dormidosAltoValor.map(c => c.cliente).join(' y ')
+                alerts.push({
+                  icon: '⚠️',
+                  text: `${nombres} lleva${dormidosAltoValor.length > 1 ? 'n' : ''} ${dormidosAltoValor[0].dias_sin_actividad} días sin comprar`,
+                  prefill: `Dame un plan de recuperación para ${nombres}. ¿Cuál es la probabilidad de recuperarlos y qué acción tomar esta semana?`
+                })
+              }
+
+              if (alerts.length === 0) return null
+
+              return (
+                <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {alerts.map((alert, i) => (
+                    <button
+                      key={i}
+                      onClick={() => navigate('/chat', { state: { prefill: alert.prefill, source: 'Estado Comercial' } })}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 8,
+                        fontSize: 12, color: 'var(--sf-t3)',
+                        background: 'none', border: 'none', padding: 0,
+                        cursor: 'pointer', textAlign: 'left',
+                        transition: 'opacity 0.2s',
+                      }}
+                      onMouseEnter={e => (e.currentTarget.style.opacity = '0.7')}
+                      onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
+                    >
+                      <span>{alert.icon}</span>
+                      <span style={{ textDecoration: 'underline', textDecorationStyle: 'dotted', textUnderlineOffset: '2px' }}>
+                        {alert.text} → Analizar
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )
+            })()}
+          </div>
+        </div>
+      )}
 
 
       {/* ── INTELIGENCIA COMERCIAL ──────────────────────────────────────── */}
@@ -1366,10 +2033,14 @@ export default function EstadoComercialPage() {
 
       <div className="intel-fade space-y-4" style={{ animationDelay: '160ms' }}>
         {/* Header + count */}
-        <div className="flex items-center gap-2">
+        <div className="relative flex items-center gap-2 flex-wrap">
           <p className="text-[11px] font-bold uppercase tracking-[0.15em]" style={{ color: 'var(--sf-t5)' }}>
             Inteligencia Comercial
           </p>
+          <FirstTimeTooltip
+            storageKey="sf_tip_inteligencia"
+            text="Estas son alertas sobre riesgos y oportunidades que detectamos. Marcalas como atendidas cuando tomes accion"
+          />
           <span style={{
             fontFamily: "'DM Mono', monospace",
             fontSize: 11,
@@ -1378,8 +2049,22 @@ export default function EstadoComercialPage() {
             padding: '2px 8px',
             borderRadius: 5,
           }}>
-            {feedFiltered.length}
+            {feedInsights.length}
           </span>
+          {pendingCount > 0 && (
+            <span style={{
+              fontFamily: "'DM Mono', monospace",
+              fontSize: 10,
+              fontWeight: 600,
+              color: '#ef4444',
+              background: 'rgba(239,68,68,0.1)',
+              border: '1px solid rgba(239,68,68,0.2)',
+              padding: '2px 8px',
+              borderRadius: 5,
+            }}>
+              {pendingCount} pendiente{pendingCount > 1 ? 's' : ''}
+            </span>
+          )}
         </div>
 
         {/* Filter chips */}
@@ -1390,7 +2075,7 @@ export default function EstadoComercialPage() {
             return (
               <button
                 key={f.key}
-                onClick={() => { setFeedFilter(f.key); setFeedVisible(5) }}
+                onClick={() => { setFeedFilter(f.key); setFeedExpanded(false) }}
                 className="px-3 py-1.5 rounded-lg text-xs font-medium border transition-all duration-150 cursor-pointer inline-flex items-center gap-1.5"
                 style={isActive && f.color
                   ? { borderColor: f.color + '40', color: f.color, background: f.color + '10' }
@@ -1411,170 +2096,491 @@ export default function EstadoComercialPage() {
           })}
         </div>
 
-        {/* Feed rows */}
-        <div className="space-y-2">
-          {feedFiltered.slice(0, feedVisible).map((insight, idx) => {
-            const accent = getAccentColor(insight.tipo)
-            const label = getFeedLabel(insight.tipo)
-            const isExpanded = expandedInsightId === insight.id
-            const analysis = analysisMap[insight.id]
-            const isHallazgo = insight.tipo === 'hallazgo'
+        {/* Status filter chips */}
+        <div className="flex gap-1.5 flex-wrap">
+          {(
+            [
+              { key: 'notResolved', label: '📋 Pendientes',  count: statusCounts.notResolved },
+              { key: 'following',   label: '🔧 En trabajo',  count: statusCounts.following },
+              { key: 'resolved',    label: '✅ Resueltas',   count: statusCounts.resolved },
+            ] as { key: StatusFilterKey; label: string; count: number }[]
+          ).map(({ key, label, count }) => {
+            const isActive = statusFilter === key
+            const dotColor = key === 'following' ? '#f59e0b' : key === 'resolved' ? '#22c55e' : 'var(--sf-t5)'
             return (
-              <div
-                key={insight.id}
-                className="intel-fade flex items-stretch rounded-xl overflow-hidden cursor-pointer transition-colors duration-200"
-                style={{
-                  animationDelay: `${idx * 30}ms`,
-                  border: '1px solid var(--sf-border-subtle)',
-                  background: isExpanded ? 'var(--sf-overlay-light)' : 'var(--sf-overlay-subtle)',
-                }}
-                onClick={() => setExpandedInsightId(isExpanded ? null : insight.id)}
+              <button
+                key={key}
+                onClick={() => { setStatusFilter(key); setFeedExpanded(false) }}
+                className="px-2.5 py-1 rounded-lg text-[11px] font-medium border transition-all duration-150 cursor-pointer inline-flex items-center gap-1.5"
+                style={isActive
+                  ? { borderColor: dotColor + '50', color: dotColor, background: dotColor + '12' }
+                  : { borderColor: 'var(--sf-overlay-medium)', color: 'var(--sf-t5)', background: 'transparent' }
+                }
               >
-                {/* Accent bar */}
-                <div className="w-[3px] shrink-0" style={{ background: accent }} />
-
-                {/* Content */}
-                <div className="flex-1 min-w-0 p-4">
-                  {/* Line 1: badge + title */}
-                  <div className="flex items-center gap-2 mb-1 flex-wrap">
-                    <span
-                      className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
-                      style={{
-                        fontFamily: "'DM Mono', monospace",
-                        color: accent,
-                        background: accent + '15',
-                      }}
-                    >
-                      {label}
-                    </span>
-                    <span className="text-sm font-semibold leading-tight" style={{ color: 'var(--sf-t1)' }}>
-                      {insight.titulo}
-                    </span>
-                  </div>
-
-                  {/* Line 2: description */}
-                  <p className="text-[13px] leading-relaxed" style={{ color: 'var(--sf-t4)' }}>
-                    {insight.descripcion}
-                  </p>
-
-                  {/* Analizar con IA — always visible for non-hallazgo without analysis */}
-                  {!isHallazgo && !analysis && (
-                    <div className="flex justify-end mt-2">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleAnalyzeInsight(insight) }}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-all duration-150"
-                        style={{
-                          color: 'var(--sf-green, #22c55e)',
-                          background: 'var(--sf-green-bg, rgba(34,197,94,0.06))',
-                          border: '1px solid var(--sf-green-border, rgba(34,197,94,0.15))',
-                        }}
-                        onMouseEnter={e => { e.currentTarget.style.background = 'rgba(34,197,94,0.12)'; e.currentTarget.style.borderColor = 'rgba(34,197,94,0.3)' }}
-                        onMouseLeave={e => { e.currentTarget.style.background = 'var(--sf-green-bg, rgba(34,197,94,0.06))'; e.currentTarget.style.borderColor = 'var(--sf-green-border, rgba(34,197,94,0.15))' }}
-                      >
-                        ✦ Analizar con IA
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Loading spinner — replaces button while analyzing */}
-                  {!isHallazgo && analysis?.loading && (
-                    <div className="flex justify-end mt-2">
-                      <span className="inline-flex items-center gap-1.5 text-xs" style={{ color: 'var(--sf-t4)' }}>
-                        <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
-                        </svg>
-                        Analizando...
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Analysis result — appears once generated */}
-                  {!isHallazgo && analysis?.text && !analysis.loading && (
-                    <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--sf-border-subtle)' }}>
-                      <div className="text-[13px] leading-relaxed whitespace-pre-line" style={{ color: 'var(--sf-t3)' }}>
-                        {analysis.text}
-                      </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          const analysisText = analysis?.text || ''
-                          const displayMessage = `Profundizar: ${insight.titulo}`
-                          const fullContext = [
-                            `Profundizar sobre: ${insight.titulo}`,
-                            ``,
-                            `Contexto del insight: ${insight.descripcion}`,
-                            insight.impacto_economico ? `Impacto económico: ${insight.impacto_economico.descripcion} (${configuracion.moneda} ${insight.impacto_economico.valor?.toLocaleString()})` : '',
-                            insight.vendedor ? `Vendedor: ${insight.vendedor}` : '',
-                            insight.cliente ? `Cliente: ${insight.cliente}` : '',
-                            insight.producto ? `Producto: ${insight.producto}` : '',
-                            analysisText ? `\nAnálisis previo:\n${analysisText}` : '',
-                            ``,
-                            `Con base en este análisis, profundiza: ¿qué está causando esto específicamente, qué datos adicionales lo confirman, y qué patrón hay detrás?`
-                          ].filter(Boolean).join('\n')
-                          navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage } })
-                        }}
-                        className="mt-3 px-4 py-2 rounded-lg text-xs font-medium cursor-pointer"
-                        style={{ border: '1px solid var(--sf-green-border)', background: 'var(--sf-green-bg)', color: 'var(--sf-green)' }}
-                        onMouseEnter={e => (e.currentTarget.style.opacity = '0.8')}
-                        onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
-                      >
-                        + Profundizar
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Hallazgo expanded content — only on click */}
-                  {isHallazgo && isExpanded && (
-                    <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--sf-border-subtle)' }}>
-                      {insight.impacto_economico ? (
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs" style={{ color: 'var(--sf-t4)' }}>Impacto estimado: </span>
-                          <span className="text-xs font-semibold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-t2)' }}>
-                            {configuracion.moneda} {insight.impacto_economico.valor.toLocaleString()}
-                          </span>
-                        </div>
-                      ) : insight.valor_numerico ? (
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs" style={{ color: 'var(--sf-t4)' }}>Valor: </span>
-                          <span className="text-xs font-semibold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-t2)' }}>
-                            {insight.valor_numerico.toLocaleString()}
-                          </span>
-                        </div>
-                      ) : (
-                        <p className="text-xs" style={{ color: 'var(--sf-t4)' }}>Sin datos adicionales.</p>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {/* Critical dot */}
-                {insight.prioridad === 'CRITICA' && (
-                  <span
-                    className="w-2 h-2 rounded-full shrink-0 mt-5 mr-4"
-                    style={{ background: '#ef4444', boxShadow: '0 0 8px rgba(239,68,68,0.4)' }}
-                  />
-                )}
-              </div>
+                <span style={{ width: 5, height: 5, borderRadius: '50%', background: dotColor, display: 'inline-block', flexShrink: 0 }} />
+                {label}
+                <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, opacity: 0.6 }}>{count}</span>
+              </button>
             )
           })}
+        </div>
 
-          {/* Show more */}
-          {feedVisible < feedFiltered.length && (
-            <button
-              onClick={() => setFeedVisible(v => v + 5)}
-              className="w-full py-3 rounded-xl text-[13px] font-medium transition-all duration-150 cursor-pointer"
-              style={{
-                border: '1px dashed rgba(255,255,255,0.08)',
-                background: 'transparent',
-                color: 'var(--sf-t5)',
-              }}
-              onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--sf-border-active)'; e.currentTarget.style.color = 'var(--sf-t3)' }}
-              onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--sf-border-subtle)'; e.currentTarget.style.color = 'var(--sf-t5)' }}
-            >
-              Ver {Math.min(5, feedFiltered.length - feedVisible)} más de {feedFiltered.length - feedVisible} restantes
-            </button>
-          )}
+        {/* Feed rows — tiered by impact */}
+        <div className="space-y-2">
+          {(() => {
+            const TOP_COUNT = 3
+            const visibleItems = feedExpanded ? feedFiltered : feedFiltered.slice(0, TOP_COUNT)
+            const remainingCount = feedFiltered.length - TOP_COUNT
+
+            return (
+              <>
+                {visibleItems.map((insight, idx) => {
+                  const accent = getAccentColor(insight.tipo)
+                  const label = getFeedLabel(insight.tipo)
+                  const isExpanded = expandedInsightId === insight.id
+                  const analysis = analysisMap[insight.id]
+                  const isHallazgo = insight.tipo === 'hallazgo'
+                  const insightStatus = getStatus(insight)
+                  const insightReopened = isReopened(insight)
+                  const isResolved = insightStatus === 'resolved'
+                  const isFollowing = insightStatus === 'following'
+                  const accentBar = isResolved ? '#22c55e' : isFollowing ? '#f59e0b' : accent
+                  const impact = getImpactLevel(insight)
+
+                  // Visual tier styles
+                  const barWidth = impact === 'alto' ? 'w-1' : impact === 'medio' ? 'w-[3px]' : 'w-[2px]'
+                  const barColor = isResolved ? '#22c55e' : isFollowing ? '#f59e0b'
+                    : impact === 'alto' ? '#ef4444' : impact === 'medio' ? '#f59e0b' : 'var(--sf-t6)'
+                  const cardPadding = impact === 'alto' ? 'p-5' : impact === 'bajo' ? 'p-3' : 'p-4'
+                  const titleSize = impact === 'alto' ? 'text-base font-bold' : impact === 'bajo' ? 'text-[13px] font-medium' : 'text-sm font-semibold'
+                  const descSize = impact === 'bajo' ? 'text-xs' : 'text-[13px]'
+                  const cardBg = isExpanded ? 'var(--sf-overlay-light)'
+                    : impact === 'alto' && !isResolved ? 'rgba(239,68,68,0.04)' : 'var(--sf-overlay-subtle)'
+                  const cardBorder = isResolved ? 'rgba(34,197,94,0.2)' : isFollowing ? 'rgba(245,158,11,0.2)'
+                    : impact === 'alto' ? 'rgba(239,68,68,0.2)' : 'var(--sf-border-subtle)'
+                  const cardShadow = impact === 'alto' && !isResolved ? '0 1px 4px rgba(239,68,68,0.08)' : 'none'
+
+                  // Group separator headers when expanded
+                  let groupHeader: string | null = null
+                  if (feedExpanded && idx > 0) {
+                    const prevImpact = getImpactLevel(visibleItems[idx - 1])
+                    if (prevImpact !== impact) {
+                      groupHeader = impact === 'medio' ? 'Riesgo medio' : impact === 'bajo' ? 'Informativas' : null
+                    }
+                  }
+                  if (feedExpanded && idx === TOP_COUNT && impact !== 'alto') {
+                    // First item after the fold — always show header if not alto
+                    if (!groupHeader) {
+                      groupHeader = impact === 'medio' ? 'Riesgo medio' : impact === 'bajo' ? 'Informativas' : null
+                    }
+                  }
+
+                  return (
+                    <div key={insight.id}>
+                      {groupHeader && (
+                        <div className="flex items-center gap-3 pt-3 pb-1">
+                          <div className="h-px flex-1" style={{ background: 'var(--sf-border)' }} />
+                          <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: 'var(--sf-t6)' }}>
+                            {groupHeader}
+                          </span>
+                          <div className="h-px flex-1" style={{ background: 'var(--sf-border)' }} />
+                        </div>
+                      )}
+                      <div
+                        className="intel-fade flex items-stretch rounded-xl cursor-pointer transition-all duration-200 relative"
+                        style={{
+                          animationDelay: `${idx * 30}ms`,
+                          border: `1px solid ${cardBorder}`,
+                          background: cardBg,
+                          opacity: isResolved ? 0.6 : 1,
+                          boxShadow: cardShadow,
+                          zIndex: openDropdownKey === getAlertKey(insight) ? 60 : undefined,
+                        }}
+                        onClick={() => setExpandedInsightId(isExpanded ? null : insight.id)}
+                      >
+                        {/* Accent bar — width varies by impact */}
+                        <div className={`${barWidth} shrink-0 rounded-l-xl`} style={{ background: barColor }} />
+
+                        {/* Content */}
+                        <div className={`flex-1 min-w-0 ${cardPadding}`}>
+                          {/* Line 1: badge + title + urgency badge + status badge */}
+                          <div className="flex items-center gap-2 mb-1 flex-wrap">
+                            <span
+                              className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                              style={{
+                                fontFamily: "'DM Mono', monospace",
+                                color: accent,
+                                background: accent + '15',
+                              }}
+                            >
+                              {label}
+                            </span>
+                            {impact === 'alto' && !isResolved && (
+                              <span
+                                className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                                style={{ fontFamily: "'DM Mono', monospace", color: '#ef4444', background: 'rgba(239,68,68,0.12)' }}
+                              >
+                                URGENTE
+                              </span>
+                            )}
+                            <span className={`${titleSize} leading-tight`} style={{ color: 'var(--sf-t1)' }}>
+                              {insight.titulo}
+                            </span>
+                            {/* Badge de estado */}
+                            {isFollowing && (
+                              <span className="inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                                style={{ color: '#f59e0b', background: 'rgba(245,158,11,0.12)', fontFamily: "'DM Mono', monospace" }}>
+                                🔧 En trabajo
+                              </span>
+                            )}
+                            {isResolved && (
+                              <span className="inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                                style={{ color: '#22c55e', background: 'rgba(34,197,94,0.12)', fontFamily: "'DM Mono', monospace" }}>
+                                ✅ Resuelta
+                              </span>
+                            )}
+                            {insightReopened && (
+                              <span className="inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                                style={{ color: '#f97316', background: 'rgba(249,115,22,0.12)', fontFamily: "'DM Mono', monospace" }}>
+                                <RotateCcw className="w-2.5 h-2.5" /> Reabierta
+                              </span>
+                            )}
+                            {/* Trend indicator */}
+                            {(() => {
+                              const trend = computeInsightTrend(insight, vendorAnalysis, clientesDormidos)
+                              const tc = TREND_CONFIG[trend]
+                              return (
+                                <span
+                                  className="shrink-0 ml-auto text-[13px] font-bold leading-none"
+                                  style={{ color: tc.color }}
+                                  title={tc.label}
+                                >
+                                  {tc.symbol}
+                                </span>
+                              )
+                            })()}
+                          </div>
+
+                          {/* Line 2: description */}
+                          <p className={`${descSize} leading-relaxed`} style={{ color: 'var(--sf-t4)' }}>
+                            {boldifyDescription(insight.descripcion)}
+                          </p>
+
+                          {/* Action row: dropdown de estado + Analizar con IA */}
+                          <div className="flex items-center justify-between mt-2 gap-2">
+                            {/* Dropdown de estado */}
+                            {(() => {
+                              const alertKey = getAlertKey(insight)
+                              const record = alertStatuses[alertKey]
+                              const currentOpt = STATUS_OPTIONS.find(o => o.value === insightStatus) ?? STATUS_OPTIONS[0]
+                              const isOpen = openDropdownKey === alertKey
+                              const savedNote = record?.note
+                              const isEditingNote = editingNoteKey === alertKey
+
+                              return (
+                                <div className="relative" ref={isOpen ? dropdownRef : undefined} onClick={e => e.stopPropagation()}>
+                                  {/* Trigger button */}
+                                  <button
+                                    onClick={() => setOpenDropdownKey(isOpen ? null : alertKey)}
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium cursor-pointer transition-all duration-150"
+                                    style={{
+                                      color: currentOpt.color,
+                                      background: currentOpt.bg,
+                                      border: `1px solid ${currentOpt.border}`,
+                                    }}
+                                  >
+                                    <span>{currentOpt.emoji}</span>
+                                    <span>{currentOpt.label}</span>
+                                    {savedNote && <span title="Tiene nota">📝</span>}
+                                    <ChevronDown className={`w-3 h-3 transition-transform duration-150 ${isOpen ? 'rotate-180' : ''}`} />
+                                  </button>
+
+                                  {/* Timestamp */}
+                                  {record?.updatedAt && (
+                                    <span className="block text-[9px] mt-0.5" style={{ color: 'var(--sf-t6)', fontFamily: "'DM Mono', monospace" }}>
+                                      {relativeTime(record.updatedAt)}
+                                    </span>
+                                  )}
+
+                                  {/* Note display */}
+                                  {savedNote && !isEditingNote && (
+                                    <button
+                                      onClick={() => { setEditingNoteKey(alertKey); setNoteDraft(savedNote) }}
+                                      className="block text-[11px] mt-1.5 text-left cursor-pointer rounded-lg px-2.5 py-1.5 max-w-[260px] transition-colors"
+                                      style={{ color: 'var(--sf-t3)', background: 'var(--sf-inset)', border: '1px solid var(--sf-border-subtle)' }}
+                                      title="Click para editar nota"
+                                    >
+                                      <span className="flex items-start gap-1.5">
+                                        <span className="shrink-0">📝</span>
+                                        <span className="whitespace-pre-wrap break-words">{savedNote}</span>
+                                      </span>
+                                      {record?.updatedAt && (
+                                        <span className="block text-[9px] mt-1 opacity-60" style={{ fontFamily: "'DM Mono', monospace" }}>
+                                          {relativeTime(record.updatedAt)}
+                                        </span>
+                                      )}
+                                    </button>
+                                  )}
+
+                                  {/* Note edit — textarea */}
+                                  {isEditingNote && (
+                                    <div className="mt-1.5 max-w-[280px]">
+                                      <textarea
+                                        autoFocus
+                                        value={noteDraft}
+                                        onChange={e => { if (e.target.value.length <= 500) setNoteDraft(e.target.value) }}
+                                        onKeyDown={e => {
+                                          if (e.key === 'Enter' && !e.shiftKey) {
+                                            e.preventDefault()
+                                            handleStatusChange(insight, insightStatus, noteDraft || undefined)
+                                            setEditingNoteKey(null)
+                                          }
+                                          if (e.key === 'Escape') setEditingNoteKey(null)
+                                        }}
+                                        placeholder="¿Qué acción tomaste? ej: Llamé a Carlos, el problema es falta de stock..."
+                                        rows={3}
+                                        className="w-full text-[11px] px-2.5 py-2 rounded-lg border bg-transparent outline-none resize-none"
+                                        style={{ borderColor: 'var(--sf-border)', color: 'var(--sf-t2)' }}
+                                      />
+                                      <div className="flex items-center justify-between mt-1">
+                                        <span className="text-[9px]" style={{ color: 'var(--sf-t6)' }}>{noteDraft.length}/500</span>
+                                        <div className="flex items-center gap-1.5">
+                                          <button
+                                            onClick={() => setEditingNoteKey(null)}
+                                            className="text-[10px] px-2 py-0.5 rounded cursor-pointer"
+                                            style={{ color: 'var(--sf-t4)' }}
+                                          >Cancelar</button>
+                                          <button
+                                            onClick={() => {
+                                              handleStatusChange(insight, insightStatus, noteDraft || undefined)
+                                              setEditingNoteKey(null)
+                                            }}
+                                            className="text-[10px] px-2.5 py-0.5 rounded-md cursor-pointer font-semibold"
+                                            style={{ color: '#fff', background: 'var(--sf-green)' }}
+                                          >Guardar</button>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* Dropdown menu */}
+                                  {isOpen && (
+                                    <div
+                                      className="absolute left-0 top-full mt-1 z-50 rounded-lg shadow-lg py-1 min-w-[170px]"
+                                      style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}
+                                    >
+                                      {STATUS_OPTIONS.map(opt => (
+                                        <button
+                                          key={opt.value}
+                                          onClick={() => {
+                                            handleStatusChange(insight, opt.value)
+                                            if ((opt.value === 'following' || opt.value === 'resolved') && !savedNote) {
+                                              setEditingNoteKey(alertKey)
+                                              setNoteDraft('')
+                                            }
+                                          }}
+                                          className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors cursor-pointer"
+                                          style={{
+                                            color: opt.value === insightStatus ? opt.color : 'var(--sf-t3)',
+                                            background: opt.value === insightStatus ? opt.bg : 'transparent',
+                                            fontWeight: opt.value === insightStatus ? 600 : 400,
+                                          }}
+                                          onMouseEnter={e => { (e.target as HTMLElement).style.background = 'var(--sf-hover)' }}
+                                          onMouseLeave={e => { (e.target as HTMLElement).style.background = opt.value === insightStatus ? opt.bg : 'transparent' }}
+                                        >
+                                          <span>{opt.emoji}</span>
+                                          <span>{opt.label}</span>
+                                          {opt.value === insightStatus && <CheckCircle className="w-3 h-3 ml-auto" />}
+                                        </button>
+                                      ))}
+                                      {/* Add note option */}
+                                      <div style={{ borderTop: '1px solid var(--sf-border-subtle)', margin: '4px 0' }} />
+                                      <button
+                                        onClick={() => {
+                                          setEditingNoteKey(alertKey)
+                                          setNoteDraft(savedNote ?? '')
+                                          setOpenDropdownKey(null)
+                                        }}
+                                        className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors cursor-pointer"
+                                        style={{ color: 'var(--sf-t4)' }}
+                                        onMouseEnter={e => { (e.target as HTMLElement).style.background = 'var(--sf-hover)' }}
+                                        onMouseLeave={e => { (e.target as HTMLElement).style.background = 'transparent' }}
+                                      >
+                                        <span>📝</span>
+                                        <span>{savedNote ? 'Editar nota' : 'Agregar nota'}</span>
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })()}
+
+                          {/* Navigation link — contextual based on alert type, with entity name */}
+                          {(() => {
+                            // Extract entity name from title: "Descripción — NombreEntidad"
+                            const entityName = insight.titulo.includes(' — ') ? insight.titulo.split(' — ').pop()!.trim() : null
+                            const navLink = insight.tipo === 'riesgo_vendedor'
+                              ? { label: entityName ? `${entityName} →` : 'Ver vendedores →', path: '/vendedores', highlight: entityName }
+                              : insight.tipo === 'riesgo_equipo'
+                              ? { label: 'Ver equipo →', path: '/vendedores', highlight: null }
+                              : insight.tipo === 'riesgo_producto'
+                              ? { label: entityName ? `${entityName} →` : 'Ver rotación →', path: '/rotacion', highlight: entityName }
+                              : insight.tipo === 'riesgo_cliente'
+                              ? { label: entityName ? `${entityName} →` : 'Ver clientes →', path: '/clientes', highlight: entityName, openCliente: entityName }
+                              : insight.tipo === 'cruzado'
+                              ? { label: entityName ? `${entityName} →` : 'Ver vendedores →', path: '/vendedores', highlight: entityName }
+                              : insight.tipo === 'riesgo_meta'
+                              ? { label: entityName ? `${entityName} →` : 'Ver metas →', path: '/metas', highlight: null }
+                              : insight.tipo === 'hallazgo'
+                              ? (insight.vendedor
+                                ? { label: `${insight.vendedor} →`, path: '/vendedores', highlight: insight.vendedor }
+                                : insight.producto
+                                ? { label: `${insight.producto} →`, path: '/rotacion', highlight: insight.producto }
+                                : null)
+                              : null
+                            return navLink ? (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); navigate(navLink.path, { state: navLink.highlight ? { highlight: navLink.highlight, source: 'alert', ...('openCliente' in navLink && navLink.openCliente ? { openCliente: navLink.openCliente } : {}) } : undefined }) }}
+                                className="text-[11px] font-medium cursor-pointer hover:underline transition-colors"
+                                style={{ color: 'var(--sf-green)' }}
+                              >
+                                {navLink.label}
+                              </button>
+                            ) : null
+                          })()}
+
+                          {/* Analizar con IA — dentro del action row */}
+                          {!analysis && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleAnalyzeInsight(insight) }}
+                              className={`inline-flex items-center gap-1.5 rounded-lg font-medium cursor-pointer transition-all duration-150 ml-auto ${impact === 'bajo' ? 'px-2 py-1 text-[11px]' : 'px-3 py-1.5 text-xs'}`}
+                              style={{
+                                color: 'var(--sf-green)',
+                                background: 'var(--sf-green-bg)',
+                                border: '1px solid var(--sf-green-border)',
+                              }}
+                              onMouseEnter={e => { e.currentTarget.style.opacity = '0.8' }}
+                              onMouseLeave={e => { e.currentTarget.style.opacity = '1' }}
+                            >
+                              ✦ Analizar con IA
+                            </button>
+                          )}
+                          </div>{/* /Action row */}
+
+                          {/* Loading spinner — replaces button while analyzing */}
+                          {analysis?.loading && (
+                            <div className="flex justify-end mt-2">
+                              <span className="inline-flex items-center gap-1.5 text-xs" style={{ color: 'var(--sf-t4)' }}>
+                                <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                                </svg>
+                                Analizando...
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Analysis result — appears once generated */}
+                          {analysis?.text && !analysis.loading && (
+                            <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--sf-border-subtle)' }}>
+                              <div className="text-[13px] leading-relaxed whitespace-pre-line" style={{ color: 'var(--sf-t3)' }}>
+                                {analysis.text}
+                              </div>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  const analysisText = analysis?.text || ''
+                                  const displayMessage = `Profundizar: ${insight.titulo}`
+                                  const fullContext = [
+                                    `Profundizar sobre: ${insight.titulo}`,
+                                    ``,
+                                    `Contexto del insight: ${insight.descripcion}`,
+                                    insight.impacto_economico ? `Impacto económico: ${insight.impacto_economico.descripcion} (${configuracion.moneda} ${insight.impacto_economico.valor?.toLocaleString()})` : '',
+                                    insight.vendedor ? `Vendedor: ${insight.vendedor}` : '',
+                                    insight.cliente ? `Cliente: ${insight.cliente}` : '',
+                                    insight.producto ? `Producto: ${insight.producto}` : '',
+                                    analysisText ? `\nAnálisis previo:\n${analysisText}` : '',
+                                    ``,
+                                    `Con base en este análisis, profundiza: ¿qué está causando esto específicamente, qué datos adicionales lo confirman, y qué patrón hay detrás?`
+                                  ].filter(Boolean).join('\n')
+                                  navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage, source: 'Estado Comercial' } })
+                                }}
+                                className="mt-3 px-4 py-2 rounded-lg text-xs font-medium cursor-pointer"
+                                style={{ border: '1px solid var(--sf-green-border)', background: 'var(--sf-green-bg)', color: 'var(--sf-green)' }}
+                                onMouseEnter={e => (e.currentTarget.style.opacity = '0.8')}
+                                onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
+                              >
+                                + Profundizar
+                              </button>
+                            </div>
+                          )}
+
+                          {/* Hallazgo expanded content — only on click */}
+                          {isHallazgo && isExpanded && (
+                            <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--sf-border-subtle)' }}>
+                              {insight.impacto_economico ? (
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-xs" style={{ color: 'var(--sf-t4)' }}>Impacto estimado: </span>
+                                  <span className="text-xs font-semibold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-t2)' }}>
+                                    {configuracion.moneda} {insight.impacto_economico.valor.toLocaleString()}
+                                  </span>
+                                </div>
+                              ) : insight.valor_numerico ? (
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-xs" style={{ color: 'var(--sf-t4)' }}>Valor: </span>
+                                  <span className="text-xs font-semibold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-t2)' }}>
+                                    {insight.valor_numerico.toLocaleString()}
+                                  </span>
+                                </div>
+                              ) : (
+                                <p className="text-xs" style={{ color: 'var(--sf-t4)' }}>Sin datos adicionales.</p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Critical dot */}
+                        {insight.prioridad === 'CRITICA' && (
+                          <span
+                            className="w-2 h-2 rounded-full shrink-0 mt-5 mr-4"
+                            style={{ background: '#ef4444', boxShadow: '0 0 8px rgba(239,68,68,0.4)' }}
+                          />
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+
+                {/* Show more / collapse */}
+                {!feedExpanded && remainingCount > 0 && (
+                  <button
+                    onClick={() => setFeedExpanded(true)}
+                    className="w-full py-3 rounded-xl text-[13px] font-medium transition-all duration-150 cursor-pointer"
+                    style={{
+                      border: '1px dashed var(--sf-border-subtle)',
+                      background: 'transparent',
+                      color: 'var(--sf-t5)',
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--sf-border-active)'; e.currentTarget.style.color = 'var(--sf-t3)' }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--sf-border-subtle)'; e.currentTarget.style.color = 'var(--sf-t5)' }}
+                  >
+                    Ver las {remainingCount} alertas restantes
+                  </button>
+                )}
+                {feedExpanded && feedFiltered.length > TOP_COUNT && (
+                  <button
+                    onClick={() => setFeedExpanded(false)}
+                    className="w-full py-2 rounded-xl text-[12px] font-medium transition-all duration-150 cursor-pointer"
+                    style={{ color: 'var(--sf-t5)' }}
+                    onMouseEnter={e => { e.currentTarget.style.color = 'var(--sf-t3)' }}
+                    onMouseLeave={e => { e.currentTarget.style.color = 'var(--sf-t5)' }}
+                  >
+                    Colapsar
+                  </button>
+                )}
+              </>
+            )
+          })()}
         </div>
       </div>
 
@@ -1582,7 +2588,13 @@ export default function EstadoComercialPage() {
       <div style={{ borderTop: '1px solid var(--sf-border)' }} />
 
       <div className="intel-fade" style={{ animationDelay: '400ms' }}>
-        <p className="text-[11px] font-bold uppercase tracking-[0.15em] mb-3" style={{ color: 'var(--sf-t5)' }}>Explorar dimensiones</p>
+        <div className="relative mb-3">
+          <p className="text-[11px] font-bold uppercase tracking-[0.15em]" style={{ color: 'var(--sf-t5)' }}>Explorar dimensiones</p>
+          <FirstTimeTooltip
+            storageKey="sf_tip_dimensiones"
+            text="Haz clic en cualquier tarjeta para ver el detalle de vendedores, clientes, canales o productos"
+          />
+        </div>
         <div
           className="grid gap-3"
           style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}
@@ -1592,13 +2604,16 @@ export default function EstadoComercialPage() {
             const topBorder = criticos > 0 ? 'var(--sf-red)' : enRiesgo > 0 ? 'var(--sf-amber)' : 'var(--sf-green)'
             return (
               <div
-                className="group rounded-xl p-5 cursor-pointer transition-colors duration-200"
-                style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderTop: `3px solid ${topBorder}` }}
+                className="group rounded-xl p-5 cursor-pointer transition-all duration-200"
+                style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}
                 onClick={() => navigate(criticos > 0 ? '/vendedores?filter=critico' : '/vendedores')}
-                onMouseEnter={e => { const el = e.currentTarget as HTMLDivElement; el.style.borderColor = 'var(--sf-border-active)'; el.style.background = 'var(--sf-hover-card)' }}
-                onMouseLeave={e => { const el = e.currentTarget as HTMLDivElement; el.style.borderColor = 'var(--sf-border)'; el.style.background = 'var(--sf-card)' }}
+                onMouseEnter={e => { const el = e.currentTarget as HTMLDivElement; el.style.borderColor = 'var(--sf-border-active)'; el.style.background = 'var(--sf-hover-card)'; el.style.boxShadow = '0 4px 12px rgba(0,0,0,0.08)' }}
+                onMouseLeave={e => { const el = e.currentTarget as HTMLDivElement; el.style.borderColor = 'var(--sf-border)'; el.style.background = 'var(--sf-card)'; el.style.boxShadow = '' }}
               >
-                <p className="text-[11px] font-bold uppercase tracking-[0.15em] mb-3" style={{ color: 'var(--sf-t5)' }}>VENDEDORES</p>
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: topBorder }} />
+                  <p className="text-[11px] font-bold uppercase tracking-[0.15em]" style={{ color: 'var(--sf-t5)' }}>VENDEDORES</p>
+                </div>
                 <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 28, fontWeight: 400, color: criticos > 0 ? 'var(--sf-red)' : 'var(--sf-green)', lineHeight: 1 }}>
                   {criticos > 0 ? criticos : vendorAnalysis.length}
                 </div>
@@ -1625,13 +2640,16 @@ export default function EstadoComercialPage() {
             const topBorder = clientesDormidos.length > 0 ? 'var(--sf-red)' : 'var(--sf-green)'
             return (
               <div
-                className="group rounded-xl p-5 cursor-pointer transition-colors duration-200"
-                style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderTop: `3px solid ${topBorder}` }}
+                className="group rounded-xl p-5 cursor-pointer transition-all duration-200"
+                style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}
                 onClick={() => navigate('/clientes')}
-                onMouseEnter={e => { const el = e.currentTarget as HTMLDivElement; el.style.borderColor = 'var(--sf-border-active)'; el.style.background = 'var(--sf-hover-card)' }}
-                onMouseLeave={e => { const el = e.currentTarget as HTMLDivElement; el.style.borderColor = 'var(--sf-border)'; el.style.background = 'var(--sf-card)' }}
+                onMouseEnter={e => { const el = e.currentTarget as HTMLDivElement; el.style.borderColor = 'var(--sf-border-active)'; el.style.background = 'var(--sf-hover-card)'; el.style.boxShadow = '0 4px 12px rgba(0,0,0,0.08)' }}
+                onMouseLeave={e => { const el = e.currentTarget as HTMLDivElement; el.style.borderColor = 'var(--sf-border)'; el.style.background = 'var(--sf-card)'; el.style.boxShadow = '' }}
               >
-                <p className="text-[11px] font-bold uppercase tracking-[0.15em] mb-3" style={{ color: 'var(--sf-t5)' }}>CLIENTES</p>
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: topBorder }} />
+                  <p className="text-[11px] font-bold uppercase tracking-[0.15em]" style={{ color: 'var(--sf-t5)' }}>CLIENTES</p>
+                </div>
                 <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 28, fontWeight: 400, color: 'var(--sf-red)', lineHeight: 1 }}>
                   {clientesDormidos.length}
                 </div>
@@ -1660,13 +2678,16 @@ export default function EstadoComercialPage() {
             const chatQ = 'Analiza el estado de los canales este período'
             return (
               <div
-                className="group rounded-xl p-5 cursor-pointer transition-colors duration-200"
-                style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderTop: `3px solid ${topBorder}` }}
-                onClick={() => navigate('/chat', { state: { prefill: chatQ } })}
-                onMouseEnter={e => { const el = e.currentTarget as HTMLDivElement; el.style.borderColor = 'var(--sf-border-active)'; el.style.background = 'var(--sf-hover-card)' }}
-                onMouseLeave={e => { const el = e.currentTarget as HTMLDivElement; el.style.borderColor = 'var(--sf-border)'; el.style.background = 'var(--sf-card)' }}
+                className="group rounded-xl p-5 cursor-pointer transition-all duration-200"
+                style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}
+                onClick={() => navigate('/chat', { state: { prefill: chatQ, source: 'Estado Comercial' } })}
+                onMouseEnter={e => { const el = e.currentTarget as HTMLDivElement; el.style.borderColor = 'var(--sf-border-active)'; el.style.background = 'var(--sf-hover-card)'; el.style.boxShadow = '0 4px 12px rgba(0,0,0,0.08)' }}
+                onMouseLeave={e => { const el = e.currentTarget as HTMLDivElement; el.style.borderColor = 'var(--sf-border)'; el.style.background = 'var(--sf-card)'; el.style.boxShadow = '' }}
               >
-                <p className="text-[11px] font-bold uppercase tracking-[0.15em] mb-3" style={{ color: 'var(--sf-t5)' }}>CANALES</p>
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: topBorder }} />
+                  <p className="text-[11px] font-bold uppercase tracking-[0.15em]" style={{ color: 'var(--sf-t5)' }}>CANALES</p>
+                </div>
                 <div className="text-xl font-medium leading-none" style={{ color: 'var(--sf-t1)' }}>
                   {canalPrincipal.canal}
                 </div>
@@ -1680,7 +2701,7 @@ export default function EstadoComercialPage() {
                   Canal principal {varText} vs histórico
                 </div>
                 <div className="text-xs mt-3 opacity-0 group-hover:opacity-100 transition-opacity duration-200" style={{ color: 'var(--sf-green)' }}>
-                  Analizar canales →
+                  Analizar con IA →
                 </div>
               </div>
             )
@@ -1691,13 +2712,16 @@ export default function EstadoComercialPage() {
             const topBorder = sinMovimiento > 0 ? 'var(--sf-red)' : (bajaCob > 0 || riesgoQuiebre > 0) ? 'var(--sf-amber)' : 'var(--sf-green)'
             return (
               <div
-                className="group rounded-xl p-5 cursor-pointer transition-colors duration-200"
-                style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderTop: `3px solid ${topBorder}` }}
-                onClick={() => dataAvailability.has_inventario ? navigate('/rotacion') : undefined}
-                onMouseEnter={e => { const el = e.currentTarget as HTMLDivElement; el.style.borderColor = 'var(--sf-border-active)'; el.style.background = 'var(--sf-hover-card)' }}
-                onMouseLeave={e => { const el = e.currentTarget as HTMLDivElement; el.style.borderColor = 'var(--sf-border)'; el.style.background = 'var(--sf-card)' }}
+                className="group rounded-xl p-5 cursor-pointer transition-all duration-200"
+                style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}
+                onClick={() => dataAvailability.has_inventario ? navigate('/rotacion') : navigate('/chat', { state: { prefill: 'Analiza los productos con alertas y productos sin ventas recientes', source: 'Estado Comercial' } })}
+                onMouseEnter={e => { const el = e.currentTarget as HTMLDivElement; el.style.borderColor = 'var(--sf-border-active)'; el.style.background = 'var(--sf-hover-card)'; el.style.boxShadow = '0 4px 12px rgba(0,0,0,0.08)' }}
+                onMouseLeave={e => { const el = e.currentTarget as HTMLDivElement; el.style.borderColor = 'var(--sf-border)'; el.style.background = 'var(--sf-card)'; el.style.boxShadow = '' }}
               >
-                <p className="text-[11px] font-bold uppercase tracking-[0.15em] mb-3" style={{ color: 'var(--sf-t5)' }}>PRODUCTOS</p>
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: topBorder }} />
+                  <p className="text-[11px] font-bold uppercase tracking-[0.15em]" style={{ color: 'var(--sf-t5)' }}>PRODUCTOS</p>
+                </div>
                 {dataAvailability.has_inventario ? (
                   <>
                     <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 28, fontWeight: 400, color: sinMovimiento > 0 ? 'var(--sf-red)' : 'var(--sf-green)', lineHeight: 1 }}>
@@ -1705,8 +2729,14 @@ export default function EstadoComercialPage() {
                     </div>
                     <div className="text-xs mt-1" style={{ color: 'var(--sf-t3)' }}>sin movimiento</div>
                     <div className="text-xs mt-2" style={{ color: 'var(--sf-t3)' }}>
-                      {riesgoQuiebre} riesgo quiebre · {bajaCob} baja cobertura
+                      {riesgoQuiebre > 0 ? <span style={{ color: 'var(--sf-red)' }}>{riesgoQuiebre} riesgo quiebre</span> : <>{riesgoQuiebre} riesgo quiebre</>}
+                      {' · '}{bajaCob} baja cobertura
                     </div>
+                    {riesgoQuiebre > 0 && (
+                      <div className="text-[10px] mt-1" style={{ color: 'var(--sf-red)', opacity: 0.8 }}>
+                        ⚠ Productos que pueden agotar stock antes de resurtido
+                      </div>
+                    )}
                     <div className="text-xs mt-1" style={{ color: 'var(--sf-t3)' }}>
                       {normalInv} normal · {lentoMov} lento movimiento
                     </div>
@@ -1722,11 +2752,9 @@ export default function EstadoComercialPage() {
                     </div>
                   </>
                 )}
-                {dataAvailability.has_inventario && (
-                  <div className="text-xs mt-3 opacity-0 group-hover:opacity-100 transition-opacity duration-200" style={{ color: 'var(--sf-green)' }}>
-                    Ver rotación →
-                  </div>
-                )}
+                <div className="text-xs mt-3 opacity-0 group-hover:opacity-100 transition-opacity duration-200" style={{ color: 'var(--sf-green)' }}>
+                  {dataAvailability.has_inventario ? 'Ver rotación →' : 'Analizar productos →'}
+                </div>
               </div>
             )
           })()}

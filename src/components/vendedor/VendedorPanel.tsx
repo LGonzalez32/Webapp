@@ -501,6 +501,19 @@ export default function VendedorPanel({
             </div>
           </div>
 
+          {/* ── Tendencia mensual (barras CSS) ─────────────────────────────── */}
+          <TendenciaMensual sales={sales} vendedor={v.vendedor} selectedPeriod={selectedPeriod} />
+
+          {/* ── Clientes principales del período ──────────────────────────────── */}
+          {da.has_cliente && (
+            <ClientesPrincipales
+              sales={sales}
+              vendedor={v.vendedor}
+              selectedPeriod={selectedPeriod}
+              clientesDormidos={clientesDormidos}
+            />
+          )}
+
           {/* ── Clientes dormidos ────────────────────────────────────────────── */}
           {dormidos.length > 0 && (() => {
             const impactoTotal = dormidos.reduce((a, d) => a + d.valor_historico, 0)
@@ -698,6 +711,183 @@ export default function VendedorPanel({
         </div>
       </div>
     </>
+  )
+}
+
+// ─── Tendencia mensual ───────────────────────────────────────────────────────
+
+function fmtK(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k`
+  return String(n)
+}
+
+function TendenciaMensual({ sales, vendedor, selectedPeriod }: {
+  sales: SaleRecord[]
+  vendedor: string
+  selectedPeriod: { year: number; month: number }
+}) {
+  const data = useMemo(() => {
+    const vendorSales = sales.filter(s => s.vendedor === vendedor)
+    if (vendorSales.length === 0) return []
+
+    const { year, month } = selectedPeriod
+    const buckets: { key: string; label: string; current: number; prev: number }[] = []
+
+    for (let i = 5; i >= 0; i--) {
+      let m = month - i
+      let y = year
+      while (m < 0) { m += 12; y-- }
+      const label = MESES[m]
+      const key = `${y}-${String(m).padStart(2, '0')}`
+      const current = vendorSales
+        .filter(s => { const d = new Date(s.fecha); return d.getFullYear() === y && d.getMonth() === m })
+        .reduce((a, s) => a + s.unidades, 0)
+      const prev = vendorSales
+        .filter(s => { const d = new Date(s.fecha); return d.getFullYear() === y - 1 && d.getMonth() === m })
+        .reduce((a, s) => a + s.unidades, 0)
+
+      if (current > 0 || prev > 0) buckets.push({ key, label, current, prev })
+    }
+    return buckets
+  }, [sales, vendedor, selectedPeriod])
+
+  if (data.length === 0) return null
+
+  const maxVal = Math.max(...data.flatMap(d => [d.current, d.prev]), 1)
+
+  return (
+    <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--sf-border)' }}>
+      <p className="text-[11px] font-bold uppercase tracking-widest mb-3" style={{ color: 'var(--sf-t5)' }}>
+        Tendencia mensual
+      </p>
+      <div className="flex items-end gap-2" style={{ height: 128 }}>
+        {data.map(d => {
+          const hCurr = Math.max((d.current / maxVal) * 100, 2)
+          const hPrev = d.prev > 0 ? Math.max((d.prev / maxVal) * 100, 2) : 0
+          const barColor = d.prev > 0 && d.current < d.prev ? 'var(--sf-red)' : 'var(--sf-green)'
+          return (
+            <div key={d.key} className="flex flex-col items-center gap-1 flex-1 min-w-0">
+              <div className="flex items-end gap-0.5 w-full justify-center" style={{ height: 96 }}>
+                {hPrev > 0 && (
+                  <div
+                    className="rounded-t"
+                    style={{ width: '35%', maxWidth: 14, height: `${hPrev}%`, background: 'var(--sf-t6)', opacity: 0.3 }}
+                  />
+                )}
+                <div
+                  className="rounded-t"
+                  style={{ width: hPrev > 0 ? '45%' : '60%', maxWidth: 18, height: `${hCurr}%`, background: barColor }}
+                />
+              </div>
+              <span className="text-[10px] font-medium" style={{ color: 'var(--sf-t3)' }}>{fmtK(d.current)}</span>
+              <span className="text-[10px]" style={{ color: 'var(--sf-t5)' }}>{d.label}</span>
+            </div>
+          )
+        })}
+      </div>
+      {data.some(d => d.prev > 0) && (
+        <div className="flex items-center gap-3 mt-2 justify-center">
+          <span className="flex items-center gap-1 text-[10px]" style={{ color: 'var(--sf-t5)' }}>
+            <span className="inline-block w-2 h-2 rounded-sm" style={{ background: 'var(--sf-green)' }} /> actual
+          </span>
+          <span className="flex items-center gap-1 text-[10px]" style={{ color: 'var(--sf-t5)' }}>
+            <span className="inline-block w-2 h-2 rounded-sm" style={{ background: 'var(--sf-t6)', opacity: 0.3 }} /> año anterior
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Clientes principales ────────────────────────────────────────────────────
+
+function ClientesPrincipales({ sales, vendedor, selectedPeriod, clientesDormidos }: {
+  sales: SaleRecord[]
+  vendedor: string
+  selectedPeriod: { year: number; month: number }
+  clientesDormidos: ClienteDormido[]
+}) {
+  const { clientes, total, concentracion } = useMemo(() => {
+    const { year, month } = selectedPeriod
+    const periodSales = sales.filter(s => {
+      if (s.vendedor !== vendedor || !s.cliente) return false
+      const d = new Date(s.fecha)
+      return d.getFullYear() === year && d.getMonth() === month
+    })
+
+    const agg: Record<string, number> = {}
+    periodSales.forEach(s => {
+      agg[s.cliente!] = (agg[s.cliente!] ?? 0) + s.unidades
+    })
+
+    const total = Object.values(agg).reduce((a, b) => a + b, 0)
+    const dormidosSet = new Set(clientesDormidos.filter(d => d.vendedor === vendedor).map(d => d.cliente))
+    const sorted = Object.entries(agg)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 5)
+      .map(([cliente, uds]) => ({
+        cliente,
+        uds,
+        pct: total > 0 ? (uds / total) * 100 : 0,
+        dormido: dormidosSet.has(cliente),
+      }))
+
+    const topPct = sorted.length > 0 ? sorted[0].pct : 0
+    return {
+      clientes: sorted,
+      total: Object.keys(agg).length,
+      concentracion: topPct > 70 ? { cliente: sorted[0].cliente, pct: topPct } : null,
+    }
+  }, [sales, vendedor, selectedPeriod, clientesDormidos])
+
+  if (clientes.length === 0) return null
+
+  return (
+    <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--sf-border)' }}>
+      <p className="text-[11px] font-bold uppercase tracking-widest mb-3" style={{ color: 'var(--sf-t5)' }}>
+        Clientes principales ({total})
+      </p>
+      <table className="w-full">
+        <thead>
+          <tr>
+            <th className="text-left text-[10px] font-semibold uppercase pb-1.5" style={{ color: 'var(--sf-t5)' }}>Cliente</th>
+            <th className="text-right text-[10px] font-semibold uppercase pb-1.5 w-16" style={{ color: 'var(--sf-t5)' }}>Uds</th>
+            <th className="text-right text-[10px] font-semibold uppercase pb-1.5 w-10" style={{ color: 'var(--sf-t5)' }}>%</th>
+            <th className="text-center text-[10px] font-semibold uppercase pb-1.5 w-8" style={{ color: 'var(--sf-t5)' }}>Est.</th>
+          </tr>
+        </thead>
+        <tbody>
+          {clientes.map(c => (
+            <tr key={c.cliente} style={{ borderBottom: '1px solid var(--sf-border)' }}>
+              <td
+                className="text-[12px] py-1.5 truncate max-w-0"
+                style={{ color: c.dormido ? 'var(--sf-red)' : 'var(--sf-t2)', fontWeight: c.dormido ? 500 : 400 }}
+              >
+                {c.cliente}
+              </td>
+              <td className="text-right text-[12px] py-1.5 tabular-nums" style={{ color: 'var(--sf-t2)', ...mono }}>
+                {c.uds.toLocaleString()}
+              </td>
+              <td className="text-right text-[12px] py-1.5 tabular-nums" style={{ color: 'var(--sf-t4)', ...mono }}>
+                {c.pct.toFixed(0)}%
+              </td>
+              <td className="text-center py-1.5">
+                <span
+                  className="inline-block w-2 h-2 rounded-full"
+                  style={{ background: c.dormido ? 'var(--sf-red)' : 'var(--sf-green)' }}
+                  title={c.dormido ? 'Dormido' : 'Activo'}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {concentracion && (
+        <p className="text-[11px] mt-2 flex items-center gap-1" style={{ color: 'var(--sf-amber)' }}>
+          <span>⚠</span> Alta concentración: {concentracion.cliente} representa el {concentracion.pct.toFixed(0)}% del volumen
+        </p>
+      )}
+    </div>
   )
 }
 

@@ -1,10 +1,11 @@
-import React, { useState, useMemo, useCallback, type FC } from 'react'
-import { useNavigate } from 'react-router-dom'
+import React, { useState, useMemo, useCallback, useEffect, type FC } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
 import type { ClasificacionInventario, CategoriaInventario } from '../types'
-import { ChevronDown, ChevronUp, Upload } from 'lucide-react'
+import { ChevronDown, ChevronUp, Upload, Search } from 'lucide-react'
 import { callAI } from '../lib/chatService'
+import ProductoPanel from '../components/producto/ProductoPanel'
 
 // ─── Orden y configuración de clasificaciones ────────────────────────────────
 
@@ -23,8 +24,8 @@ const CLASI_CONFIG: Record<
   riesgo_quiebre:   { label: 'Riesgo de quiebre',  color: '#E24B4A', defaultOpen: true  },
   baja_cobertura:   { label: 'Baja cobertura',      color: '#EF9F27', defaultOpen: true  },
   normal:           { label: 'Normal',              color: '#1D9E75', defaultOpen: false },
-  lento_movimiento: { label: 'Lento movimiento',    color: '#4a5568', defaultOpen: false },
-  sin_movimiento:   { label: 'Sin movimiento',      color: '#2d3748', defaultOpen: false },
+  lento_movimiento: { label: 'Lento movimiento',    color: '#718096', defaultOpen: false },
+  sin_movimiento:   { label: 'Sin movimiento',      color: '#64748b', defaultOpen: false },
 }
 
 // ─── Sección colapsable por categoría ────────────────────────────────────────
@@ -34,6 +35,8 @@ interface CategorySectionProps {
   items: CategoriaInventario[]
   totalUnits: number
   hasCategoria: boolean
+  forceOpen?: boolean
+  onOpenPanel?: (item: CategoriaInventario) => void
   // IA analysis props (only used for riesgo_quiebre + baja_cobertura)
   analysisMap?: Record<string, { loading: boolean; text: string | null }>
   expandedProducto?: string | null
@@ -42,9 +45,9 @@ interface CategorySectionProps {
   onProfundizar?: (item: CategoriaInventario, analysisText: string) => void
 }
 
-const CategorySection: FC<CategorySectionProps> = ({ clasificacion, items, totalUnits, hasCategoria, analysisMap, expandedProducto, onAnalyze, onToggleExpand, onProfundizar }) => {
+const CategorySection: FC<CategorySectionProps> = ({ clasificacion, items, totalUnits, hasCategoria, forceOpen, onOpenPanel, analysisMap, expandedProducto, onAnalyze, onToggleExpand, onProfundizar }) => {
   const cfg = CLASI_CONFIG[clasificacion]
-  const [expanded, setExpanded] = useState(cfg.defaultOpen)
+  const [expanded, setExpanded] = useState(cfg.defaultOpen || !!forceOpen)
 
   if (items.length === 0) return null
 
@@ -65,8 +68,8 @@ const CategorySection: FC<CategorySectionProps> = ({ clasificacion, items, total
     fontSize: '10px',
     textTransform: 'uppercase',
     letterSpacing: '0.08em',
-    opacity: 0.35,
-    fontWeight: 400,
+    opacity: 0.6,
+    fontWeight: 500,
     borderBottom: '1px solid var(--sf-border)',
   }
 
@@ -125,11 +128,20 @@ const CategorySection: FC<CategorySectionProps> = ({ clasificacion, items, total
                     onMouseEnter={e => (e.currentTarget.style.background = 'var(--sf-hover)')}
                     onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                   >
-                    <td style={{ padding: '8px 12px', fontSize: '13px', fontWeight: 500, color: 'var(--sf-t1)' }}>{item.producto}</td>
+                    <td style={{ padding: '8px 12px', fontSize: '13px', fontWeight: 500, color: 'var(--sf-t1)' }}>
+                      <span
+                        onClick={() => onOpenPanel?.(item)}
+                        style={{ cursor: 'pointer', transition: 'color 0.15s' }}
+                        onMouseEnter={e => (e.currentTarget.style.textDecoration = 'underline')}
+                        onMouseLeave={e => (e.currentTarget.style.textDecoration = 'none')}
+                      >
+                        {item.producto}
+                      </span>
+                    </td>
                     {hasCategoria && <td style={{ padding: '8px 12px', fontSize: '12px', color: 'var(--sf-t4)' }}>{item.categoria}</td>}
-                    <td style={{ padding: '8px 12px', fontSize: '12px', color: 'var(--sf-t4)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{item.unidades_actuales.toLocaleString()}</td>
-                    <td style={{ padding: '8px 12px', fontSize: '12px', color: 'var(--sf-t4)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{item.pm3.toFixed(0)}</td>
-                    <td style={{ padding: '8px 12px', fontSize: '12px', color: diasColor, fontWeight: diasWeight, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                    <td style={{ padding: '8px 12px', fontSize: '12px', color: 'var(--sf-t4)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace" }}>{item.unidades_actuales.toLocaleString()}</td>
+                    <td style={{ padding: '8px 12px', fontSize: '12px', color: 'var(--sf-t4)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace" }}>{item.pm3.toFixed(0)}</td>
+                    <td style={{ padding: '8px 12px', fontSize: '12px', color: diasColor, fontWeight: diasWeight, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace" }}>
                       {d >= 9999 ? '∞' : d}
                     </td>
                     <td style={{ padding: '8px 12px', textAlign: 'center' }}>
@@ -227,10 +239,22 @@ const CategorySection: FC<CategorySectionProps> = ({ clasificacion, items, total
 export default function RotacionPage() {
   useAnalysis()
   const navigate = useNavigate()
-  const { categoriasInventario, dataAvailability, configuracion } = useAppStore()
+  const location = useLocation()
+  const highlightCategory = (location.state as { highlight?: string } | null)?.highlight ?? null
+  const { categoriasInventario, dataAvailability, configuracion, sales, selectedPeriod, insights } = useAppStore()
 
+  const [panelProducto, setPanelProducto] = useState<CategoriaInventario | null>(null)
+  const [searchText, setSearchText] = useState('')
+  const [filterCategory, setFilterCategory] = useState<string | null>(highlightCategory)
   const [expandedProducto, setExpandedProducto] = useState<string | null>(null)
   const [analysisMap, setAnalysisMap] = useState<Record<string, { loading: boolean; text: string | null }>>({})
+
+  // Clear navigation state so it doesn't persist on in-page navigation
+  useEffect(() => {
+    if (highlightCategory) {
+      window.history.replaceState({}, document.title)
+    }
+  }, [highlightCategory])
 
   const handleAnalyzeProducto = useCallback(async (item: CategoriaInventario) => {
     const key = item.producto
@@ -247,7 +271,7 @@ export default function RotacionPage() {
       `Estado: ${clasi}\n` +
       (item.ultimo_movimiento ? `Último movimiento: ${new Date(item.ultimo_movimiento).toLocaleDateString('es-MX')}` : '')
 
-    const systemPrompt = `Eres un analista de inventario de una distribuidora en El Salvador.
+    const systemPrompt = `Eres un analista de inventario.
 Responde SIEMPRE en este formato exacto, sin introducción ni cierre:
 
 📊 RESUMEN: [Una oración de máximo 15 palabras con el hallazgo principal]
@@ -274,7 +298,9 @@ Reglas:
       )
       setAnalysisMap(prev => ({ ...prev, [key]: { loading: false, text: json.choices?.[0]?.message?.content ?? 'Sin respuesta' } }))
     } catch (err) {
-      setAnalysisMap(prev => ({ ...prev, [key]: { loading: false, text: `Error: ${err instanceof Error ? err.message : 'Error al conectar.'}` } }))
+      const code = err instanceof Error ? err.message : ''
+      const msg = code === 'INVALID_KEY' ? 'API key no configurada. Ve a Configuración → Asistente IA.' : code === 'RATE_LIMIT' ? 'Límite de requests alcanzado. Intenta en unos segundos.' : 'No se pudo conectar con el asistente IA.'
+      setAnalysisMap(prev => ({ ...prev, [key]: { loading: false, text: msg } }))
     }
   }, [configuracion])
 
@@ -294,7 +320,7 @@ Reglas:
       ``,
       `Con base en este análisis, profundiza: ¿qué vendedores movían este producto, en qué canales se vendía, hay clientes que lo compraban y dejaron de hacerlo?`
     ].filter(Boolean).join('\n')
-    navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage } })
+    navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage, source: 'Rotación' } })
   }, [navigate])
 
   // Todos los hooks antes del return condicional
@@ -310,6 +336,37 @@ Reglas:
     () => categoriasInventario.reduce((s, i) => s + i.unidades_actuales, 0),
     [categoriasInventario],
   )
+
+  // Unique categories for the filter select
+  const uniqueCategories = useMemo(() =>
+    [...new Set(categoriasInventario.map(i => i.categoria).filter(Boolean))].sort(),
+  [categoriasInventario])
+
+  // Filter groups by category and/or search text
+  const filteredGrouped = useMemo(() => {
+    const hasSearch = searchText.trim().length > 0
+    const hasCategory = !!filterCategory
+    if (!hasSearch && !hasCategory) return grouped
+    const searchLower = searchText.trim().toLowerCase()
+    const result: Record<ClasificacionInventario, CategoriaInventario[]> = {
+      riesgo_quiebre: [], baja_cobertura: [], normal: [], lento_movimiento: [], sin_movimiento: [],
+    }
+    for (const k of ORDER) {
+      result[k] = grouped[k].filter(item => {
+        const matchesCategory = !hasCategory ||
+          item.categoria?.toLowerCase() === filterCategory!.toLowerCase()
+        const matchesSearch = !hasSearch ||
+          item.producto?.toLowerCase().includes(searchLower) ||
+          item.categoria?.toLowerCase().includes(searchLower)
+        return matchesCategory && matchesSearch
+      })
+    }
+    return result
+  }, [grouped, filterCategory, searchText])
+
+  const totalFilteredCount = useMemo(() =>
+    ORDER.reduce((s, k) => s + filteredGrouped[k].length, 0),
+  [filteredGrouped])
 
 
   if (!dataAvailability.has_inventario) {
@@ -340,10 +397,10 @@ Reglas:
     <div style={{ paddingBottom: '80px' }} className="animate-in fade-in duration-500">
 
       {/* Page header */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '20px' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '16px' }}>
         <div>
-          <h1 style={{ fontSize: '22px', fontWeight: 600, margin: 0 }}>Rotación de Inventario</h1>
-          <p style={{ fontSize: '12px', opacity: 0.4, margin: '3px 0 0' }}>
+          <h1 className="text-2xl font-bold tracking-tight text-[var(--sf-t1)]">Rotación de Inventario</h1>
+          <p style={{ fontSize: '12px', opacity: 0.5, margin: '3px 0 0' }}>
             {totalProducts} productos · {totalUnits.toLocaleString()} unidades totales
           </p>
         </div>
@@ -360,9 +417,52 @@ Reglas:
         </div>
       </div>
 
+      {/* Filter bar */}
+      <div className="flex items-center gap-3 mb-3">
+        <div className="relative flex-1" style={{ minWidth: 200 }}>
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: 'var(--sf-t5)' }} />
+          <input
+            type="text"
+            value={searchText}
+            onChange={e => setSearchText(e.target.value)}
+            placeholder="Buscar producto o código..."
+            autoComplete="off"
+            className="w-full rounded-lg text-sm outline-none transition-colors"
+            style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', color: 'var(--sf-t1)', padding: '8px 12px 8px 36px' }}
+          />
+        </div>
+        {uniqueCategories.length > 1 && (
+          <select
+            value={filterCategory ?? ''}
+            onChange={e => setFilterCategory(e.target.value || null)}
+            className="rounded-lg text-sm outline-none cursor-pointer"
+            style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', color: 'var(--sf-t1)', padding: '8px 12px', minWidth: 180 }}
+          >
+            <option value="">Todas las categorías</option>
+            {uniqueCategories.map(cat => (
+              <option key={cat} value={cat}>{cat}</option>
+            ))}
+          </select>
+        )}
+      </div>
+
+      {/* Active filter info */}
+      {(searchText || filterCategory) && (
+        <p className="text-xs mb-3" style={{ color: 'var(--sf-t5)' }}>
+          Mostrando {totalFilteredCount} de {totalProducts} productos
+          <button
+            onClick={() => { setSearchText(''); setFilterCategory(null) }}
+            className="ml-2 cursor-pointer hover:underline"
+            style={{ color: 'var(--sf-green)', background: 'none', border: 'none', padding: 0, fontSize: 'inherit' }}
+          >
+            Limpiar filtro
+          </button>
+        </p>
+      )}
+
       {/* Distribution card */}
       <div style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderRadius: '12px', padding: '16px 20px', marginBottom: '16px' }}>
-        <p style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.35, margin: '0 0 12px' }}>
+        <p style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.6, margin: '0 0 12px' }}>
           Distribución del inventario total
         </p>
 
@@ -416,11 +516,13 @@ Reglas:
       <div>
         {ORDER.map((k) => (
           <CategorySection
-            key={k}
+            key={filterCategory ? `${k}-${filterCategory}` : k}
             clasificacion={k}
-            items={grouped[k]}
+            items={filteredGrouped[k]}
             totalUnits={totalUnits}
             hasCategoria={hasCategoria}
+            forceOpen={!!(filterCategory || searchText)}
+            onOpenPanel={setPanelProducto}
             analysisMap={analysisMap}
             expandedProducto={expandedProducto}
             onAnalyze={handleAnalyzeProducto}
@@ -429,6 +531,23 @@ Reglas:
           />
         ))}
       </div>
+
+      {/* Producto slide-in panel */}
+      {panelProducto && (
+        <>
+          <div
+            onClick={() => setPanelProducto(null)}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 40 }}
+          />
+          <ProductoPanel
+            producto={panelProducto}
+            sales={sales}
+            selectedPeriod={selectedPeriod}
+            insights={insights}
+            onClose={() => setPanelProducto(null)}
+          />
+        </>
+      )}
 
     </div>
   )

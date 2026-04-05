@@ -296,7 +296,7 @@ export default function DepartamentosPage() {
       `Canales:\n${canalLines || '- Sin datos de canal'}`
 
     const systemPrompt =
-      `Eres un analista comercial de una distribuidora en El Salvador.\n` +
+      `Eres un analista comercial.\n` +
       `Responde SIEMPRE en este formato exacto, sin introducción ni cierre:\n\n` +
       `📊 RESUMEN: [Una oración de máximo 15 palabras con el hallazgo principal]\n\n` +
       `🔺 CRECIMIENTO:\n- [Bullet con dato específico: canal, vendedor, o producto que creció y cuánto]\n- [Bullet 2 si aplica — máximo 2 bullets]\n\n` +
@@ -319,14 +319,22 @@ export default function DepartamentosPage() {
       )
       setInsightText(json.choices?.[0]?.message?.content ?? 'Sin respuesta')
     } catch (err) {
-      setInsightText(`Error: ${err instanceof Error ? err.message : 'Error al conectar con el asistente.'}`)
+      const code = err instanceof Error ? err.message : ''
+      const msg = code === 'INVALID_KEY' ? 'API key no configurada. Ve a Configuración → Asistente IA.' : code === 'RATE_LIMIT' ? 'Límite de requests alcanzado. Intenta en unos segundos.' : 'No se pudo conectar con el asistente IA.'
+      setInsightText(msg)
     } finally {
       setInsightLoading(false)
     }
   }, [deptData, sales, year, month, mesLabel])
 
-  // ── Click en mapa — panel IA para caídas ──────────────────────────────────
-  const handleDeptoClick = useCallback(async (deptKey: string, data: DeptData) => {
+  // ── Click en mapa — solo selecciona departamento (sin IA) ────────────────
+  const handleDeptoClick = useCallback((deptKey: string, data: DeptData) => {
+    if (!data) return
+    setTimeout(() => aiPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50)
+  }, [])
+
+  // ── Analizar con IA — llamado explícitamente desde botón ─────────────────
+  const handleDeptoAnalyze = useCallback(async (deptKey: string, data: DeptData) => {
     if (!data || data.variacion_pct === null) {
       setAiExplanation(null)
       return
@@ -383,7 +391,7 @@ export default function DepartamentosPage() {
     }).join('\n')
 
     const sysPrompt =
-      `Eres un analista comercial de una distribuidora en El Salvador.\n` +
+      `Eres un analista comercial.\n` +
       `Responde SIEMPRE en este formato exacto, sin introducción ni cierre:\n\n` +
       `📊 RESUMEN: [Una oración de máximo 15 palabras con el hallazgo principal]\n\n` +
       `🔺 CRECIMIENTO:\n- [Bullet con dato específico: canal, vendedor, o producto que creció y cuánto]\n- [Bullet 2 si aplica — máximo 2 bullets]\n\n` +
@@ -415,7 +423,9 @@ export default function DepartamentosPage() {
       const text = json.choices?.[0]?.message?.content ?? 'No se pudo generar el análisis.'
       setAiExplanation({ depto: deptKey, varPct: data.variacion_pct, loading: false, text })
     } catch (err) {
-      setAiExplanation({ depto: deptKey, varPct: data.variacion_pct, loading: false, text: `Error: ${err instanceof Error ? err.message : 'Error al conectar con el asistente.'}` })
+      const code = err instanceof Error ? err.message : ''
+      const msg = code === 'INVALID_KEY' ? 'API key no configurada. Ve a Configuración → Asistente IA.' : code === 'RATE_LIMIT' ? 'Límite de requests alcanzado. Intenta en unos segundos.' : 'No se pudo conectar con el asistente IA.'
+      setAiExplanation({ depto: deptKey, varPct: data.variacion_pct, loading: false, text: msg })
     }
   }, [sales, year, month])
 
@@ -425,8 +435,8 @@ export default function DepartamentosPage() {
       {/* ── Header ── */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '20px' }}>
         <div>
-          <h1 style={{ fontSize: '22px', fontWeight: 600, margin: 0 }}>Ventas por Departamento</h1>
-          <p style={{ fontSize: '12px', opacity: 0.4, margin: '3px 0 0' }}>
+          <h1 className="text-2xl font-bold tracking-tight text-[var(--sf-t1)]">Ventas por Departamento</h1>
+          <p style={{ fontSize: '12px', opacity: 0.5, margin: '3px 0 0' }}>
             YTD {year} · vs {year - 1}
           </p>
         </div>
@@ -497,7 +507,7 @@ export default function DepartamentosPage() {
                       ``,
                       `Con base en este análisis, profundiza: ¿qué vendedores explican el resultado, hay migración de canal, qué productos están cayendo en este departamento?`
                     ].filter(Boolean).join('\n')
-                    navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage } })
+                    navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage, source: 'Departamentos' } })
                   }}
                   style={{
                     background: 'rgba(29,158,117,0.12)', border: '1px solid rgba(29,158,117,0.35)',
@@ -517,7 +527,7 @@ export default function DepartamentosPage() {
             </div>
           )}
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 420px', gap: '12px', alignItems: 'start' }}>
+          <div className="grid grid-cols-1 lg:grid-cols-[1fr_420px] gap-3 items-start">
 
             {/* ── Panel del mapa ── */}
             <div style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderRadius: '12px', overflow: 'hidden' }}>
@@ -629,7 +639,7 @@ export default function DepartamentosPage() {
                       )}
                     </div>
                     <button
-                      onClick={(e) => { e.stopPropagation(); handleDeptoClick(hovered, hovData) }}
+                      onClick={(e) => { e.stopPropagation(); handleDeptoAnalyze(hovered, hovData) }}
                       style={{
                         display: 'inline-flex', alignItems: 'center', gap: 4,
                         padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600,
@@ -754,7 +764,7 @@ export default function DepartamentosPage() {
                                 </span>
                               ) : (
                                 <button
-                                  onClick={(e) => { e.stopPropagation(); handleDeptoClick(dept, data) }}
+                                  onClick={(e) => { e.stopPropagation(); handleDeptoAnalyze(dept, data) }}
                                   title="Analizar con IA"
                                   style={{
                                     background: 'rgba(29,158,117,0.08)',
@@ -837,7 +847,7 @@ export default function DepartamentosPage() {
                             ``,
                             `Con base en este análisis, profundiza: ¿qué vendedores explican el resultado, hay migración de canal, qué productos están cayendo en este departamento?`
                           ].filter(Boolean).join('\n')
-                          navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage } })
+                          navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage, source: 'Departamentos' } })
                         }}
                         className="text-[12px] text-[var(--sf-t5)] hover:text-[var(--sf-t2)] transition-colors flex items-center gap-1 cursor-pointer"
                       >

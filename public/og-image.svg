@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#064e3b"/>
+      <stop offset="100%" style="stop-color:#18181b"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="40%" r="50%">
+      <stop offset="0%" style="stop-color:rgba(0,214,143,0.15)"/>
+      <stop offset="100%" style="stop-color:rgba(0,214,143,0)"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+
+  <!-- Logo circle -->
+  <circle cx="600" cy="200" r="52" fill="#00D68F"/>
+  <!-- Lightning bolt icon -->
+  <path d="M588 180 L596 200 L608 200 L600 220 L612 220 L592 248 L600 220 L588 220 L596 200 Z" fill="#064e3b" stroke="none"/>
+
+  <!-- Title -->
+  <text x="600" y="310" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="56" font-weight="900" fill="#ffffff" letter-spacing="-1">SalesFlow</text>
+
+  <!-- Subtitle -->
+  <text x="600" y="370" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="24" font-weight="500" fill="#34d399">Inteligencia Comercial para Equipos de Ventas</text>
+
+  <!-- Features line -->
+  <text x="600" y="430" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="18" fill="#a1a1aa">22 patrones de riesgo · IA · Alertas accionables</text>
+
+  <!-- Bottom accent line -->
+  <rect x="500" y="480" width="200" height="3" rx="1.5" fill="#00D68F" opacity="0.4"/>
+</svg>

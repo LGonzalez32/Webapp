@@ -37,28 +37,28 @@
 /* ── SalesFlow theme semantic tokens ─────────────────────── */
 
 :root {
-  /* Backgrounds — warm grays */
-  --sf-page: #f5f3f0;
-  --sf-sidebar: #f7f4f0;
-  --sf-card: #faf9f7;
+  /* Backgrounds — cool professional blues */
+  --sf-page: #f8f9fc;
+  --sf-sidebar: #f1f3f8;
+  --sf-card: #ffffff;
   --sf-elevated: #ffffff;
-  --sf-inset: #edeae6;
-  --sf-hover: #f0ede9;
-  --sf-hover-card: #f0ede9;
+  --sf-inset: #f0f2f8;
+  --sf-hover: #eceef5;
+  --sf-hover-card: #eceef5;
 
   /* Borders */
-  --sf-border: #e5e1db;
-  --sf-border-subtle: #ece9e4;
-  --sf-border-active: #d4cfc8;
+  --sf-border: #e2e6ef;
+  --sf-border-subtle: #ebeef5;
+  --sf-border-active: #c8d0e4;
 
   /* Text hierarchy (dark on light) */
   --sf-t1: #1a1816;
   --sf-t2: #292420;
   --sf-t3: #5c5650;
-  --sf-t4: #8c857d;
+  --sf-t4: #78716c;
   --sf-t5: #8c857d;
-  --sf-t6: #b5ada4;
-  --sf-t7: #b5ada4;
+  --sf-t6: #93857a;
+  --sf-t7: #a89e94;
   --sf-t8: #ccc5bc;
 
   /* Semi-transparent overlays */
@@ -67,18 +67,30 @@
   --sf-overlay-medium: rgba(0,0,0,0.05);
   --sf-overlay-strong: rgba(0,0,0,0.08);
 
+  /* Public pages */
+  --sf-bg: #f8f9fc;
+  --sf-bg-rgb: 248,249,252;
+  --sf-footer-bg: #1e293b;
+  --sf-footer-text: #94a3b8;
+  --sf-footer-heading: #e2e8f0;
+
   /* Accent — status colors (text) */
-  --sf-green: #15803d;
+  --sf-green: #059669;
   --sf-red: #dc2626;
-  --sf-amber: #d97706;
+  --sf-amber: #ea580c;
 
   /* Accent — status backgrounds */
   --sf-green-bg: #f0fdf4;
   --sf-green-border: #bbf7d0;
   --sf-red-bg: #fef2f2;
   --sf-red-border: #fecaca;
-  --sf-amber-bg: #fffbeb;
-  --sf-amber-border: #fde68a;
+  --sf-amber-bg: #fff7ed;
+  --sf-amber-border: #fed7aa;
+}
+
+/* Light mode card shadows */
+:root .intel-fade {
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
 }
 
 .dark {
@@ -97,16 +109,22 @@
   --sf-t1: #E2EBF6;
   --sf-t2: #C8DDEF;
   --sf-t3: #8BA4BE;
-  --sf-t4: #5A7A9A;
-  --sf-t5: #4A6080;
-  --sf-t6: #3A5A7A;
-  --sf-t7: #2A4060;
-  --sf-t8: #1A3350;
+  --sf-t4: #6B90AE;
+  --sf-t5: #5A7A9A;
+  --sf-t6: #4A6880;
+  --sf-t7: #3A5870;
+  --sf-t8: #2A4860;
 
   --sf-overlay-subtle: rgba(255,255,255,0.025);
   --sf-overlay-light: rgba(255,255,255,0.04);
   --sf-overlay-medium: rgba(255,255,255,0.06);
   --sf-overlay-strong: rgba(255,255,255,0.1);
+
+  --sf-bg: #020C18;
+  --sf-bg-rgb: 2,12,24;
+  --sf-footer-bg: #010810;
+  --sf-footer-text: #5A7A9A;
+  --sf-footer-heading: #C8DDEF;
 
   --sf-green: #00D68F;
   --sf-red: #FF4D4D;
@@ -138,4 +156,200 @@
 
 ::-webkit-scrollbar-thumb {
   @apply bg-zinc-800 rounded-full hover:bg-zinc-700 transition-colors;
+}
+
+/* ── Chat table row hover ────────────────────────────────────── */
+.sf-table-row:hover td {
+  background: var(--sf-inset) !important;
+}
+
+/* ── Print / PDF export ──────────────────────────────────────── */
+@media print, html.sf-printing {
+  /* Ocultar chrome de la app */
+  .sf-sidebar,
+  .sf-topbar,
+  .sf-no-print {
+    display: none !important;
+  }
+
+  /* El contenedor raíz deja de ser flex — el main toma el 100% */
+  body > div {
+    display: block !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* Área de contenido: fondo blanco, texto negro, sin overflow oculto */
+  body,
+  html,
+  main,
+  .flex-1 {
+    background: #ffffff !important;
+    color: #1a1816 !important;
+    overflow: visible !important;
+    height: auto !important;
+  }
+
+  /* Forzar modo claro en todos los tokens de color */
+  :root,
+  :root.dark {
+    --sf-page:            #ffffff;
+    --sf-card:            #ffffff;
+    --sf-inset:           #f5f5f5;
+    --sf-border:          #ddd;
+    --sf-border-subtle:   #e5e5e5;
+    --sf-overlay-subtle:  rgba(0,0,0,0.02);
+    --sf-overlay-light:   rgba(0,0,0,0.04);
+    --sf-overlay-medium:  rgba(0,0,0,0.07);
+    --sf-overlay-strong:  rgba(0,0,0,0.12);
+    --sf-t1: #1a1816;
+    --sf-t2: #292420;
+    --sf-t3: #5c5650;
+    --sf-t4: #78716c;
+    --sf-t5: #8c857d;
+    --sf-green:        #059669;
+    --sf-green-bg:     #f0fdf4;
+    --sf-green-border: #bbf7d0;
+    --sf-red:          #dc2626;
+    --sf-amber:        #ea580c;
+    color-scheme: light;
+  }
+
+  /* Tarjetas e insights: bordes visibles sobre fondo blanco */
+  [style*="background"] {
+    background: #ffffff !important;
+  }
+
+  /* Header de impresión con empresa + fecha */
+  main::before {
+    content: attr(data-print-empresa) " — Estado Comercial";
+    display: block;
+    font-size: 18px;
+    font-weight: 700;
+    color: #1a1816;
+    border-bottom: 2px solid #ddd;
+    padding-bottom: 8px;
+    margin-bottom: 16px;
+  }
+
+  /* Footer de impresión */
+  main::after {
+    content: "Generado por SalesFlow";
+    display: block;
+    font-size: 10px;
+    color: #8c857d;
+    text-align: right;
+    margin-top: 24px;
+    border-top: 1px solid #ddd;
+    padding-top: 8px;
+  }
+
+  /* Evitar cortes de página en medio de tarjetas */
+  .intel-fade {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* Las gráficas SVG se imprimen bien por defecto — solo asegurar visibilidad */
+  svg {
+    max-width: 100%;
+  }
+
+  /* Chips de animación — mostrar sin animaciones */
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ── Chat PDF export ────────────────────────────────────────── */
+html.sf-printing-chat {
+  @media print {
+    .sf-sidebar,
+    .sf-topbar,
+    .sf-no-print {
+      display: none !important;
+    }
+
+    body > div {
+      display: block !important;
+      height: auto !important;
+      overflow: visible !important;
+    }
+
+    body, html, main, .flex-1 {
+      background: #ffffff !important;
+      color: #1a1816 !important;
+      overflow: visible !important;
+      height: auto !important;
+    }
+
+    :root, :root.dark {
+      --sf-page: #ffffff;
+      --sf-card: #ffffff;
+      --sf-inset: #f5f5f5;
+      --sf-border: #ddd;
+      --sf-t1: #1a1816;
+      --sf-t2: #292420;
+      --sf-t3: #5c5650;
+      --sf-t4: #78716c;
+      --sf-t5: #8c857d;
+      --sf-green: #059669;
+      color-scheme: light;
+    }
+
+    /* Hide main::before/after dashboard headers */
+    main::before, main::after {
+      display: none !important;
+    }
+
+    /* Chat container: full width, no border radius */
+    [style*="borderRadius: '12px'"] {
+      border-radius: 0 !important;
+      border: none !important;
+    }
+
+    /* Chat messages area: visible overflow, auto height */
+    .overflow-y-auto {
+      overflow: visible !important;
+      height: auto !important;
+      max-height: none !important;
+    }
+
+    /* Hide input area and header buttons */
+    form, button {
+      display: none !important;
+    }
+
+    /* But show message content within buttons area */
+    .space-y-5 > div {
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+
+    * {
+      animation: none !important;
+      transition: none !important;
+    }
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.sf-stream-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: #1D9E75;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: blink 0.8s step-end infinite;
 }

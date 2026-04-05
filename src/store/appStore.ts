@@ -31,6 +31,9 @@ const DEFAULT_CONFIG: Configuracion = {
   umbral_baja_cobertura: 20,
   umbral_normal: 60,
   tema: 'dark',
+  deepseek_api_key: 'sk-be7fa627e4a04ca6a0d0be9bdb3fc29c',
+  giro: '',
+  giro_custom: '',
 }
 
 const DEFAULT_AVAILABILITY: DataAvailability = {
@@ -82,6 +85,10 @@ interface AppState {
   dataSource: 'none' | 'demo' | 'real'
   selectedPeriod: { year: number; month: number }
 
+  // Comparativa de períodos
+  comparisonEnabled: boolean
+  comparisonPeriod: { year: number; month: number } | null
+
   // Configuración
   configuracion: Configuracion
 
@@ -119,6 +126,10 @@ interface AppState {
   setForecastLoading: (loading: boolean) => void
   setForecastChartLoading: (loading: boolean) => void
 
+  // Comparativa
+  toggleComparison: () => void
+  setComparisonPeriod: (period: { year: number; month: number } | null) => void
+
   resetAll: () => void
 }
 
@@ -151,6 +162,8 @@ export const useAppStore = create<AppState>()(
       loadingMessage: '',
       orgId: '',
       dataSource: 'none',
+      comparisonEnabled: false,
+      comparisonPeriod: null,
       selectedPeriod: {
         year: new Date().getFullYear(),
         month: new Date().getMonth(), // 0-indexed
@@ -192,6 +205,18 @@ export const useAppStore = create<AppState>()(
       setForecastLoading: (forecastLoading) => set({ forecastLoading }),
       setForecastChartLoading: (forecastChartLoading) => set({ forecastChartLoading }),
 
+      toggleComparison: () => set((state) => ({
+        comparisonEnabled: !state.comparisonEnabled,
+        comparisonPeriod: !state.comparisonEnabled
+          ? (() => {
+              const y = state.selectedPeriod.year
+              const m = state.selectedPeriod.month
+              return m === 0 ? { year: y - 1, month: 11 } : { year: y, month: m - 1 }
+            })()
+          : null,
+      })),
+      setComparisonPeriod: (comparisonPeriod) => set({ comparisonPeriod }),
+
       resetAll: () => {
         localStorage.removeItem('salesflow-storage')
         set({
@@ -216,6 +241,8 @@ export const useAppStore = create<AppState>()(
           forecastLoading: false,
           forecastChartLoading: false,
           dataSource: 'none',
+          comparisonEnabled: false,
+          comparisonPeriod: null,
           isProcessed: false,
           isLoading: false,
           selectedPeriod: {
@@ -227,7 +254,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'salesflow-storage',
-      version: 6,
+      version: 7,
       migrate: (persistedState: any) => ({
         selectedPeriod: persistedState?.selectedPeriod ?? {
           year: new Date().getFullYear(),
@@ -235,7 +262,8 @@ export const useAppStore = create<AppState>()(
         },
         configuracion: {
           ...DEFAULT_CONFIG,
-          ...(persistedState?.configuracion ?? {}),
+          ...persistedState?.configuracion,
+          deepseek_api_key: persistedState?.configuracion?.deepseek_api_key ?? DEFAULT_CONFIG.deepseek_api_key,
         },
         orgId: persistedState?.orgId ?? '',
         dataSource: persistedState?.dataSource ?? 'none',

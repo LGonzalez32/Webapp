@@ -651,16 +651,17 @@ export function computeCommercialAnalysis(
   index?: SaleIndex,
 ): CommercialAnalysisResult {
   const { year, month } = selectedPeriod
-  const today = new Date()
-  const isCurrentMonth =
-    today.getFullYear() === year && today.getMonth() === month
-
-  const diasTotales = getDaysInMonth(year, month)
-  const diasTranscurridos = isCurrentMonth ? today.getDate() : diasTotales
-  const diasRestantes = Math.max(0, diasTotales - diasTranscurridos)
 
   const idx = index ?? buildSaleIndex(sales)
-  const fechaReferencia = idx.fechaReferencia.getTime() > 0 ? idx.fechaReferencia : today
+  const fechaReferencia = idx.fechaReferencia.getTime() > 0 ? idx.fechaReferencia : new Date()
+
+  // Determinar si el período seleccionado es el mes con la última fecha de datos
+  const isCurrentMonth =
+    fechaReferencia.getFullYear() === year && fechaReferencia.getMonth() === month
+
+  const diasTotales = getDaysInMonth(year, month)
+  const diasTranscurridos = isCurrentMonth ? fechaReferencia.getDate() : diasTotales
+  const diasRestantes = Math.max(0, diasTotales - diasTranscurridos)
 
   const prev = prevPeriod(year, month)
   const periodStart = startOfPeriod(year, month)

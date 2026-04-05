@@ -141,6 +141,7 @@ export interface Insight {
     tipo: 'perdida' | 'riesgo' | 'oportunidad'
   }
   detector?: string
+  trend?: 'improving' | 'worsening' | 'stable'
 }
 
 // ─── CLIENTES DORMIDOS ────────────────────────────────────────────────────────
@@ -256,11 +257,15 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
   displayContent?: string
+  source?: string
   timestamp: Date
   navegacion?: { ruta: string; label: string }
   isDeepAnalysis?: boolean
+  isError?: boolean
+  errorKey?: string
   followUps?: string[]
-  chart?: { type: 'bar' | 'line' | 'pie' | 'horizontal_bar'; title: string; data: { label: string; value: number }[]; color: 'green' | 'red' | 'blue' | 'mixed' } | null
+  chart?: { type: string; title: string; data: { label: string; value: number; target?: number; status?: string }[]; color?: string } | null
+  charts?: { type: string; title: string; data: { label: string; value: number; target?: number; status?: string }[]; color?: string }[]
 }
 
 // ─── INVENTARIO ANALÍTICO ─────────────────────────────────────────────────────
@@ -363,6 +368,8 @@ export interface Configuracion {
   umbral_normal: number
   tema: 'dark' | 'light'
   deepseek_api_key?: string
+  giro: string
+  giro_custom: string
 }
 
 // ─── MULTI-TENANT ─────────────────────────────────────────────────────────────
