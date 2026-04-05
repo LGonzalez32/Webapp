@@ -1,6 +1,6 @@
 import type { SaleRecord, MetaRecord, InventoryItem } from '../types'
 
-// ─── Comercializadora Los Pinos S.A. ──────────────────────────────────────────
+// ─── Los Pinos S.A. ──────────────────────────────────────────
 // Ene 2024 – Dic 2028 · 8 vendedores · 30 clientes · 20 productos
 // Ventas filtradas ≤ hoy · Metas completas 2024-2028 · Semilla determinística
 // Insights engineered: deterioro Carlos, dependencia Ana, mono-categoría Sandra,
@@ -407,7 +407,7 @@ export function getDemoData(): { sales: SaleRecord[]; metas: MetaRecord[]; inven
   return { sales, metas, inventory }
 }
 
-export const DEMO_EMPRESA = 'Comercializadora Los Pinos S.A.'
+export const DEMO_EMPRESA = 'Los Pinos S.A.'
 export const DEMO_PERIODO = (() => {
   const t = new Date()
   return { year: t.getFullYear(), month: t.getMonth() } // 0-indexed month, matches last filtered sale date

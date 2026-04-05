@@ -344,7 +344,7 @@ export default function UploadPage() {
   }
 
   const handleLoadDemo = () => {
-    setLoading({ title: 'Cargando demo...', subtitle: 'Generando datos de Comercializadora Los Pinos', progress: 30 })
+    setLoading({ title: 'Cargando demo...', subtitle: 'Generando datos de Los Pinos S.A.', progress: 30 })
     setTimeout(() => {
       const { sales, metas, inventory } = getDemoData()
       setSales(sales)
@@ -545,7 +545,7 @@ export default function UploadPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-[var(--sf-t1)] tracking-tight">Cargar Datos</h1>
-          <p className="text-[var(--sf-t3)] mt-1">Sube tus ventas y activa el monitor de riesgo comercial.</p>
+          <p className="text-[var(--sf-t3)] mt-1">Sube tus ventas y activa el análisis de riesgo comercial.</p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -571,7 +571,7 @@ export default function UploadPage() {
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold text-[var(--sf-t1)]">{'\u00BF'}Primera vez? Prueba con datos demo</p>
           <p className="text-xs text-[var(--sf-t3)] mt-0.5">
-            Comercializadora Los Pinos · 8 vendedores · 18 meses de historial
+            Los Pinos S.A. · 8 vendedores · 18 meses de historial
           </p>
         </div>
         <button

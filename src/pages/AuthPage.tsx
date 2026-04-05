@@ -121,7 +121,7 @@ export default function AuthPage() {
             <Zap className="w-6 h-6 text-black" />
           </div>
           <h1 className="text-2xl font-black text-[#00B894] tracking-tight">SalesFlow</h1>
-          <p className="text-sm text-zinc-500 mt-1">Monitor de Riesgo Comercial</p>
+          <p className="text-sm text-zinc-500 mt-1">Inteligencia Comercial para Equipos de Ventas</p>
         </div>
 
         {/* Card */}

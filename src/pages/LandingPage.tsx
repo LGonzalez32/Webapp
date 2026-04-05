@@ -11,7 +11,7 @@ export default function LandingPage() {
       <section className="relative overflow-hidden">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16 sm:py-24">
           <div className="grid lg:grid-cols-2 gap-12 items-center">
-            <div className="sf-fade-up">
+            <div className="">
               <h1
                 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold leading-tight tracking-tight"
                 style={{ color: 'var(--sf-t1)' }}
@@ -50,7 +50,7 @@ export default function LandingPage() {
               </div>
             </div>
             {/* Hero — dashboard mockup */}
-            <div className="sf-fade-up hidden lg:flex items-center justify-center relative" style={{ animationDelay: '0.15s' }}>
+            <div className=" hidden lg:flex items-center justify-center relative" >
               {/* Glow effect */}
               <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse at center, rgba(0,214,143,0.12) 0%, transparent 70%)' }} />
               <div className="w-full max-w-lg rounded-2xl overflow-hidden relative" style={{ boxShadow: '0 25px 50px rgba(0,214,143,0.1)', border: '1px solid rgba(51,65,85,0.5)' }}>
@@ -145,7 +145,7 @@ export default function LandingPage() {
       </section>
 
       {/* ─── Problem → Solution ──────────────────────────────── */}
-      <section className="sf-fade-up">
+      <section className="">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16 sm:py-20">
           <div className="grid md:grid-cols-2 gap-8 lg:gap-16">
             {/* Problem */}
@@ -183,7 +183,7 @@ export default function LandingPage() {
       </section>
 
       {/* ─── Features ─────────────────────────────────────────── */}
-      <section className="sf-fade-up" style={{ background: 'var(--sf-inset)' }}>
+      <section className="" style={{ background: 'var(--sf-inset)' }}>
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16 sm:py-20">
           <h2 className="text-2xl sm:text-3xl font-bold text-center mb-12" style={{ color: 'var(--sf-t1)' }}>
             ¿Qué hace SalesFlow por ti?
@@ -226,7 +226,7 @@ export default function LandingPage() {
       </section>
 
       {/* ─── How it works ─────────────────────────────────────── */}
-      <section className="sf-fade-up">
+      <section className="">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16 sm:py-20">
           <h2 className="text-2xl sm:text-3xl font-bold text-center mb-12" style={{ color: 'var(--sf-t1)' }}>
             Cómo funciona
@@ -269,7 +269,7 @@ export default function LandingPage() {
 
       {/* ─── Final CTA ────────────────────────────────────────── */}
       <section
-        className="sf-fade-up"
+        className=""
         style={{
           background: 'linear-gradient(135deg, rgba(0,214,143,0.06) 0%, rgba(0,214,143,0.02) 100%)',
           borderTop: '1px solid rgba(0,214,143,0.15)',
@@ -295,16 +295,6 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ─── Scroll animation CSS ─────────────────────────────── */}
-      <style>{`
-        .sf-fade-up {
-          animation: sf-fade-up 0.6s ease-out both;
-        }
-        @keyframes sf-fade-up {
-          from { opacity: 0; transform: translateY(24px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-      `}</style>
     </PublicLayout>
   )
 }

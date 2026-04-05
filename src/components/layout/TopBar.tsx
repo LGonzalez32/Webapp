@@ -52,7 +52,7 @@ export default function TopBar() {
     try { localStorage.setItem('sf_demo_badge_seen', 'true') } catch { /* */ }
   }
 
-  const page = PAGE_TITLES[location.pathname] ?? { title: 'SalesFlow', sub: 'Monitor de Riesgo Comercial' }
+  const page = PAGE_TITLES[location.pathname] ?? { title: 'SalesFlow', sub: 'Inteligencia Comercial' }
 
   const iconBtnClass = "sf-no-print p-2 rounded-lg hover:bg-[var(--sf-hover)] text-[var(--sf-t4)] hover:text-[var(--sf-t1)] transition-colors"
 

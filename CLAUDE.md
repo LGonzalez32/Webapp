@@ -102,7 +102,7 @@ Insights con impacto_economico (solo si has_venta_neta):
 ---
 
 ## DATOS DEMO
-Empresa: Comercializadora Los Pinos S.A.
+Empresa: Los Pinos S.A.
 8 vendedores, 12 productos, 11 clientes, 18 meses historial
 3 canales: Mostrador, Visita directa, Teléfono
 Inventario demo: 5 categorías activas

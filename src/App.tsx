@@ -89,6 +89,9 @@ export default function App() {
             <Route path="/configuracion" element={<ConfiguracionPage />} />
           </Route>
 
+          {/* Alias: /register → /login con modo registro */}
+          <Route path="/register" element={<Navigate to="/login?mode=register" replace />} />
+
           <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </Suspense>
