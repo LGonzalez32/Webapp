@@ -1,3 +1,4 @@
+import type { MouseEvent } from 'react'
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { Zap, Menu, X } from 'lucide-react'
@@ -10,7 +11,8 @@ export default function PublicNavbar() {
 
   const links = [
     { label: 'Inicio', href: '/' },
-    { label: 'Precios', href: '/pricing' },
+    { label: 'Funciones', href: '/#funciones' },
+    { label: 'Precios', href: '/#precios' },
   ]
 
   const isActive = (href: string) => location.pathname === href
@@ -35,20 +37,33 @@ export default function PublicNavbar() {
 
           {/* Desktop nav */}
           <div className="hidden md:flex items-center gap-8">
-            {links.map((l) => (
-              <Link
-                key={l.href}
-                to={l.href}
-                className="text-sm font-medium transition-colors"
-                style={{
-                  color: isActive(l.href) ? 'var(--sf-green, #059669)' : 'var(--sf-t3, #64748b)',
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--sf-t1, #1a1816)')}
-                onMouseLeave={(e) => (e.currentTarget.style.color = isActive(l.href) ? 'var(--sf-green, #059669)' : 'var(--sf-t3, #64748b)')}
-              >
-                {l.label}
-              </Link>
-            ))}
+            {links.map((l) => {
+              const isAnchor = l.href.includes('#')
+              const handleClick = isAnchor
+                ? (e: MouseEvent<HTMLAnchorElement>) => {
+                    if (location.pathname === '/') {
+                      e.preventDefault()
+                      const id = l.href.split('#')[1]
+                      document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
+                    }
+                  }
+                : undefined
+              return (
+                <Link
+                  key={l.href}
+                  to={isAnchor ? '/' : l.href}
+                  onClick={handleClick}
+                  className="text-sm font-medium transition-colors"
+                  style={{
+                    color: isActive(l.href) ? 'var(--sf-green, #059669)' : 'var(--sf-t3, #64748b)',
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--sf-t1, #1a1816)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.color = isActive(l.href) ? 'var(--sf-green, #059669)' : 'var(--sf-t3, #64748b)')}
+                >
+                  {l.label}
+                </Link>
+              )
+            })}
           </div>
 
           {/* Desktop CTA */}
@@ -105,19 +120,30 @@ export default function PublicNavbar() {
           }}
         >
           <div className="px-4 py-4 space-y-3">
-            {links.map((l) => (
-              <Link
-                key={l.href}
-                to={l.href}
-                onClick={() => setMobileOpen(false)}
-                className="block text-sm font-medium py-2"
-                style={{
-                  color: isActive(l.href) ? 'var(--sf-green, #059669)' : 'var(--sf-t2, #374151)',
-                }}
-              >
-                {l.label}
-              </Link>
-            ))}
+            {links.map((l) => {
+              const isAnchor = l.href.includes('#')
+              const handleClick = (e: MouseEvent<HTMLAnchorElement>) => {
+                setMobileOpen(false)
+                if (isAnchor && location.pathname === '/') {
+                  e.preventDefault()
+                  const id = l.href.split('#')[1]
+                  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
+                }
+              }
+              return (
+                <Link
+                  key={l.href}
+                  to={isAnchor ? '/' : l.href}
+                  onClick={handleClick}
+                  className="block text-sm font-medium py-2"
+                  style={{
+                    color: isActive(l.href) ? 'var(--sf-green, #059669)' : 'var(--sf-t2, #374151)',
+                  }}
+                >
+                  {l.label}
+                </Link>
+              )
+            })}
             <div className="pt-3 border-t space-y-2" style={{ borderColor: 'var(--sf-border, #e2e6ef)' }}>
               {session ? (
                 <Link

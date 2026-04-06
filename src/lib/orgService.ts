@@ -8,19 +8,21 @@ const BUCKET = 'org-data'
 export async function getUserOrg(userId: string): Promise<{
   org: Organization | null
   role: OrgRole | null
+  allowedPages: string[] | null
 }> {
   const { data: membership } = await supabase
     .from('organization_members')
-    .select('org_id, role, organizations(*)')
+    .select('org_id, role, allowed_pages, organizations(*)')
     .eq('user_id', userId)
     .single()
 
   if (membership) {
     const org = (membership as any).organizations as Organization
-    return { org, role: membership.role as OrgRole }
+    const allowedPages = (membership as any).allowed_pages as string[] | null
+    return { org, role: membership.role as OrgRole, allowedPages }
   }
 
-  return { org: null, role: null }
+  return { org: null, role: null, allowedPages: null }
 }
 
 export async function createOrg(
@@ -69,7 +71,7 @@ export async function removeMember(
 export async function updateMemberRole(
   orgId: string,
   userId: string,
-  newRole: 'editor' | 'viewer'
+  newRole: 'editor' | 'viewer' | 'admin'
 ): Promise<{ error: string | null }> {
   const { error } = await supabase
     .from('organization_members')
@@ -81,13 +83,40 @@ export async function updateMemberRole(
 }
 
 export async function getOrgMembersWithEmail(orgId: string): Promise<
-  Array<{ id: string; user_id: string; role: OrgRole; email: string | null; joined_at: string }>
+  Array<{
+    id: string; user_id: string; role: OrgRole; email: string | null;
+    joined_at: string; allowed_pages: string[] | null;
+    full_name: string | null; avatar_url: string | null;
+  }>
 > {
-  const { data } = await supabase
+  const { data: members } = await supabase
     .from('organization_members')
     .select('*')
     .eq('org_id', orgId)
-  return (data ?? []).map(m => ({ ...m, email: null }))
+
+  if (!members || members.length === 0) return []
+
+  const userIds = members.map(m => m.user_id)
+  const { data: profiles } = await supabase
+    .from('profiles')
+    .select('id, full_name, email, avatar_url')
+    .in('id', userIds)
+
+  const profileMap = new Map((profiles ?? []).map(p => [p.id, p]))
+
+  return members.map(m => {
+    const profile = profileMap.get(m.user_id)
+    return {
+      id: m.id,
+      user_id: m.user_id,
+      role: m.role as OrgRole,
+      email: profile?.email ?? null,
+      joined_at: m.joined_at,
+      allowed_pages: m.allowed_pages ?? null,
+      full_name: profile?.full_name ?? null,
+      avatar_url: profile?.avatar_url ?? null,
+    }
+  })
 }
 
 export async function getOrgStorageFiles(orgId: string): Promise<{
@@ -133,6 +162,17 @@ export async function updateOrgJoinPolicy(
     .from('organizations')
     .update({ allow_open_join: allowOpenJoin })
     .eq('id', orgId)
+  return { error: error?.message ?? null }
+}
+
+export async function updateMemberAllowedPages(
+  memberId: string,
+  allowedPages: string[] | null
+): Promise<{ error: string | null }> {
+  const { error } = await supabase
+    .from('organization_members')
+    .update({ allowed_pages: allowedPages })
+    .eq('id', memberId)
   return { error: error?.message ?? null }
 }
 

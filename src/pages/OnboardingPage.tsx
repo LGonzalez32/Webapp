@@ -14,8 +14,13 @@ type Tab = 'create' | 'join'
 
 const ROLE_META: Record<OrgRole, { label: string; description: string; icon: ReactNode }> = {
   owner: {
-    label: 'Administrador',
+    label: 'Propietario',
     description: 'Puedes cargar datos, gestionar miembros y configurar la organización.',
+    icon: <ShieldCheck className="w-4 h-4" />,
+  },
+  admin: {
+    label: 'Admin',
+    description: 'Puedes gestionar miembros, cargar datos y configurar la organización.',
     icon: <ShieldCheck className="w-4 h-4" />,
   },
   editor: {

@@ -32,27 +32,49 @@ export default function Sidebar() {
     navigate('/login')
   }
 
-  const PRINCIPAL: NavItem[] = [
+  const allowedPages = useOrgStore(s => s.allowedPages)
+  const isOwner = currentRole === 'owner'
+
+  // Determine which pages this user can see
+  const getVisiblePages = (): Set<string> => {
+    // Owner sees everything
+    if (isOwner || !currentRole) return new Set(['*'])
+    // Explicit allowed_pages array
+    if (allowedPages) return new Set(allowedPages)
+    // Defaults per role (null allowed_pages)
+    const base = ['/dashboard', '/vendedores', '/metas', '/clientes', '/rotacion',
+      '/departamentos', '/rendimiento', '/chat']
+    if (currentRole === 'admin') return new Set([...base, '/cargar', '/configuracion'])
+    if (currentRole === 'editor') return new Set([...base, '/cargar'])
+    return new Set(base) // viewer
+  }
+
+  const visiblePages = getVisiblePages()
+  const canSee = (href: string) => visiblePages.has('*') || visiblePages.has(href)
+
+  const ALL_PRINCIPAL: NavItem[] = [
     { label: 'Estado Comercial', href: '/dashboard', icon: AlertTriangle },
     { label: 'Vendedores',       href: '/vendedores', icon: Users },
     { label: 'Metas',            href: '/metas',      icon: Target },
   ]
 
-  const ANALISIS: NavItem[] = [
+  const ALL_ANALISIS: NavItem[] = [
     { label: 'Clientes',        href: '/clientes',    icon: UserCheck },
     { label: 'Rotación',        href: '/rotacion',    icon: RotateCcw },
     { label: 'Departamentos',   href: '/departamentos', icon: Map },
     { label: 'Rendimiento Anual', href: '/rendimiento', icon: TrendingUp },
   ]
 
-  // currentRole null means we couldn't determine — default to showing everything
-  const isViewer = currentRole === 'viewer'
-  const HERRAMIENTAS: NavItem[] = [
+  const ALL_HERRAMIENTAS: NavItem[] = [
     { label: 'Chat IA',        href: '/chat',          icon: Bot },
-    ...(!isViewer ? [{ label: 'Cargar datos',   href: '/cargar',        icon: Upload }] : []),
-    { label: 'Organización',   href: '/organizacion',  icon: Building2 },
+    { label: 'Cargar datos',   href: '/cargar',        icon: Upload },
+    ...(isOwner ? [{ label: 'Organización', href: '/organizacion', icon: Building2 }] : []),
     { label: 'Configuración',  href: '/configuracion', icon: Settings },
   ]
+
+  const PRINCIPAL = ALL_PRINCIPAL.filter(i => canSee(i.href))
+  const ANALISIS = ALL_ANALISIS.filter(i => canSee(i.href))
+  const HERRAMIENTAS = ALL_HERRAMIENTAS.filter(i => canSee(i.href))
 
   const NavLink: import('react').FC<{ item: NavItem }> = ({ item }) => {
     const active = location.pathname === item.href
@@ -127,11 +149,15 @@ export default function Sidebar() {
             <span className={`inline-block text-[9px] font-semibold px-1.5 py-0.5 rounded ${
               (currentRole ?? 'owner') === 'owner'
                 ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                : currentRole === 'editor'
-                  ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                  : 'bg-zinc-500/20 text-zinc-400 border border-zinc-500/30'
+                : currentRole === 'admin'
+                  ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                  : currentRole === 'editor'
+                    ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                    : 'bg-zinc-500/20 text-zinc-400 border border-zinc-500/30'
             }`}>
-              {(currentRole ?? 'owner') === 'owner' ? 'Propietario' : currentRole === 'editor' ? 'Editor' : 'Visor'}
+              {(currentRole ?? 'owner') === 'owner' ? 'Propietario'
+                : currentRole === 'admin' ? 'Admin'
+                : currentRole === 'editor' ? 'Editor' : 'Visor'}
             </span>
           </div>
         )}

@@ -382,7 +382,7 @@ export interface Organization {
   allow_open_join?: boolean
 }
 
-export type OrgRole = 'owner' | 'editor' | 'viewer'
+export type OrgRole = 'owner' | 'admin' | 'editor' | 'viewer'
 
 export interface OrgMember {
   id: string
@@ -390,6 +390,7 @@ export interface OrgMember {
   user_id: string
   role: OrgRole
   joined_at: string
+  allowed_pages?: string[] | null
 }
 
 /** @deprecated No usado en el flujo actual. El join se hace via link abierto (allow_open_join). */

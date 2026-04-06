@@ -117,6 +117,9 @@ export default function ConfiguracionPage() {
               className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[#00B894]/50 transition-all"
             >
               <option value="">Selecciona tu giro…</option>
+              {local.giro && !(GIRO_OPTIONS as readonly string[]).includes(local.giro) && local.giro !== 'Otro' && (
+                <option value={local.giro}>{local.giro}</option>
+              )}
               {GIRO_OPTIONS.map((g) => (
                 <option key={g} value={g}>{g}</option>
               ))}
