@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { cn } from '../../lib/utils'
+import { useDemoPath } from '../../lib/useDemoPath'
 import { salesInPeriod, prevPeriod } from '../../lib/analysis'
 import { useAppStore } from '../../store/appStore'
 import type { VendorAnalysis, Insight, InsightTipo, SaleRecord, ClienteDormido, DataAvailability } from '../../types'
@@ -295,11 +296,34 @@ export default function VendedorPanel({
   onClose,
 }: Props) {
   const navigate = useNavigate()
+  const dp = useDemoPath()
   const setChatContextVendedor = useAppStore(s => s.setChatContextVendedor)
   const recomendaciones = useRecomendaciones(v, sales, selectedPeriod, allVendorAnalysis)
   const vendorInsights = insights.filter((i) => i.vendedor === v.vendedor)
 
   const [expandedAlert, setExpandedAlert] = useState<string | null>(vendorInsights[0]?.id ?? null)
+  const [panelWidth, setPanelWidth] = useState(() => Math.max(400, window.innerWidth * 0.42))
+  const [isDragging, setIsDragging] = useState(false)
+  const dragging = useRef(false)
+
+  const handleResizeStart = useCallback((e: { preventDefault: () => void }) => {
+    e.preventDefault()
+    dragging.current = true
+    setIsDragging(true)
+    const onMove = (ev: MouseEvent) => {
+      if (!dragging.current) return
+      const w = window.innerWidth - ev.clientX
+      setPanelWidth(Math.max(400, Math.min(w, window.innerWidth * 0.85)))
+    }
+    const onUp = () => {
+      dragging.current = false
+      setIsDragging(false)
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [])
 
   // Inferir disponibilidad desde los datos si no se pasa
   const da = dataAvailability ?? {
@@ -312,6 +336,20 @@ export default function VendedorPanel({
     has_categoria: false,
     has_inventario: false,
   }
+
+  // USD values computed from raw sales when global metric is USD
+  const { configuracion } = useAppStore()
+  const showUSD = (configuracion.metricaGlobal ?? 'usd') === 'usd' && da.has_venta_neta
+  const moneda = configuracion.moneda
+  const ventaNetaPeriodo = useMemo(() => {
+    if (!showUSD) return null
+    return salesInPeriod(sales.filter(s => s.vendedor === v.vendedor), selectedPeriod.year, selectedPeriod.month)
+      .reduce((a, s) => a + (s.venta_neta ?? 0), 0)
+  }, [showUSD, sales, v.vendedor, selectedPeriod])
+  const proyeccionNeta = useMemo(() => {
+    if (!showUSD || ventaNetaPeriodo === null || !v.proyeccion_cierre || v.ventas_periodo === 0) return null
+    return Math.round((ventaNetaPeriodo / v.ventas_periodo) * v.proyeccion_cierre)
+  }, [showUSD, ventaNetaPeriodo, v.proyeccion_cierre, v.ventas_periodo])
 
   // Supervisor principal del vendedor (desde historial de ventas)
   const supervisor = useMemo(() => {
@@ -364,13 +402,21 @@ export default function VendedorPanel({
       <div
         className="fixed inset-y-0 right-0 z-50 flex flex-col overflow-hidden shadow-2xl"
         style={{
-          width: '100%',
-          maxWidth: 440,
+          width: panelWidth,
           background: 'var(--sf-page)',
           borderLeft: '1px solid var(--sf-border)',
           animation: 'sf-panel-in 300ms cubic-bezier(0.4,0,0.2,1) both',
         }}
       >
+        {/* ── Drag handle izquierdo ──────────────────────────────────────────── */}
+        <div
+          onMouseDown={handleResizeStart}
+          onMouseEnter={e => { if (!dragging.current) (e.currentTarget.firstElementChild as HTMLElement).style.background = 'var(--sf-border)' }}
+          onMouseLeave={e => { if (!dragging.current) (e.currentTarget.firstElementChild as HTMLElement).style.background = 'transparent' }}
+          style={{ position: 'absolute', top: 0, left: 0, bottom: 0, width: 6, cursor: 'col-resize', zIndex: 10 }}
+        >
+          <div style={{ position: 'absolute', top: 0, left: 2, bottom: 0, width: 2, background: isDragging ? 'var(--sf-t3)' : 'transparent', transition: 'background 150ms' }} />
+        </div>
         {/* ── Sección 1: Header ─────────────────────────────────────────────── */}
         <div className="relative shrink-0" style={{ padding: '24px 24px 16px', borderBottom: '1px solid var(--sf-border)' }}>
           {/* Contexto zona/canal */}
@@ -421,85 +467,136 @@ export default function VendedorPanel({
         {/* Contenido scrollable */}
         <div className="flex-1 overflow-y-auto">
 
-          {/* ── Sección 2: KPIs Principales ─────────────────────────────────── */}
+          {/* ── Sección 2: Pulso del Mes (2 KPIs) ────────────────────────── */}
           <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--sf-border)' }}>
+            <p className="text-[10px] font-bold uppercase tracking-widest mb-3" style={{ color: 'var(--sf-t5)' }}>PULSO DEL MES</p>
             <div className="grid grid-cols-2 gap-4">
-              {/* Ventas período */}
-              <div>
-                <p className="text-[11px] font-bold uppercase tracking-widest mb-2" style={{ color: 'var(--sf-t5)' }}>
-                  VENTAS {mesLabel}
-                </p>
-                <p style={{ ...mono, fontSize: 32, color: 'var(--sf-t1)', lineHeight: 1 }}>
-                  {v.ventas_periodo.toLocaleString()}
+              {/* Card 1: Ventas del mes */}
+              <div className="rounded-lg p-3" style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)' }}>
+                <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t5)' }}>VENTAS {mesLabel}</p>
+                <p style={{ ...mono, fontSize: 24, color: 'var(--sf-t1)', lineHeight: 1 }}>
+                  {showUSD && ventaNetaPeriodo !== null ? `${moneda} ${ventaNetaPeriodo.toLocaleString()}` : v.ventas_periodo.toLocaleString()}
                 </p>
                 {v.ventas_mes_anterior > 0 && (
-                  <p className="text-xs mt-1" style={{ color: varColor }}>
-                    {varSign}{varDiff.toLocaleString()} vs mismo mes año anterior
-                  </p>
+                  <p className="text-[10px] mt-1" style={{ color: varColor }}>{varSign}{v.variacion_pct !== null ? `${v.variacion_pct.toFixed(1)}%` : varDiff.toLocaleString()} vs mes anterior</p>
                 )}
               </div>
-
-              {/* Proyección cierre */}
-              <div>
-                <p className="text-[11px] font-bold uppercase tracking-widest mb-2" style={{ color: 'var(--sf-t5)' }}>
-                  PROYECCIÓN CIERRE
-                </p>
-                {v.proyeccion_cierre !== undefined ? (
+              {/* Card 2: Meta o Proyección */}
+              <div className="rounded-lg p-3" style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)' }}>
+                {da.has_metas && v.meta ? (
                   <>
-                    <p style={{ ...mono, fontSize: 32, color: proyColor, lineHeight: 1 }}>
-                      {v.proyeccion_cierre.toLocaleString()}
-                    </p>
-                    {da.has_metas && v.cumplimiento_pct !== undefined && (
-                      <p className="text-xs mt-1" style={{ color: proyColor }}>
-                        {v.cumplimiento_pct.toFixed(0)}% de meta
-                      </p>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t5)' }}>META DEL MES</p>
+                    <p style={{ ...mono, fontSize: 24, color: proyColor, lineHeight: 1 }}>{v.cumplimiento_pct?.toFixed(0) ?? '—'}%</p>
+                    {v.meta > 0 && v.ventas_periodo < v.meta && (
+                      <p className="text-[10px] mt-1" style={{ color: 'var(--sf-red)' }}>faltan {(v.meta - v.ventas_periodo).toLocaleString()} uds</p>
                     )}
                   </>
                 ) : (
-                  <p style={{ ...mono, fontSize: 32, color: 'var(--sf-t5)', lineHeight: 1 }}>—</p>
+                  <>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t5)' }}>PROYECCIÓN CIERRE</p>
+                    <p style={{ ...mono, fontSize: 24, color: proyColor, lineHeight: 1 }}>
+                      {v.proyeccion_cierre !== undefined ? v.proyeccion_cierre.toLocaleString() : '—'}
+                    </p>
+                    {v.ventas_mes_anterior > 0 && v.proyeccion_cierre !== undefined && (
+                      <p className="text-[10px] mt-1" style={{ color: v.proyeccion_cierre >= v.ventas_mes_anterior ? 'var(--sf-green)' : 'var(--sf-red)' }}>
+                        {v.proyeccion_cierre >= v.ventas_mes_anterior ? '+' : ''}{(v.proyeccion_cierre - v.ventas_mes_anterior).toLocaleString()} vs año ant.
+                      </p>
+                    )}
+                  </>
                 )}
               </div>
             </div>
           </div>
 
-          {/* ── Sección 3: KPIs Secundarios ─────────────────────────────────── */}
-          <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--sf-border)' }}>
-            <div className="grid grid-cols-2 gap-2">
-              {/* YTD actual */}
-              {v.ytd_actual !== undefined && v.ytd_actual > 0 && (
-                <KpiCard label={`YTD ${selectedPeriod.year}`} value={v.ytd_actual.toLocaleString()} />
-              )}
-              {/* YTD anterior */}
-              {v.ytd_anterior !== undefined && v.ytd_anterior > 0 && (
-                <KpiCard label={`YTD ${selectedPeriod.year - 1}`} value={v.ytd_anterior.toLocaleString()} muted />
-              )}
-              {/* Ritmo actual */}
-              {v.ritmo_diario !== undefined && (
-                <KpiCard label="RITMO ACTUAL" value={`${v.ritmo_diario.toFixed(1)}`} unit="uds/día" />
-              )}
-              {/* Ritmo necesario */}
-              {v.ritmo_necesario !== undefined && (
-                <KpiCard
-                  label="RITMO NECESARIO"
-                  value={`${v.ritmo_necesario.toFixed(1)}`}
-                  unit="uds/día"
-                  danger={v.ritmo_diario !== undefined && v.ritmo_diario < v.ritmo_necesario}
-                />
-              )}
-              {/* Ticket promedio — solo si has_venta_neta */}
-              {da.has_venta_neta && v.ticket_promedio !== undefined && (
-                <KpiCard label="TICKET PROMEDIO" value={`$${v.ticket_promedio.toFixed(2)}`} />
-              )}
-              {/* Clientes activos — solo si has_cliente */}
-              {da.has_cliente && v.clientes_activos !== undefined && (
-                <KpiCard label="CLIENTES ACTIVOS" value={String(v.clientes_activos)} />
-              )}
-              {/* Promedio 3M */}
-              {v.promedio_3m !== undefined && v.promedio_3m > 0 && (
-                <KpiCard label="PROMEDIO 3M" value={v.promedio_3m.toLocaleString()} unit="uds" />
-              )}
+          {/* ── Qué está funcionando (solo SUPERANDO) ────────────────────────── */}
+          {v.riesgo === 'superando' && (
+            <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--sf-border)' }}>
+              <p className="text-[11px] font-bold uppercase tracking-widest mb-3" style={{ color: 'var(--sf-t5)' }}>¿QUÉ ESTÁ FUNCIONANDO?</p>
+              <div className="rounded-lg p-3" style={{ background: 'var(--sf-green-bg)', border: '1px solid var(--sf-green-border)' }}>
+                <p className="text-[12px] leading-relaxed" style={{ color: 'var(--sf-t2)' }}>
+                  Mejor del equipo. {v.clientes_activos ?? 0} clientes activos comprando consistente.
+                  {v.cumplimiento_pct !== undefined && v.cumplimiento_pct > 100 && ` Superando meta con ${v.cumplimiento_pct.toFixed(0)}% de cumplimiento.`}
+                  {v.semanas_bajo_promedio === 0 && ' Lleva el mes completo sobre su promedio.'}
+                </p>
+              </div>
             </div>
-          </div>
+          )}
+
+          {/* ── Por qué cayó (CRÍTICO/RIESGO only) ────────────────────────── */}
+          {(v.riesgo === 'critico' || v.riesgo === 'riesgo') && (() => {
+            const caidaExplicada = vendorInsights.find(i =>
+              /caída explicada|caida explicada/i.test(i.titulo) || (i.tipo === 'riesgo_vendedor' && i.descripcion.includes('% de la caída'))
+            )
+            if (!caidaExplicada) return null
+            return (
+              <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--sf-border)' }}>
+                <p className="text-[11px] font-bold uppercase tracking-widest mb-3" style={{ color: 'var(--sf-t5)' }}>¿POR QUÉ CAYÓ?</p>
+                <div className="rounded-lg p-3" style={{ background: 'var(--sf-red-bg)', border: '1px solid var(--sf-red-border)' }}>
+                  <p className="text-[12px] leading-relaxed" style={{ color: 'var(--sf-t2)' }}>{caidaExplicada.descripcion}</p>
+                  {caidaExplicada.accion_sugerida && (
+                    <p className="text-[12px] font-medium mt-2" style={{ color: 'var(--sf-green)' }}>→ {caidaExplicada.accion_sugerida}</p>
+                  )}
+                </div>
+              </div>
+            )
+          })()}
+
+          {/* ── Top Productos del período ──────────────────────────────────── */}
+          {da.has_producto && (() => {
+            const periodSales = salesInPeriod(sales, selectedPeriod.year, selectedPeriod.month).filter(s => s.vendedor === v.vendedor)
+            const maxDay = periodSales.reduce((mx, s) => Math.max(mx, new Date(s.fecha).getDate()), 0)
+            const prevCutoff = new Date(selectedPeriod.year - 1, selectedPeriod.month, maxDay, 23, 59, 59, 999)
+            const prevPeriodSales = salesInPeriod(sales, selectedPeriod.year - 1, selectedPeriod.month).filter(s => s.vendedor === v.vendedor && s.fecha <= prevCutoff)
+            const map = new Map<string, { unidades: number; neta: number }>()
+            for (const s of periodSales) {
+              if (!s.producto) continue
+              const curr = map.get(s.producto) ?? { unidades: 0, neta: 0 }
+              curr.unidades += s.unidades; curr.neta += (s.venta_neta ?? 0)
+              map.set(s.producto, curr)
+            }
+            const prevMap = new Map<string, number>()
+            for (const s of prevPeriodSales) {
+              if (!s.producto) continue
+              prevMap.set(s.producto, (prevMap.get(s.producto) ?? 0) + s.unidades)
+            }
+            const top = Array.from(map.entries())
+              .map(([prod, d]) => ({ prod, ...d, ant: prevMap.get(prod) ?? 0 }))
+              .sort((a, b) => b.unidades - a.unidades)
+              .slice(0, 3)
+            if (top.length === 0) return null
+            return (
+              <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--sf-border)' }}>
+                <p className="text-[11px] font-bold uppercase tracking-widest mb-3" style={{ color: 'var(--sf-t5)' }}>TOP PRODUCTOS</p>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ textTransform: 'uppercase', fontSize: 10, color: 'var(--sf-t4)', fontWeight: 600, borderBottom: '1px solid var(--sf-border)' }}>
+                      <th style={{ paddingBottom: 4, textAlign: 'center', width: 20 }}>#</th>
+                      <th style={{ paddingBottom: 4, textAlign: 'left' }}>Producto</th>
+                      <th style={{ paddingBottom: 4, textAlign: 'right' }}>{selectedPeriod.year}</th>
+                      <th style={{ paddingBottom: 4, textAlign: 'right' }}>{selectedPeriod.year - 1}</th>
+                      <th style={{ paddingBottom: 4, textAlign: 'right' }}>Var %</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {top.map((item, i) => {
+                      const pct = item.ant > 0 ? ((item.unidades - item.ant) / item.ant) * 100 : null
+                      return (
+                        <tr key={item.prod}>
+                          <td style={{ padding: '3px 0', textAlign: 'center', color: 'var(--sf-t5)', fontWeight: 700, fontSize: 10 }}>{i + 1}</td>
+                          <td className="truncate" style={{ padding: '3px 4px', color: 'var(--sf-t2)', maxWidth: 120 }}>{item.prod}</td>
+                          <td style={{ padding: '3px 0', textAlign: 'right', color: 'var(--sf-t3)', fontFamily: "'DM Mono', monospace" }}>{item.unidades.toLocaleString()}</td>
+                          <td style={{ padding: '3px 0', textAlign: 'right', color: 'var(--sf-t4)', fontFamily: "'DM Mono', monospace" }}>{item.ant > 0 ? item.ant.toLocaleString() : '—'}</td>
+                          <td style={{ padding: '3px 0', textAlign: 'right', fontWeight: 600, fontFamily: "'DM Mono', monospace", color: pct === null ? 'var(--sf-t5)' : pct >= 0 ? '#10B981' : '#ef4444' }}>
+                            {pct === null ? '—' : `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )
+          })()}
 
           {/* ── Tendencia mensual (barras CSS) ─────────────────────────────── */}
           <TendenciaMensual sales={sales} vendedor={v.vendedor} selectedPeriod={selectedPeriod} />
@@ -542,7 +639,7 @@ export default function VendedorPanel({
                         <div className="flex items-center justify-between gap-2">
                           <span className="text-sm font-medium truncate" style={{ color: 'var(--sf-t1)' }}>{d.cliente}</span>
                           <span className={cn('shrink-0 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase border', rc.cls)}>
-                            {rc.label} {d.recovery_score}
+                            {rc.label}
                           </span>
                         </div>
                         <p className="text-[11px] leading-relaxed" style={{ color: 'var(--sf-t3)' }}>{d.recovery_explicacion}</p>
@@ -703,7 +800,7 @@ export default function VendedorPanel({
             }}
             onClick={() => {
               setChatContextVendedor(v)
-              navigate(`/chat?vendedor=${encodeURIComponent(v.vendedor)}`)
+              navigate(dp(`/chat?vendedor=${encodeURIComponent(v.vendedor)}`))
             }}
           >
             Analizar {v.vendedor} con IA →
@@ -814,10 +911,21 @@ function ClientesPrincipales({ sales, vendedor, selectedPeriod, clientesDormidos
       const d = new Date(s.fecha)
       return d.getFullYear() === year && d.getMonth() === month
     })
+    const maxDay = periodSales.reduce((mx, s) => Math.max(mx, new Date(s.fecha).getDate()), 0)
+    const prevCutoff = new Date(year - 1, month, maxDay, 23, 59, 59, 999)
+    const prevSales = sales.filter(s => {
+      if (s.vendedor !== vendedor || !s.cliente) return false
+      const d = new Date(s.fecha)
+      return d.getFullYear() === year - 1 && d.getMonth() === month && s.fecha <= prevCutoff
+    })
 
     const agg: Record<string, number> = {}
     periodSales.forEach(s => {
       agg[s.cliente!] = (agg[s.cliente!] ?? 0) + s.unidades
+    })
+    const prevAgg: Record<string, number> = {}
+    prevSales.forEach(s => {
+      prevAgg[s.cliente!] = (prevAgg[s.cliente!] ?? 0) + s.unidades
     })
 
     const total = Object.values(agg).reduce((a, b) => a + b, 0)
@@ -828,6 +936,7 @@ function ClientesPrincipales({ sales, vendedor, selectedPeriod, clientesDormidos
       .map(([cliente, uds]) => ({
         cliente,
         uds,
+        ant: prevAgg[cliente] ?? 0,
         pct: total > 0 ? (uds / total) * 100 : 0,
         dormido: dormidosSet.has(cliente),
       }))
@@ -847,39 +956,39 @@ function ClientesPrincipales({ sales, vendedor, selectedPeriod, clientesDormidos
       <p className="text-[11px] font-bold uppercase tracking-widest mb-3" style={{ color: 'var(--sf-t5)' }}>
         Clientes principales ({total})
       </p>
-      <table className="w-full">
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
         <thead>
-          <tr>
-            <th className="text-left text-[10px] font-semibold uppercase pb-1.5" style={{ color: 'var(--sf-t5)' }}>Cliente</th>
-            <th className="text-right text-[10px] font-semibold uppercase pb-1.5 w-16" style={{ color: 'var(--sf-t5)' }}>Uds</th>
-            <th className="text-right text-[10px] font-semibold uppercase pb-1.5 w-10" style={{ color: 'var(--sf-t5)' }}>%</th>
-            <th className="text-center text-[10px] font-semibold uppercase pb-1.5 w-8" style={{ color: 'var(--sf-t5)' }}>Est.</th>
+          <tr style={{ textTransform: 'uppercase', fontSize: 10, color: 'var(--sf-t4)', fontWeight: 600, borderBottom: '1px solid var(--sf-border)' }}>
+            <th style={{ paddingBottom: 4, textAlign: 'left' }}>Cliente</th>
+            <th style={{ paddingBottom: 4, textAlign: 'right' }}>{selectedPeriod.year}</th>
+            <th style={{ paddingBottom: 4, textAlign: 'right' }}>{selectedPeriod.year - 1}</th>
+            <th style={{ paddingBottom: 4, textAlign: 'right' }}>%</th>
+            <th style={{ paddingBottom: 4, textAlign: 'right' }}>Var %</th>
           </tr>
         </thead>
         <tbody>
-          {clientes.map(c => (
-            <tr key={c.cliente} style={{ borderBottom: '1px solid var(--sf-border)' }}>
-              <td
-                className="text-[12px] py-1.5 truncate max-w-0"
-                style={{ color: c.dormido ? 'var(--sf-red)' : 'var(--sf-t2)', fontWeight: c.dormido ? 500 : 400 }}
-              >
-                {c.cliente}
-              </td>
-              <td className="text-right text-[12px] py-1.5 tabular-nums" style={{ color: 'var(--sf-t2)', ...mono }}>
-                {c.uds.toLocaleString()}
-              </td>
-              <td className="text-right text-[12px] py-1.5 tabular-nums" style={{ color: 'var(--sf-t4)', ...mono }}>
-                {c.pct.toFixed(0)}%
-              </td>
-              <td className="text-center py-1.5">
-                <span
-                  className="inline-block w-2 h-2 rounded-full"
-                  style={{ background: c.dormido ? 'var(--sf-red)' : 'var(--sf-green)' }}
-                  title={c.dormido ? 'Dormido' : 'Activo'}
-                />
-              </td>
-            </tr>
-          ))}
+          {clientes.map(c => {
+            const varPct = c.ant > 0 ? ((c.uds - c.ant) / c.ant) * 100 : null
+            return (
+              <tr key={c.cliente}>
+                <td className="truncate" style={{ padding: '3px 4px 3px 0', color: c.dormido ? 'var(--sf-red)' : 'var(--sf-t2)', fontWeight: c.dormido ? 500 : 400, maxWidth: 120 }}>
+                  {c.cliente}
+                </td>
+                <td style={{ padding: '3px 0', textAlign: 'right', color: 'var(--sf-t3)', fontFamily: "'DM Mono', monospace" }}>
+                  {c.uds.toLocaleString()}
+                </td>
+                <td style={{ padding: '3px 0', textAlign: 'right', color: 'var(--sf-t4)', fontFamily: "'DM Mono', monospace" }}>
+                  {c.ant > 0 ? c.ant.toLocaleString() : '—'}
+                </td>
+                <td style={{ padding: '3px 0', textAlign: 'right', color: 'var(--sf-t4)', fontFamily: "'DM Mono', monospace" }}>
+                  {c.pct.toFixed(0)}%
+                </td>
+                <td style={{ padding: '3px 0', textAlign: 'right', fontWeight: 600, fontFamily: "'DM Mono', monospace", color: varPct === null ? 'var(--sf-t5)' : varPct >= 0 ? '#10B981' : '#ef4444' }}>
+                  {varPct === null ? '—' : `${varPct >= 0 ? '+' : ''}${varPct.toFixed(1)}%`}
+                </td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
       {concentracion && (

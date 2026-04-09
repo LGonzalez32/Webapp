@@ -21,6 +21,7 @@ interface WorkerInput {
   inventory: InventoryItem[]
   selectedPeriod: { year: number; month: number }
   configuracion: Configuracion
+  tipoMetaActivo?: 'uds' | 'usd'
 }
 
 interface EnrichInput {
@@ -92,7 +93,7 @@ self.onmessage = (event: MessageEvent<WorkerInput | EnrichInput>) => {
   }
 
   // ── Phase 1 — initial analysis ────────────────────────────────────────────
-  const { sales, metas, inventory, selectedPeriod, configuracion } = event.data as WorkerInput
+  const { sales, metas, inventory, selectedPeriod, configuracion, tipoMetaActivo } = event.data as WorkerInput
 
   const post = (message: string) =>
     (self as unknown as Worker).postMessage({ type: 'progress', message })
@@ -115,7 +116,7 @@ self.onmessage = (event: MessageEvent<WorkerInput | EnrichInput>) => {
 
   post('Calculando vendedores...')
   const { vendorAnalysis, teamStats, clientesDormidos, concentracionRiesgo } =
-    computeCommercialAnalysis(sales, metas, inventory, selectedPeriod, configuracion, index)
+    computeCommercialAnalysis(sales, metas, inventory, selectedPeriod, configuracion, index, tipoMetaActivo)
 
   let categoriasInventario = null
   let categoriasInventarioPorCategoria = null

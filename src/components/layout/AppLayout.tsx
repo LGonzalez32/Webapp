@@ -5,16 +5,27 @@ import TopBar from './TopBar'
 import { Toaster } from 'sonner'
 import { useAppStore } from '../../store/appStore'
 import { useAutoLoad } from '../../lib/useAutoLoad'
+import { useAnalysis } from '../../lib/useAnalysis'
 import WelcomeModal, { useShowWelcome } from '../onboarding/WelcomeModal'
+import OnboardingTour, { useShowTour } from '../onboarding/OnboardingTour'
 import TrialBanner from '../ui/TrialBanner'
 
 export default function AppLayout() {
   useAutoLoad()
+  useAnalysis()
   const tema = useAppStore((s) => s.configuracion.tema)
   const empresa = useAppStore((s) => s.configuracion.empresa)
   const location = useLocation()
+  const isProcessed = useAppStore((s) => s.isProcessed)
   const shouldShowWelcome = useShowWelcome()
   const [showWelcome, setShowWelcome] = useState(shouldShowWelcome)
+  const shouldShowTour = useShowTour(isProcessed)
+  const [showTour, setShowTour] = useState(false)
+
+  // Show tour after welcome modal closes and data is not loaded
+  useEffect(() => {
+    if (shouldShowTour && !showWelcome) setShowTour(true)
+  }, [shouldShowTour, showWelcome])
 
   useEffect(() => {
     if (tema === 'dark') {
@@ -38,6 +49,7 @@ export default function AppLayout() {
         </main>
       </div>
       {showWelcome && <WelcomeModal onClose={() => setShowWelcome(false)} />}
+      {showTour && <OnboardingTour onClose={() => setShowTour(false)} />}
     </div>
   )
 }

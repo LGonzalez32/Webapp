@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Zap, Loader2, Building2, Link as LinkIcon, CheckCircle2, ShieldCheck, Eye } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
@@ -58,9 +58,20 @@ export default function OnboardingPage() {
   const [moneda, setMoneda] = useState('MXN')
   const [giro, setGiro] = useState('')
   const [giroCustom, setGiroCustom] = useState('')
+  const [giroSearch, setGiroSearch] = useState('')
+  const [giroOpen, setGiroOpen] = useState(false)
+  const giroRef = useRef<HTMLDivElement>(null)
   const [inviteInput, setInviteInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Close giro combobox on click outside
+  useEffect(() => {
+    if (!giroOpen) return
+    const h = (e: MouseEvent) => { if (giroRef.current && !giroRef.current.contains(e.target as Node)) setGiroOpen(false) }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [giroOpen])
 
   // Pantalla de bienvenida intermedia
   const [welcome, setWelcome] = useState<{ orgName: string; role: OrgRole } | null>(null)
@@ -203,13 +214,20 @@ export default function OnboardingPage() {
             <Zap className="w-6 h-6 text-black" />
           </div>
           <h1 className="text-2xl font-black text-[#00B894] tracking-tight">SalesFlow</h1>
-          <p className="text-sm text-zinc-500 mt-1">Bienvenido</p>
+          <p className="text-sm text-zinc-500 mt-1">
+            {user?.user_metadata?.full_name
+              ? `¡Bienvenido, ${user.user_metadata.full_name.split(' ')[0]}!`
+              : '¡Bienvenido!'}
+          </p>
         </div>
 
         {/* Card */}
         <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8">
-          <h2 className="text-lg font-bold text-zinc-100 mb-1">Configura tu empresa</h2>
-          <p className="text-sm text-zinc-500 mb-6">Crea tu empresa o únete a una existente.</p>
+          <div className="flex items-center justify-between mb-1">
+            <h2 className="text-lg font-bold text-zinc-100">Configura tu empresa</h2>
+            <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400">Paso 1 de 1</span>
+          </div>
+          <p className="text-sm text-zinc-500 mb-6">Configura en 30 segundos y empieza a analizar.</p>
 
           {/* Tabs */}
           <div className="flex gap-1 bg-zinc-800 rounded-xl p-1 mb-6">
@@ -270,16 +288,35 @@ export default function OnboardingPage() {
                 <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
                   Giro del negocio
                 </label>
-                <select
-                  value={giro}
-                  onChange={(e) => { setGiro(e.target.value); if (e.target.value !== 'Otro') setGiroCustom('') }}
-                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 text-sm text-zinc-100 focus:outline-none focus:border-[#00B894] transition-colors"
-                >
-                  <option value="">Selecciona tu giro…</option>
-                  {GIRO_OPTIONS.map((g) => (
-                    <option key={g} value={g}>{g}</option>
-                  ))}
-                </select>
+                <div className="relative" ref={giroRef}>
+                  <input
+                    type="text"
+                    value={giroOpen ? giroSearch : giro}
+                    onChange={(e) => { setGiroSearch(e.target.value); setGiroOpen(true) }}
+                    onFocus={() => { setGiroOpen(true); setGiroSearch('') }}
+                    placeholder="Busca o selecciona tu giro…"
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-[#00B894] transition-colors"
+                  />
+                  {giroOpen && (() => {
+                    const q = giroSearch.toLowerCase()
+                    const filtered = GIRO_OPTIONS.filter(g => g.toLowerCase().includes(q))
+                    return filtered.length > 0 ? (
+                      <div className="absolute z-50 top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto rounded-xl border border-zinc-700 bg-zinc-800 shadow-xl">
+                        {filtered.map(g => (
+                          <button
+                            key={g}
+                            type="button"
+                            onClick={() => { setGiro(g); setGiroSearch(''); setGiroOpen(false); if (g !== 'Otro') setGiroCustom('') }}
+                            className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-700 transition-colors cursor-pointer"
+                            style={{ color: g === giro ? '#00B894' : '#e4e4e7' }}
+                          >
+                            {g}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null
+                  })()}
+                </div>
                 {giro === 'Otro' && (
                   <input
                     type="text"

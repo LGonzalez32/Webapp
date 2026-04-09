@@ -64,6 +64,8 @@ function insightMetaEnPeligro(
   sp: { year: number; month: number },
   da: DataAvailability,
   ticketVendedor: number,
+  clientesDormidos: ClienteDormido[] = [],
+  categoriaAnalysis: CategoriaAnalysis[] = [],
 ): Insight | null {
   if (!v.meta || !v.proyeccion_cierre) return null
   if (teamStats.dias_restantes <= 5) return null
@@ -109,13 +111,30 @@ function insightMetaEnPeligro(
     accionParts.push(`por ${v.canal_principal}`)
   }
 
+  // Cross-table enrichment
+  const crossParts: string[] = []
+  const dormidosVendedor = clientesDormidos.filter(c => normalizeStr(c.vendedor) === normalizeStr(v.vendedor))
+  if (dormidosVendedor.length > 0) {
+    const topDorm = dormidosVendedor.sort((a, b) => b.valor_historico - a.valor_historico)[0]
+    crossParts.push(`Cliente dormido: ${topDorm.cliente} (${topDorm.dias_sin_actividad} días sin comprar)`)
+  }
+  if (categoriaAnalysis.length > 0) {
+    const vendorCats = new Set(sales.filter(s => s.vendedor === v.vendedor && s.categoria).map(s => s.categoria!))
+    const catsColapso = categoriaAnalysis.filter(c => vendorCats.has(c.categoria) && c.tendencia === 'colapso')
+    if (catsColapso.length > 0) {
+      crossParts.push(`${catsColapso.map(c => c.categoria).join(', ')} cayó ${pct(Math.abs(catsColapso[0].variacion_pct))} — factor de mercado`)
+    }
+  }
+  const descParts = [`${v.vendedor} proyecta cerrar ${fmt(v.proyeccion_cierre)} uds de ${fmt(v.meta)} uds. Brecha: ${fmt(brecha)} uds. Quedan ${teamStats.dias_restantes} días.`]
+  if (crossParts.length > 0) descParts.push(crossParts.slice(0, 2).join('. ') + '.')
+
   const insight: Insight = {
     id: uid('meta-peligro'),
     tipo: 'riesgo_vendedor',
     prioridad: 'CRITICA',
     emoji: '🚨',
     titulo: `Meta en peligro — ${v.vendedor}`,
-    descripcion: `${v.vendedor} proyecta cerrar ${fmt(v.proyeccion_cierre)} uds de ${fmt(v.meta)} uds. Brecha: ${fmt(brecha)} uds. Quedan ${teamStats.dias_restantes} días.`,
+    descripcion: descParts.join(' '),
     vendedor: v.vendedor,
     valor_numerico: pctMeta,
     accion_sugerida: accionParts.length > 0 ? accionParts.join(' — ') : `Necesita ${fmt(brecha)} uds en ${teamStats.dias_restantes} días`,
@@ -223,6 +242,8 @@ function insightVendedorDeteriorado(
   sales: SaleRecord[],
   sp: { year: number; month: number },
   da: DataAvailability,
+  clientesDormidos: ClienteDormido[] = [],
+  categoriaAnalysis: CategoriaAnalysis[] = [],
 ): Insight | null {
   const { year, month } = sp
 
@@ -292,6 +313,21 @@ function insightVendedorDeteriorado(
 
   if (da.has_metas && v.cumplimiento_pct != null) {
     diagParts.push(`Proyección actual: ${v.cumplimiento_pct.toFixed(1)}% de meta`)
+  }
+
+  // Cross-table: dormant clients causing the drop
+  const dormidosV = clientesDormidos.filter(c => normalizeStr(c.vendedor) === normalizeStr(v.vendedor))
+  if (dormidosV.length > 0 && diagParts.length < 3) {
+    const topD = dormidosV.sort((a, b) => b.valor_historico - a.valor_historico)[0]
+    diagParts.push(`${topD.cliente} (${topD.dias_sin_actividad} días sin comprar) contribuye a la caída`)
+  }
+  // Cross-table: category collapse
+  if (categoriaAnalysis.length > 0 && diagParts.length < 4) {
+    const vendorCats = new Set(sales.filter(s => s.vendedor === v.vendedor && s.categoria).map(s => s.categoria!))
+    const catsDown = categoriaAnalysis.filter(c => vendorCats.has(c.categoria) && c.tendencia === 'colapso')
+    if (catsDown.length > 0) {
+      diagParts.push(`${catsDown[0].categoria} cayó ${pct(Math.abs(catsDown[0].variacion_pct))} a nivel empresa`)
+    }
   }
 
   return {
@@ -446,7 +482,9 @@ function insightClientesEnRiesgo(
     let desc = ''
     if (cr.tipo === 'dormido' && cr.dormidoRef) {
       const d = cr.dormidoRef
-      desc = `${d.cliente} · ${d.dias_sin_actividad} días sin comprar (frecuencia esperada: ${d.frecuencia_esperada_dias ?? 'N/A'} días). Recovery: ${d.recovery_label} (${d.recovery_score}/100).`
+      const labelEs = d.recovery_label === 'alta' ? 'Alta probabilidad' : d.recovery_label === 'recuperable' ? 'Recuperable' : d.recovery_label === 'dificil' ? 'Difícil' : 'Perdido'
+      const freqStr = d.frecuencia_esperada_dias && d.frecuencia_esperada_dias >= 2 ? ` (compraba cada ${d.frecuencia_esperada_dias} días)` : d.frecuencia_esperada_dias === 1 ? ' (compraba diariamente)' : ''
+      desc = `${d.cliente} · ${d.dias_sin_actividad} días sin comprar${freqStr}. Estado: ${labelEs}.`
       if (da.has_venta_neta) totalImpacto += d.valor_historico
     } else {
       const parts: string[] = [
@@ -847,6 +885,8 @@ function insightDobleRiesgo(
   clientesDormidos: ClienteDormido[],
   categoriasInventario: CategoriaInventario[],
   da: DataAvailability,
+  sales: SaleRecord[] = [],
+  categoriaAnalysis: CategoriaAnalysis[] = [],
 ): Insight[] {
   const insights: Insight[] = []
   for (const v of vendorAnalysis) {
@@ -857,7 +897,7 @@ function insightDobleRiesgo(
 
     const parts: string[] = [
       `${v.vendedor} está en estado ${v.riesgo} y tiene ${dormidos.length} clientes dormidos.`,
-      `Prioritario: ${top.cliente} · ${top.dias_sin_actividad} días sin comprar. Recovery: ${top.recovery_label} (${top.recovery_score}/100).`,
+      `Prioritario: ${top.cliente} · ${top.dias_sin_actividad} días sin comprar. Estado: ${top.recovery_label === 'alta' ? 'Alta probabilidad' : top.recovery_label === 'recuperable' ? 'Recuperable' : top.recovery_label === 'dificil' ? 'Difícil' : 'Perdido'}.`,
     ]
 
     if (da.has_canal && v.canal_principal) parts.push(`Contactar por: ${v.canal_principal}.`)
@@ -870,9 +910,19 @@ function insightDobleRiesgo(
     }
 
     if (da.has_metas && v.meta && v.proyeccion_cierre) {
-      const brecha = v.meta - v.proyeccion_cierre
-      if (brecha > 0 && top.valor_historico > 0) {
-        parts.push(`Reactivar ${top.cliente} cubriría ${Math.min(100, (top.valor_historico / brecha) * 100).toFixed(0)}% de su brecha.`)
+      const brechaV = v.meta - v.proyeccion_cierre
+      if (brechaV > 0) {
+        const mesesAct = new Set(sales.filter(s => s.cliente === top.cliente).map(s => `${new Date(s.fecha).getFullYear()}-${new Date(s.fecha).getMonth()}`)).size
+        const promMensual = mesesAct > 0 ? Math.round(top.valor_historico / mesesAct) : 0
+        if (promMensual > 0) parts.push(`Reactivar ${top.cliente} (~${fmt(promMensual)} uds/mes) cubriría ${Math.min(100, Math.round((promMensual / brechaV) * 100))}% de la brecha.`)
+      }
+    }
+    // Cross-table: categories in collapse for this client
+    if (categoriaAnalysis.length > 0) {
+      const clientCats = new Set(sales.filter(s => s.cliente === top.cliente && s.categoria).map(s => s.categoria!))
+      const catsDown = categoriaAnalysis.filter(c => clientCats.has(c.categoria) && c.tendencia === 'colapso')
+      if (catsDown.length > 0 && parts.length < 5) {
+        parts.push(`${catsDown.map(c => c.categoria).join(', ')} en colapso — puede ser tendencia de mercado.`)
       }
     }
 
@@ -1044,14 +1094,15 @@ function insightClienteDormidoInventario(
   const sorted = [...clienteMap.values()].sort((a, b) => b.priority - a.priority).slice(0, 5)
 
   return sorted.map(({ dormido, prods }) => {
-    const prodListStr = prods.map(p => {
-      const diasLabel = (p.dias_inventario ?? 0) >= 9999 ? 'sin rotación registrada' : `${p.dias_inventario} días sin rotación`
-      return `${p.producto} (${fmt(p.unidades_actuales)} uds en stock, ${diasLabel})`
-    }).join(', ')
+    const topProds = prods.slice(0, 3)
+    const prodListStr = topProds.map(p => {
+      const diasLabel = (p.dias_inventario ?? 0) >= 9999 ? 'sin rotación' : `${p.dias_inventario}d sin rotación`
+      return `${p.producto} (${fmt(p.unidades_actuales)} uds, ${diasLabel})`
+    }).join(', ') + (prods.length > 3 ? ` +${prods.length - 3} más` : '')
 
     const parts: string[] = [
       `${dormido.cliente} lleva ${dormido.dias_sin_actividad} días sin comprar. Productos que compraba y tienen inventario estancado: ${prodListStr}.`,
-      `Recovery: ${dormido.recovery_label} — compraba normalmente cada ${dormido.frecuencia_esperada_dias ?? 'N/A'} días.`,
+      `Estado: ${dormido.recovery_label === 'alta' ? 'Alta probabilidad' : dormido.recovery_label === 'recuperable' ? 'Recuperable' : dormido.recovery_label === 'dificil' ? 'Difícil' : 'Perdido'}${dormido.frecuencia_esperada_dias && dormido.frecuencia_esperada_dias >= 2 ? ` — compraba cada ${dormido.frecuencia_esperada_dias} días` : dormido.frecuencia_esperada_dias === 1 ? ' — compraba diariamente' : ''}.`,
     ]
     if (da.has_canal) {
       const canalSales = sales.filter(s => normalizeStr(s.vendedor) === normalizeStr(dormido.vendedor) && s.canal)
@@ -1136,53 +1187,66 @@ function insightCategoriaEnColapso(
   categoriasPorCliente: Map<string, Set<string>>,
 ): Insight[] {
   const { year, month } = sp
-  return categoriaAnalysis
+  const enColapso = categoriaAnalysis
     .filter(c => c.tendencia === 'colapso' && c.variacion_vs_pm3 <= -40)
     .sort((a, b) => a.variacion_vs_pm3 - b.variacion_vs_pm3)
-    .map(c => {
-      const caida = c.pm3 - c.ventas_periodo
-      const parts: string[] = [
-        `"${c.categoria}" cayó ${pct(Math.abs(c.variacion_vs_pm3))} vs su promedio histórico. Representa el ${c.participacion_pct.toFixed(1)}% de las ventas totales.`,
-      ]
 
-      const catNorm = normalizeStr(c.categoria)
-      const vendedoresExp: Record<string, number> = {}
-      periodSalesAll.filter(s => s.categoria && normalizeStr(s.categoria) === catNorm)
-        .forEach(s => { vendedoresExp[s.vendedor] = (vendedoresExp[s.vendedor] ?? 0) + s.unidades })
-      const topVend = Object.entries(vendedoresExp).sort(([, a], [, b]) => b - a).slice(0, 3).map(([v]) => v)
-      if (topVend.length > 0) parts.push(`Vendedores con mayor exposición: ${topVend.join(', ')}.`)
+  if (enColapso.length === 0) return []
 
-      if (da.has_cliente) {
-        const dormidosEnCat = dormidosNorm.filter(cd =>
-          categoriasPorCliente.get(cd.clienteNorm)?.has(catNorm) ?? false
-        ).slice(0, 3)
-        if (dormidosEnCat.length > 0) {
-          parts.push(`Clientes que compraban la categoría y redujeron: ${dormidosEnCat.map(d => d.cliente).join(', ')}.`)
-        }
-      }
+  // If 1 category: individual insight. If multiple: consolidate into 1.
+  if (enColapso.length === 1) {
+    const c = enColapso[0]
+    const caida = c.pm3 - c.ventas_periodo
+    const catNorm = normalizeStr(c.categoria)
+    const vendedoresExp: Record<string, number> = {}
+    periodSalesAll.filter(s => s.categoria && normalizeStr(s.categoria) === catNorm)
+      .forEach(s => { vendedoresExp[s.vendedor] = (vendedoresExp[s.vendedor] ?? 0) + s.unidades })
+    const topVend = Object.entries(vendedoresExp).sort(([, a], [, b]) => b - a).slice(0, 3).map(([v]) => v)
+    const parts = [
+      `"${c.categoria}" cayó ${pct(Math.abs(c.variacion_vs_pm3))} vs su promedio histórico (${fmt(Math.round(c.pm3))} → ${fmt(c.ventas_periodo)} uds).`,
+    ]
+    if (topVend.length > 0) parts.push(`Vendedores expuestos: ${topVend.join(', ')}.`)
+    const insight: Insight = {
+      id: uid('cat-colapso'), tipo: 'riesgo_producto', prioridad: 'CRITICA', emoji: '💥',
+      titulo: `Categoría en colapso — ${c.categoria}`,
+      descripcion: parts.join(' '), valor_numerico: Math.abs(c.variacion_vs_pm3),
+    }
+    if (da.has_venta_neta && ticketEquipo > 0 && caida > 0) {
+      insight.impacto_economico = { valor: Math.round(caida * ticketEquipo), descripcion: `ingreso perdido por caída de ${c.categoria}`, tipo: 'perdida' }
+    }
+    return [insight]
+  }
 
-      if (c.pm3 > 0 && c.ventas_periodo >= 0) {
-        parts.push(`Vendía ~${fmt(Math.round(c.pm3))} uds/mes, ahora ${fmt(c.ventas_periodo)} uds.`)
-      }
+  // Consolidated: multiple categories in collapse
+  const peor = enColapso[0]
+  const mejor = enColapso[enColapso.length - 1]
+  const caidaTotal = enColapso.reduce((a, c) => a + Math.max(0, c.pm3 - c.ventas_periodo), 0)
+  const resumen = enColapso.map(c => `${c.categoria} (${pct(Math.abs(c.variacion_vs_pm3))})`).join(', ')
+  const parts: string[] = [
+    `${enColapso.length} categorías en caída: ${resumen}.`,
+  ]
+  if (Math.abs(peor.variacion_vs_pm3 - mejor.variacion_vs_pm3) > 15) {
+    parts.push(`${peor.categoria} cae más que ${mejor.categoria} — puede haber un problema diferenciado.`)
+  }
+  // Vendors most exposed across all collapsing categories
+  const vendExp: Record<string, number> = {}
+  for (const c of enColapso) {
+    const catNorm = normalizeStr(c.categoria)
+    periodSalesAll.filter(s => s.categoria && normalizeStr(s.categoria) === catNorm)
+      .forEach(s => { vendExp[s.vendedor] = (vendExp[s.vendedor] ?? 0) + s.unidades })
+  }
+  const topVendAll = Object.entries(vendExp).sort(([, a], [, b]) => b - a).slice(0, 3).map(([v]) => v)
+  if (topVendAll.length > 0) parts.push(`Vendedores más expuestos: ${topVendAll.join(', ')}.`)
 
-      const insight: Insight = {
-        id: uid('cat-colapso'),
-        tipo: 'riesgo_producto',
-        prioridad: 'CRITICA',
-        emoji: '💥',
-        titulo: `Categoría en colapso — ${c.categoria}`,
-        descripcion: parts.join(' '),
-        valor_numerico: Math.abs(c.variacion_vs_pm3),
-      }
-      if (da.has_venta_neta && ticketEquipo > 0 && caida > 0) {
-        insight.impacto_economico = {
-          valor: Math.round(caida * ticketEquipo),
-          descripcion: `ingreso perdido por caída de categoría ${c.categoria}`,
-          tipo: 'perdida',
-        }
-      }
-      return insight
-    })
+  const insight: Insight = {
+    id: uid('cat-colapso'), tipo: 'riesgo_producto', prioridad: 'CRITICA', emoji: '💥',
+    titulo: `${enColapso.length} categorías en colapso`,
+    descripcion: parts.join(' '), valor_numerico: Math.abs(peor.variacion_vs_pm3),
+  }
+  if (da.has_venta_neta && ticketEquipo > 0 && caidaTotal > 0) {
+    insight.impacto_economico = { valor: Math.round(caidaTotal * ticketEquipo), descripcion: 'ingreso perdido por caída de categorías', tipo: 'perdida' }
+  }
+  return [insight]
 }
 
 // INSIGHT 16 — Superando meta (BAJA — período cerrado)
@@ -1620,14 +1684,14 @@ export function generateInsights(
   // ── Grupo 1 — Meta Individual ──
   if (da.has_metas) {
     for (const v of vendorAnalysis) {
-      all.push(insightMetaEnPeligro(v, teamStats, sales, sp, da, ticketPorVendedor.get(v.vendedor) ?? 0))
+      all.push(insightMetaEnPeligro(v, teamStats, sales, sp, da, ticketPorVendedor.get(v.vendedor) ?? 0, clientesDormidos, categoriaAnalysis))
     }
     all.push(insightEstadoMetaEquipo(teamStats, vendorAnalysis, sales, sp, da, ticketEquipo))
   }
 
   // ── Grupo 2 — Deterioro Vendedor ──
   const deterioros = vendorAnalysis
-    .map(v => insightVendedorDeteriorado(v, sales, sp, da))
+    .map(v => insightVendedorDeteriorado(v, sales, sp, da, clientesDormidos, categoriaAnalysis))
     .filter(Boolean) as Insight[]
   deterioros.sort((a, b) => (b.valor_numerico ?? 0) - (a.valor_numerico ?? 0))
   all.push(...deterioros.slice(0, 3))
@@ -1656,7 +1720,7 @@ export function generateInsights(
 
   // ── Grupo 5 — Cruzados ──
   if (da.has_cliente) {
-    all.push(...insightDobleRiesgo(vendorAnalysis, clientesDormidos, categoriasInventario, da))
+    all.push(...insightDobleRiesgo(vendorAnalysis, clientesDormidos, categoriasInventario, da, sales, categoriaAnalysis))
     all.push(...insightCaidaExplicada(vendorAnalysis, sales, clientesDormidos, categoriasInventario, sp, da))
   }
   if (da.has_cliente && da.has_inventario) {
@@ -1691,5 +1755,26 @@ export function generateInsights(
     all.push(...h5)
   }
 
-  return sortInsights(all.flat())
+  // ── Deduplication pass ──────────────────────────────────────────────────────
+  const flat = all.flat().filter(Boolean) as Insight[]
+
+  // Track vendors that already have a meta-en-peligro insight
+  const metaPeligroVendors = new Set(
+    flat.filter(i => i.id?.startsWith('meta-peligro')).map(i => i.vendedor).filter(Boolean)
+  )
+  // Remove deterioro for vendors already in meta-en-peligro (redundant)
+  const deduped = flat.filter(i => {
+    if (i.id?.startsWith('deterioro') && i.vendedor && metaPeligroVendors.has(i.vendedor)) return false
+    return true
+  })
+
+  // Limit caida-explicada to top 3 (by valor_numerico = % explained)
+  const caidaExps = deduped.filter(i => i.id?.startsWith('caida-explicada'))
+  if (caidaExps.length > 3) {
+    caidaExps.sort((a, b) => (b.valor_numerico ?? 0) - (a.valor_numerico ?? 0))
+    const keep = new Set(caidaExps.slice(0, 3).map(i => i.id))
+    return sortInsights(deduped.filter(i => !i.id?.startsWith('caida-explicada') || keep.has(i.id)))
+  }
+
+  return sortInsights(deduped)
 }

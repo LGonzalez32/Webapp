@@ -19,8 +19,12 @@ export interface SaleRecord {
 export interface MetaRecord {
   mes: number           // 1-12
   anio: number
-  meta: number
-  tipo_meta: 'unidades' | 'venta_neta'
+  meta_uds?: number     // meta en unidades
+  meta_usd?: number     // meta en USD (venta neta)
+  /** @deprecated — use meta_uds/meta_usd. Kept for migration compatibility */
+  meta?: number
+  /** @deprecated — use meta_uds/meta_usd */
+  tipo_meta?: 'unidades' | 'venta_neta'
   vendedor?:     string
   cliente?:      string
   producto?:     string
@@ -62,6 +66,8 @@ export interface VendorAnalysis {
   ventas_mes_anterior: number
   variacion_pct: number | null
   meta?: number
+  meta_uds?: number | null
+  meta_usd?: number | null
   cumplimiento_pct?: number
   proyeccion_cierre?: number
   ritmo_diario?: number
@@ -83,6 +89,7 @@ export interface VendorAnalysis {
   top_clientes_periodo: Array<{ cliente: string; unidades: number; venta_neta: number | null }> | null
   productos_ausentes: Array<{ producto: string; dias_sin_venta: number; ultimo_periodo: string }> | null
   canal_principal: string | null
+  filtro_meta?: { canal: string | null; departamento: string | null; producto: string | null } | null
   productos_lentos_con_historial: Array<{ producto: string; clasificacion_inventario: string; vendedor_vendio_antes: boolean; dias_sin_vender: number }> | null
 }
 
@@ -367,7 +374,7 @@ export interface Configuracion {
   umbral_baja_cobertura: number
   umbral_normal: number
   tema: 'dark' | 'light'
-  deepseek_api_key?: string
+  metricaGlobal: 'usd' | 'uds'
   giro: string
   giro_custom: string
 }

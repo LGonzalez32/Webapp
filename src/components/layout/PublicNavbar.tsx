@@ -19,10 +19,10 @@ export default function PublicNavbar() {
 
   return (
     <nav
-      className="sticky top-0 z-40 backdrop-blur-md border-b"
+      className="sticky top-0 z-40 border-b"
       style={{
-        background: 'rgba(var(--sf-bg-rgb, 255,255,255), 0.85)',
-        borderColor: 'var(--sf-border, #e2e6ef)',
+        background: '#f8f9fc',
+        borderColor: '#e2e6ef',
       }}
     >
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -39,26 +39,44 @@ export default function PublicNavbar() {
           <div className="hidden md:flex items-center gap-8">
             {links.map((l) => {
               const isAnchor = l.href.includes('#')
-              const handleClick = isAnchor
-                ? (e: MouseEvent<HTMLAnchorElement>) => {
-                    if (location.pathname === '/') {
-                      e.preventDefault()
-                      const id = l.href.split('#')[1]
-                      document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
+              if (isAnchor) {
+                const scrollToSection = (e: MouseEvent<HTMLAnchorElement>) => {
+                  e.preventDefault()
+                  if (location.pathname === '/') {
+                    const id = l.href.split('#')[1]
+                    const el = document.getElementById(id)
+                    if (el) {
+                      const top = el.getBoundingClientRect().top + window.scrollY - 80
+                      window.scrollTo({ top, behavior: 'smooth' })
                     }
+                  } else {
+                    window.location.href = l.href
                   }
-                : undefined
+                }
+                return (
+                  <a
+                    key={l.href}
+                    href={l.href}
+                    onClick={scrollToSection}
+                    className="text-sm font-medium transition-colors cursor-pointer"
+                    style={{ color: '#64748b' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.color = '#1a1816')}
+                    onMouseLeave={(e) => (e.currentTarget.style.color = '#64748b')}
+                  >
+                    {l.label}
+                  </a>
+                )
+              }
               return (
                 <Link
                   key={l.href}
-                  to={isAnchor ? '/' : l.href}
-                  onClick={handleClick}
+                  to={l.href}
                   className="text-sm font-medium transition-colors"
                   style={{
-                    color: isActive(l.href) ? 'var(--sf-green, #059669)' : 'var(--sf-t3, #64748b)',
+                    color: isActive(l.href) ? '#059669' : '#64748b',
                   }}
-                  onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--sf-t1, #1a1816)')}
-                  onMouseLeave={(e) => (e.currentTarget.style.color = isActive(l.href) ? 'var(--sf-green, #059669)' : 'var(--sf-t3, #64748b)')}
+                  onMouseEnter={(e) => (e.currentTarget.style.color = '#1a1816')}
+                  onMouseLeave={(e) => (e.currentTarget.style.color = isActive(l.href) ? '#059669' : '#64748b')}
                 >
                   {l.label}
                 </Link>
@@ -115,29 +133,45 @@ export default function PublicNavbar() {
         <div
           className="md:hidden border-t"
           style={{
-            background: 'var(--sf-card, #fff)',
+            background: '#ffffff',
             borderColor: 'var(--sf-border, #e2e6ef)',
           }}
         >
           <div className="px-4 py-4 space-y-3">
             {links.map((l) => {
               const isAnchor = l.href.includes('#')
-              const handleClick = (e: MouseEvent<HTMLAnchorElement>) => {
-                setMobileOpen(false)
-                if (isAnchor && location.pathname === '/') {
-                  e.preventDefault()
-                  const id = l.href.split('#')[1]
-                  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
-                }
+              if (isAnchor) {
+                return (
+                  <a
+                    key={l.href}
+                    href={l.href}
+                    onClick={(e) => {
+                      setMobileOpen(false)
+                      if (location.pathname === '/') {
+                        e.preventDefault()
+                        const id = l.href.split('#')[1]
+                        const el = document.getElementById(id)
+                        if (el) {
+                          const top = el.getBoundingClientRect().top + window.scrollY - 80
+                          window.scrollTo({ top, behavior: 'smooth' })
+                        }
+                      }
+                    }}
+                    className="block text-sm font-medium py-2"
+                    style={{ color: '#374151' }}
+                  >
+                    {l.label}
+                  </a>
+                )
               }
               return (
                 <Link
                   key={l.href}
-                  to={isAnchor ? '/' : l.href}
-                  onClick={handleClick}
+                  to={l.href}
+                  onClick={() => setMobileOpen(false)}
                   className="block text-sm font-medium py-2"
                   style={{
-                    color: isActive(l.href) ? 'var(--sf-green, #059669)' : 'var(--sf-t2, #374151)',
+                    color: isActive(l.href) ? '#059669' : '#374151',
                   }}
                 >
                   {l.label}

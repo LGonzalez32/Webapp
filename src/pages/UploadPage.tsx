@@ -167,7 +167,7 @@ function TablaEjemplo({ headers, rows }: { headers: { col: string; req: boolean 
 }
 
 export default function UploadPage() {
-  const { setSales, setMetas, setInventory, setIsProcessed, setSelectedPeriod, setDataSource, resetAll, configuracion, setConfiguracion, dataSource } = useAppStore()
+  const { setSales, setMetas, setInventory, setIsProcessed, setSelectedPeriod, setDataSource, resetAll, configuracion, setConfiguracion, dataSource, metas: existingMetas } = useAppStore()
   const { org } = useOrgStore()
   const canEdit = useOrgStore(s => s.canEdit())
   const { canUpload } = useUserRole()
@@ -182,6 +182,7 @@ export default function UploadPage() {
   const [discardedRowsMap, setDiscardedRowsMap] = useState<Record<string, DiscardedRow[]>>({})
   const [showDiscarded, setShowDiscarded] = useState(false)
   const [showSuccess, setShowSuccess] = useState(false)
+  const [showMetasConfirm, setShowMetasConfirm] = useState(false)
 
   const currentStepStatus = steps[currentStep]?.status
   useEffect(() => {
@@ -283,7 +284,7 @@ export default function UploadPage() {
     return items
   }, [steps, detectedCols])
 
-  const handleAnalyze = async () => {
+  const doAnalyze = async () => {
     const salesData = steps[0].parsedData ?? []
     const metasData = steps[1].parsedData ?? []
     const inventoryData = steps[2].parsedData ?? []
@@ -341,6 +342,15 @@ export default function UploadPage() {
 
     // Show success screen instead of navigating immediately
     setShowSuccess(true)
+  }
+
+  const handleAnalyze = () => {
+    const metasData = steps[1].parsedData ?? []
+    if (metasData.length > 0 && existingMetas.length > 0) {
+      setShowMetasConfirm(true)
+      return
+    }
+    doAnalyze()
   }
 
   const handleLoadDemo = () => {
@@ -566,20 +576,26 @@ export default function UploadPage() {
       </div>
 
       {/* Demo banner */}
-      <div className="flex items-center gap-4 p-4 rounded-xl bg-[var(--sf-green-bg)] border border-[var(--sf-green-border)]">
-        <span className="text-xl shrink-0">{'\u{1F9EA}'}</span>
+      <div className="flex items-center gap-4 p-5 rounded-xl" style={{ background: 'linear-gradient(135deg, var(--sf-green-bg) 0%, rgba(16,185,129,0.05) 100%)', border: '1px solid var(--sf-green-border)' }}>
+        <span className="text-2xl shrink-0">🚀</span>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-[var(--sf-t1)]">{'\u00BF'}Primera vez? Prueba con datos demo</p>
-          <p className="text-xs text-[var(--sf-t3)] mt-0.5">
-            Los Pinos S.A. · 8 vendedores · 18 meses de historial
+          <p className="text-sm font-bold" style={{ color: 'var(--sf-t1)' }}>
+            {dataSource === 'demo' ? 'Ya tienes datos demo cargados' : '¿Primera vez? Prueba con datos demo'}
+          </p>
+          <p className="text-xs mt-0.5" style={{ color: 'var(--sf-t3)' }}>
+            {dataSource === 'demo'
+              ? 'Sube tus propios datos para ver tu análisis real.'
+              : '93,013 registros · 8 vendedores · 18 meses de historial'}
           </p>
         </div>
-        <button
-          onClick={handleLoadDemo}
-          className="shrink-0 px-4 py-2 rounded-lg bg-emerald-500 text-white text-sm font-semibold hover:bg-emerald-600 transition-colors"
-        >
-          Cargar demo
-        </button>
+        {dataSource !== 'demo' && (
+          <button
+            onClick={handleLoadDemo}
+            className="shrink-0 px-4 py-2.5 rounded-lg bg-emerald-500 text-white text-sm font-semibold hover:bg-emerald-600 transition-colors"
+          >
+            Cargar demo
+          </button>
+        )}
       </div>
 
       {/* Step indicator */}
@@ -924,6 +940,28 @@ export default function UploadPage() {
           )}
         </div>
       </div>
+
+      {/* Modal: confirmar sobreescritura de metas */}
+      {showMetasConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.5)' }} onClick={() => setShowMetasConfirm(false)}>
+          <div className="rounded-xl p-6 shadow-2xl mx-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', maxWidth: 384 }} onClick={e => e.stopPropagation()}>
+            <p className="text-sm font-medium mb-1" style={{ color: 'var(--sf-t1)' }}>Ya tienes metas configuradas.</p>
+            <p className="text-sm mb-5" style={{ color: 'var(--sf-t3)' }}>¿Reemplazar todo?</p>
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => setShowMetasConfirm(false)}
+                className="px-4 py-2 rounded-lg text-sm transition-colors cursor-pointer"
+                style={{ color: 'var(--sf-t3)' }}
+              >Cancelar</button>
+              <button
+                onClick={() => { setShowMetasConfirm(false); doAnalyze() }}
+                className="px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer"
+                style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171', border: '1px solid rgba(239,68,68,0.3)' }}
+              >Sí, reemplazar</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

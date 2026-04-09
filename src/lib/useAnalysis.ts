@@ -15,6 +15,7 @@ export function useAnalysis() {
     isProcessed,
     selectedPeriod,
     configuracion,
+    tipoMetaActivo,
     setVendorAnalysis,
     setTeamStats,
     setClientesDormidos,
@@ -41,6 +42,7 @@ export function useAnalysis() {
     isProcessed: s.isProcessed,
     selectedPeriod: s.selectedPeriod,
     configuracion: s.configuracion,
+    tipoMetaActivo: s.tipoMetaActivo,
     setVendorAnalysis: s.setVendorAnalysis,
     setTeamStats: s.setTeamStats,
     setClientesDormidos: s.setClientesDormidos,
@@ -167,12 +169,12 @@ export function useAnalysis() {
       workerRef.current = null
     }
 
-    worker.postMessage({ sales, metas, inventory, selectedPeriod, configuracion })
+    worker.postMessage({ sales, metas, inventory, selectedPeriod, configuracion, tipoMetaActivo })
 
     return () => {
       worker.terminate()
       workerRef.current = null
       runningRef.current = false
     }
-  }, [sales, metas, inventory, isProcessed, selectedPeriod, configuracion]) // eslint-disable-line
+  }, [sales, metas, inventory, isProcessed, selectedPeriod, configuracion, tipoMetaActivo]) // eslint-disable-line
 }

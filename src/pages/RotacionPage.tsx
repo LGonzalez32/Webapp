@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useCallback, useEffect, type FC } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
+import { useDemoPath } from '../lib/useDemoPath'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
 import type { ClasificacionInventario, CategoriaInventario } from '../types'
@@ -239,22 +240,29 @@ const CategorySection: FC<CategorySectionProps> = ({ clasificacion, items, total
 export default function RotacionPage() {
   useAnalysis()
   const navigate = useNavigate()
+  const dp = useDemoPath()
   const location = useLocation()
   const highlightCategory = (location.state as { highlight?: string } | null)?.highlight ?? null
+  const alertCategoria = useMemo(() => new URLSearchParams(location.search).get('categoria'), [location.search])
+  const initialFilter = alertCategoria ?? highlightCategory
   const { categoriasInventario, dataAvailability, configuracion, sales, selectedPeriod, insights } = useAppStore()
 
   const [panelProducto, setPanelProducto] = useState<CategoriaInventario | null>(null)
-  const [searchText, setSearchText] = useState('')
-  const [filterCategory, setFilterCategory] = useState<string | null>(highlightCategory)
+  const [searchText, setSearchText] = useState(alertCategoria ?? '')
+  const [filterCategory, setFilterCategory] = useState<string | null>(initialFilter)
+  const [alertFilter, setAlertFilter] = useState<string | null>(alertCategoria)
   const [expandedProducto, setExpandedProducto] = useState<string | null>(null)
   const [analysisMap, setAnalysisMap] = useState<Record<string, { loading: boolean; text: string | null }>>({})
 
-  // Clear navigation state so it doesn't persist on in-page navigation
+  // Clear navigation state / scroll to top when arriving from alert
   useEffect(() => {
-    if (highlightCategory) {
+    if (alertCategoria) {
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+      window.history.replaceState({}, document.title, location.pathname)
+    } else if (highlightCategory) {
       window.history.replaceState({}, document.title)
     }
-  }, [highlightCategory])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleAnalyzeProducto = useCallback(async (item: CategoriaInventario) => {
     const key = item.producto
@@ -320,7 +328,7 @@ Reglas:
       ``,
       `Con base en este análisis, profundiza: ¿qué vendedores movían este producto, en qué canales se vendía, hay clientes que lo compraban y dejaron de hacerlo?`
     ].filter(Boolean).join('\n')
-    navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage, source: 'Rotación' } })
+    navigate(dp('/chat'), { state: { prefill: fullContext, displayPrefill: displayMessage, source: 'Rotación' } })
   }, [navigate])
 
   // Todos los hooks antes del return condicional
@@ -380,7 +388,7 @@ Reglas:
           </p>
         </div>
         <button
-          onClick={() => navigate('/cargar')}
+          onClick={() => navigate(dp('/cargar'))}
           className="flex items-center gap-2 px-4 py-2 bg-[#00B894] text-black font-bold rounded-xl text-sm hover:bg-[#00a884] transition-colors"
         >
           <Upload className="w-4 h-4" />
@@ -395,6 +403,18 @@ Reglas:
 
   return (
     <div style={{ paddingBottom: '80px' }} className="animate-in fade-in duration-500">
+
+      {/* Alert filter banner */}
+      {alertFilter && (
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm mb-3" style={{ background: 'rgba(59,130,246,0.1)', color: '#60a5fa', border: '1px solid rgba(59,130,246,0.2)' }}>
+          <span>Filtrado: <strong>{alertFilter}</strong></span>
+          <button
+            onClick={() => { setAlertFilter(null); setSearchText(''); setFilterCategory(null) }}
+            className="ml-auto text-base leading-none cursor-pointer"
+            style={{ color: '#60a5fa' }}
+          >×</button>
+        </div>
+      )}
 
       {/* Page header */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '16px' }}>

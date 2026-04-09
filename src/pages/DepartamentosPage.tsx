@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback, useRef, type CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useDemoPath } from '../lib/useDemoPath'
 import { useAppStore } from '../store/appStore'
 import { callAI } from '../lib/chatService'
 import { DEPTS } from '../lib/deptPaths'
@@ -23,6 +24,8 @@ type DeptStatus = 'arriba' | 'abajo' | 'sin_base' | 'sin_datos'
 interface DeptData {
   ytdActual: number
   ytdAnterior: number
+  ytdActualNeto: number
+  ytdAnteriorNeto: number
   variacion_pct: number | null
   status: DeptStatus
 }
@@ -107,10 +110,14 @@ export default function DepartamentosPage() {
   const sales = useAppStore(s => s.sales)
   const { year, month } = useAppStore(s => s.selectedPeriod)
   const configuracion = useAppStore(s => s.configuracion)
-
+  const dataAvailability = useAppStore(s => s.dataAvailability)
 
   const [hovered, setHovered] = useState<string | null>(null)
+  const [filterMes, setFilterMes] = useState<number | null>(null)
+  const [filterCanal, setFilterCanal] = useState<string | null>(null)
+  const metricaDept: 'uds' | 'usd' = (dataAvailability.has_venta_neta ? (configuracion.metricaGlobal ?? 'usd') : 'uds') as 'uds' | 'usd'
   const navigate = useNavigate()
+  const dp = useDemoPath()
   const [insightDept, setInsightDept] = useState<string | null>(null)
   const [insightText, setInsightText] = useState('')
   const [insightLoading, setInsightLoading] = useState(false)
@@ -128,6 +135,8 @@ export default function DepartamentosPage() {
     if (!sales.length) return {}
     const ytdActual: Record<string, number> = {}
     const ytdAnterior: Record<string, number> = {}
+    const ytdActualNeto: Record<string, number> = {}
+    const ytdAnteriorNeto: Record<string, number> = {}
 
     for (const s of sales) {
       if (!s.departamento) continue
@@ -135,8 +144,26 @@ export default function DepartamentosPage() {
       if (!dept) continue
       const d = new Date(s.fecha)
       const y = d.getFullYear(), m = d.getMonth()
-      if (y === year && m <= month)       ytdActual[dept]   = (ytdActual[dept]   ?? 0) + s.unidades
-      if (y === year - 1 && m <= month)   ytdAnterior[dept] = (ytdAnterior[dept] ?? 0) + s.unidades
+      if (filterCanal && s.canal !== filterCanal) continue
+      if (filterMes !== null) {
+        if (y === year && m === filterMes) {
+          ytdActual[dept]      = (ytdActual[dept]      ?? 0) + s.unidades
+          ytdActualNeto[dept]  = (ytdActualNeto[dept]  ?? 0) + (s.venta_neta ?? 0)
+        }
+        if (y === year - 1 && m === filterMes) {
+          ytdAnterior[dept]     = (ytdAnterior[dept]     ?? 0) + s.unidades
+          ytdAnteriorNeto[dept] = (ytdAnteriorNeto[dept] ?? 0) + (s.venta_neta ?? 0)
+        }
+      } else {
+        if (y === year && m <= month) {
+          ytdActual[dept]      = (ytdActual[dept]      ?? 0) + s.unidades
+          ytdActualNeto[dept]  = (ytdActualNeto[dept]  ?? 0) + (s.venta_neta ?? 0)
+        }
+        if (y === year - 1 && m <= month) {
+          ytdAnterior[dept]     = (ytdAnterior[dept]     ?? 0) + s.unidades
+          ytdAnteriorNeto[dept] = (ytdAnteriorNeto[dept] ?? 0) + (s.venta_neta ?? 0)
+        }
+      }
     }
 
     const res: Record<string, DeptData> = {}
@@ -145,12 +172,14 @@ export default function DepartamentosPage() {
       const a = ytdActual[dept] ?? 0, b = ytdAnterior[dept] ?? 0
       const v = b > 0 ? Math.round(((a - b) / b) * 100) : null
       res[dept] = {
-        ytdActual: a, ytdAnterior: b, variacion_pct: v,
+        ytdActual: a, ytdAnterior: b,
+        ytdActualNeto: ytdActualNeto[dept] ?? 0, ytdAnteriorNeto: ytdAnteriorNeto[dept] ?? 0,
+        variacion_pct: v,
         status: a === 0 ? 'sin_datos' : v === null ? 'sin_base' : v >= 0 ? 'arriba' : 'abajo',
       }
     })
     return res
-  }, [sales, year, month])
+  }, [sales, year, month, filterMes, filterCanal])
 
   const sorted = useMemo(() =>
     (Object.entries(deptData) as [string, DeptData][])
@@ -161,6 +190,11 @@ export default function DepartamentosPage() {
   const total = sorted.reduce((s, [, d]) => s + d.ytdActual, 0)
   const totalAnterior = sorted.reduce((s, [, d]) => s + d.ytdAnterior, 0)
   const totalVar = totalAnterior > 0 ? Math.round(((total - totalAnterior) / totalAnterior) * 100) : null
+  const totalNeto = sorted.reduce((s, [, d]) => s + d.ytdActualNeto, 0)
+  const totalAnteriorNeto = sorted.reduce((s, [, d]) => s + d.ytdAnteriorNeto, 0)
+
+  const useUSD = metricaDept === 'usd' && dataAvailability.has_venta_neta
+  const fmtVal = (uds: number, neto: number) => useUSD ? `${configuracion.moneda} ${Math.round(neto).toLocaleString()}` : uds.toLocaleString()
 
   const sobreAnterior = sorted.filter(([, d]) => d.status === 'arriba').length
   const bajoAnterior = sorted.filter(([, d]) => d.status === 'abajo').length
@@ -173,6 +207,14 @@ export default function DepartamentosPage() {
   const onLeave = useCallback(() => setHovered(null), [])
 
   const mesLabel = new Date(year, month).toLocaleDateString('es', { month: 'long' })
+
+  const mesesDisponibles = useMemo(() =>
+    [...new Set(sales.filter(s => {const d = new Date(s.fecha); return d.getFullYear() === year}).map(s => new Date(s.fecha).getMonth()))].sort((a, b) => a - b),
+  [sales, year])
+
+  const canalesDisponibles = useMemo(() =>
+    [...new Set(sales.filter(s => s.canal).map(s => s.canal!))].sort(),
+  [sales])
 
   // ── Insight IA ───────────────────────────────────────────────────────────────
   const generateInsight = useCallback(async (dept: string) => {
@@ -373,12 +415,40 @@ export default function DepartamentosPage() {
     <div className="p-6 max-w-[1400px] mx-auto">
 
       {/* ── Header ── */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '20px' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-[var(--sf-t1)]">Ventas por Departamento</h1>
           <p style={{ fontSize: '12px', opacity: 0.5, margin: '3px 0 0' }}>
-            YTD {year} · vs {year - 1}
+            {filterMes !== null ? `${['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'][filterMes]} ${year} · vs ${year - 1}` : `YTD ${year} · vs ${year - 1}`}
           </p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Filtro por mes */}
+          <select
+            value={filterMes ?? ''}
+            onChange={e => setFilterMes(e.target.value === '' ? null : Number(e.target.value))}
+            className="focus:outline-none cursor-pointer"
+            style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderRadius: 8, color: 'var(--sf-t3)', fontSize: 12, padding: '5px 10px' }}
+          >
+            <option value="">YTD (acumulado)</option>
+            {mesesDisponibles.map(m => (
+              <option key={m} value={m}>{['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'][m]}</option>
+            ))}
+          </select>
+          {/* Filtro por canal */}
+          {canalesDisponibles.length > 0 && (
+            <select
+              value={filterCanal ?? ''}
+              onChange={e => setFilterCanal(e.target.value === '' ? null : e.target.value)}
+              className="focus:outline-none cursor-pointer"
+              style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderRadius: 8, color: 'var(--sf-t3)', fontSize: 12, padding: '5px 10px' }}
+            >
+              <option value="">Todos los canales</option>
+              {canalesDisponibles.map(c => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          )}
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '4px 12px', borderRadius: '8px', fontSize: '12px', border: '1px solid rgba(16,185,129,0.2)' }}>
@@ -447,7 +517,7 @@ export default function DepartamentosPage() {
                       ``,
                       `Con base en este análisis, profundiza: ¿qué vendedores explican el resultado, hay migración de canal, qué productos están cayendo en este departamento?`
                     ].filter(Boolean).join('\n')
-                    navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage, source: 'Departamentos' } })
+                    navigate(dp('/chat'), { state: { prefill: fullContext, displayPrefill: displayMessage, source: 'Departamentos' } })
                   }}
                   style={{
                     background: 'rgba(29,158,117,0.12)', border: '1px solid rgba(29,158,117,0.35)',
@@ -568,9 +638,9 @@ export default function DepartamentosPage() {
                   <>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
                       <span style={{ fontSize: '13px', fontWeight: 600, minWidth: '120px' }}>{hovered}</span>
-                      <span style={{ fontSize: '12px', opacity: 0.7 }}>{hovData.ytdActual.toLocaleString()} uds</span>
+                      <span style={{ fontSize: '12px', opacity: 0.7 }}>{fmtVal(hovData.ytdActual, hovData.ytdActualNeto)}</span>
                       {hovData.ytdAnterior > 0 && (
-                        <span style={{ fontSize: '12px', opacity: 0.4 }}>{hovData.ytdAnterior.toLocaleString()} uds</span>
+                        <span style={{ fontSize: '12px', opacity: 0.4 }}>{fmtVal(hovData.ytdAnterior, hovData.ytdAnteriorNeto)}</span>
                       )}
                       {hovData.variacion_pct != null && (
                         <span style={{ fontSize: '13px', fontWeight: 700, color: hovData.status === 'arriba' ? '#1D9E75' : '#E24B4A' }}>
@@ -670,9 +740,9 @@ export default function DepartamentosPage() {
                               }} />
                             </div>
                           </td>
-                          <td style={{ padding: '9px 12px', fontSize: '13px', fontWeight: 500, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{data.ytdActual.toLocaleString()}</td>
+                          <td style={{ padding: '9px 12px', fontSize: '13px', fontWeight: 500, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtVal(data.ytdActual, data.ytdActualNeto)}</td>
                           <td style={{ padding: '9px 12px', fontSize: '12px', opacity: 0.4, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                            {data.ytdAnterior > 0 ? data.ytdAnterior.toLocaleString() : '—'}
+                            {data.ytdAnterior > 0 ? fmtVal(data.ytdAnterior, data.ytdAnteriorNeto) : '—'}
                           </td>
                           <td style={{ padding: '9px 12px', textAlign: 'right' }}>
                             {varPct != null ? (
@@ -736,9 +806,9 @@ export default function DepartamentosPage() {
                     })}
                     <tr style={{ borderTop: '1px solid var(--sf-border)', background: 'rgba(29,158,117,0.06)' }}>
                       <td style={{ padding: '11px 16px', fontSize: '12px', fontWeight: 600, letterSpacing: '0.05em', color: '#1D9E75', borderLeft: '2px solid #1D9E75' }}>TOTAL</td>
-                      <td style={{ padding: '11px 12px', fontSize: '13px', fontWeight: 600, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{total.toLocaleString()}</td>
+                      <td style={{ padding: '11px 12px', fontSize: '13px', fontWeight: 600, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtVal(total, totalNeto)}</td>
                       <td style={{ padding: '11px 12px', fontSize: '12px', opacity: 0.4, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                        {totalAnterior > 0 ? totalAnterior.toLocaleString() : '—'}
+                        {totalAnterior > 0 ? fmtVal(totalAnterior, totalAnteriorNeto) : '—'}
                       </td>
                       <td style={{ padding: '11px 12px', fontSize: '12px', fontWeight: 600, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: totalVar != null ? (totalVar >= 0 ? '#1D9E75' : '#E24B4A') : 'rgba(255,255,255,0.3)' }}>
                         {totalVar != null ? `${totalVar >= 0 ? '+' : ''}${totalVar}%` : '—'}
@@ -787,7 +857,7 @@ export default function DepartamentosPage() {
                             ``,
                             `Con base en este análisis, profundiza: ¿qué vendedores explican el resultado, hay migración de canal, qué productos están cayendo en este departamento?`
                           ].filter(Boolean).join('\n')
-                          navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage, source: 'Departamentos' } })
+                          navigate(dp('/chat'), { state: { prefill: fullContext, displayPrefill: displayMessage, source: 'Departamentos' } })
                         }}
                         className="text-[12px] text-[var(--sf-t5)] hover:text-[var(--sf-t2)] transition-colors flex items-center gap-1 cursor-pointer"
                       >

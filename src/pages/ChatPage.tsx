@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback, memo } from 'react'
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
@@ -7,12 +7,10 @@ import type { ChartData } from '../lib/chatService'
 import type { ChatMessage as BaseChatMessage, ChatMessage } from '../types'
 import type { ChatContext } from '../lib/chatService'
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
-import { Send, Loader2, Zap, ArrowRight, ExternalLink, BrainCircuit, Copy, Check, RotateCcw, TrendingDown, Target, Users, BarChart3, AlertCircle, Share2, ImageIcon, FileText } from 'lucide-react'
-import html2canvas from 'html2canvas'
+import { Send, Loader2, Zap, ArrowRight, ExternalLink, BrainCircuit, RotateCcw, TrendingDown, Target, Users, BarChart3, AlertCircle } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { format } from 'date-fns'
 import { toast } from 'sonner'
-import { copyToClipboard } from '../lib/exportUtils'
 
 const ERROR_MESSAGES: Record<string, { text: string; canRetry: boolean }> = {
   CONFIG_MISSING: { text: 'API key no configurada. Ve a Configuración → Asistente IA.', canRetry: false },
@@ -302,7 +300,7 @@ const tooltipStyle = {
   fontSize: 12,
 }
 
-function InlineChart({ chart }: { chart: ChartData }) {
+const InlineChart = memo(function InlineChart({ chart }: { chart: ChartData }) {
   const getFill = (entry: { value: number }) =>
     chart.color === 'mixed'
       ? entry.value >= 0 ? CHART_COLORS.green : CHART_COLORS.red
@@ -644,12 +642,12 @@ function InlineChart({ chart }: { chart: ChartData }) {
   }
 
   return null
-}
+})
 
 // ─── Componente de renderizado de contenido parseado ──────────────────────────
 
-function ParsedContent({ content }: { content: string }) {
-  const segments = parseContent(content)
+const ParsedContent = memo(function ParsedContent({ content }: { content: string }) {
+  const segments = useMemo(() => parseContent(content), [content])
 
   return (
     <div>
@@ -658,7 +656,7 @@ function ParsedContent({ content }: { content: string }) {
       ))}
     </div>
   )
-}
+})
 
 function getDynamicSuggestions(vendorAnalysis: any[], clientesDormidos: any[], teamStats: any, categoriasInventario: any[]): string[] {
   const suggestions: string[] = []
@@ -769,12 +767,13 @@ export default function ChatPage() {
     chatMessages: messages, setChatMessages: setMessages, addChatMessage, clearChatMessages,
   } = useAppStore()
   const [input, setInput] = useState('')
+  const [chatSourceBadge, setChatSourceBadge] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [isStreaming, setIsStreaming] = useState(false)
   const [loadingText, setLoadingText] = useState('Analizando tus datos...')
   const [isDeepLoading, setIsDeepLoading] = useState(false)
+  const [showNewConvModal, setShowNewConvModal] = useState(false)
   const [profundizandoIndex, setProfundizandoIndex] = useState<number | null>(null)
-  const [copiedMsgIdx, setCopiedMsgIdx] = useState<number | null>(null)
   const [activeEntity, setActiveEntity] = useState<{
     type: 'vendedor' | 'cliente' | 'canal' | 'producto'
     name: string
@@ -782,6 +781,14 @@ export default function ChatPage() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const lastFailedRef = useRef('')
   const streamingContentRef = useRef('')
+  const renderTickRef = useRef<number | null>(null)
+  const isNearBottomRef = useRef(true)
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100
+  }, [])
 
   const chatContext: ChatContext = useMemo(() => ({
     configuracion,
@@ -856,14 +863,17 @@ export default function ChatPage() {
     if (stored.length > 0) setMessages(stored)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Persistir mensajes en localStorage cada vez que cambian
+  // Persistir mensajes en localStorage — skip during streaming (save on complete)
   useEffect(() => {
-    if (messages.length > 0) saveMessages(messages)
-  }, [messages])
+    if (messages.length > 0 && !isStreaming) saveMessages(messages)
+  }, [messages, isStreaming])
 
+  // Scroll to bottom on new messages (non-streaming) or loading state change
   useEffect(() => {
-    scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight)
-  }, [messages, isLoading, isStreaming])
+    if (!isStreaming && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    }
+  }, [messages.length, isLoading])
 
   // Enviar pregunta desde ?q= al montar (puente desde otras páginas)
   useEffect(() => {
@@ -873,8 +883,10 @@ export default function ChatPage() {
     const display = stateData?.displayPrefill as string | undefined
     const source = stateData?.source as string | undefined
     const sysOverride = stateData?.systemOverride as string | undefined
+    // Set context badge from source
+    if (source) setChatSourceBadge(`↗ ${source}`)
     const timer = setTimeout(() => handleSend(pregunta, display, source, sysOverride), 800)
-    window.history.replaceState({}, '', '/chat')
+    window.history.replaceState({}, '', location.pathname)
     return () => clearTimeout(timer)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -887,79 +899,6 @@ export default function ChatPage() {
     window.addEventListener('sf-header-action', handler)
     return () => window.removeEventListener('sf-header-action', handler)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const handleCopyMsg = async (idx: number, content: string) => {
-    const ok = await copyToClipboard(content)
-    if (ok) {
-      toast.success('Respuesta copiada ✓')
-      setCopiedMsgIdx(idx)
-      setTimeout(() => setCopiedMsgIdx(null), 2000)
-    } else {
-      toast.error('No se pudo copiar.')
-    }
-  }
-
-  const handleShareMsg = async (msg: ChatMessage) => {
-    const cleanText = msg.content
-      .replace(/\*\*/g, '')
-      .replace(/#{1,3}\s/g, '')
-      .replace(/- /g, '• ')
-      .trim()
-
-    const shareText = `📊 SalesFlow — Insight\n\n${cleanText}\n\n—\nGenerado por SalesFlow`
-
-    if (navigator.share) {
-      try {
-        await navigator.share({ title: 'SalesFlow — Insight', text: shareText })
-        return
-      } catch (e) {
-        if (e instanceof Error && e.name === 'AbortError') return
-      }
-    }
-
-    try {
-      await navigator.clipboard.writeText(shareText)
-      toast.success('Copiado para compartir')
-    } catch {
-      toast.error('No se pudo copiar')
-    }
-  }
-
-  const handleCopyAsImage = async (msgIdx: number) => {
-    const msgEl = document.querySelector(`[data-msg-idx="${msgIdx}"]`)
-    if (!msgEl) return
-
-    try {
-      const canvas = await html2canvas(msgEl as HTMLElement, {
-        backgroundColor: getComputedStyle(document.documentElement).getPropertyValue('--sf-bg').trim() || '#0a0a0a',
-        scale: 2,
-        useCORS: true,
-      })
-
-      canvas.toBlob(async (blob) => {
-        if (!blob) {
-          toast.error('No se pudo generar la imagen')
-          return
-        }
-        try {
-          await navigator.clipboard.write([
-            new ClipboardItem({ 'image/png': blob })
-          ])
-          toast.success('Imagen copiada al portapapeles')
-        } catch {
-          const url = URL.createObjectURL(blob)
-          const a = document.createElement('a')
-          a.href = url
-          a.download = `salesflow-analisis-${Date.now()}.png`
-          a.click()
-          URL.revokeObjectURL(url)
-          toast.success('Imagen descargada')
-        }
-      }, 'image/png')
-    } catch {
-      toast.error('Error al capturar la imagen')
-    }
-  }
 
   const handleSend = async (text: string, displayContent?: string, source?: string, systemOverride?: string) => {
     if (!text.trim() || isLoading || isStreaming || profundizandoIndex !== null) return
@@ -1012,13 +951,25 @@ export default function ChatPage() {
       await sendChatMessageStream(toApi(allMessages), ctx, {
         onToken: (token) => {
           streamingContentRef.current += token
-          const cur = getMessages()
-          const updated = [...cur]
-          const lastIdx = updated.length - 1
-          updated[lastIdx] = { ...updated[lastIdx], content: streamingContentRef.current }
-          setMessages(updated)
+          if (!renderTickRef.current) {
+            renderTickRef.current = requestAnimationFrame(() => {
+              renderTickRef.current = null
+              const cur = getMessages()
+              const updated = [...cur]
+              const lastIdx = updated.length - 1
+              updated[lastIdx] = { ...updated[lastIdx], content: streamingContentRef.current }
+              setMessages(updated)
+              if (isNearBottomRef.current && scrollRef.current) {
+                scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+              }
+            })
+          }
         },
         onDone: (fullText) => {
+          if (renderTickRef.current) {
+            cancelAnimationFrame(renderTickRef.current)
+            renderTickRef.current = null
+          }
           const { cleanContent: c1, charts } = parseChartBlocks(fullText)
           const { cleanContent, followUps } = parseFollowUps(c1)
           const cur = getMessages()
@@ -1093,13 +1044,25 @@ export default function ChatPage() {
       await sendChatMessageStream(toApi(allMessages), buildCtxWithEntity(activeEntity), {
         onToken: (token) => {
           streamingContentRef.current += token
-          const cur = getMessages()
-          const updated = [...cur]
-          const lastIdx = updated.length - 1
-          updated[lastIdx] = { ...updated[lastIdx], content: streamingContentRef.current }
-          setMessages(updated)
+          if (!renderTickRef.current) {
+            renderTickRef.current = requestAnimationFrame(() => {
+              renderTickRef.current = null
+              const cur = getMessages()
+              const updated = [...cur]
+              const lastIdx = updated.length - 1
+              updated[lastIdx] = { ...updated[lastIdx], content: streamingContentRef.current }
+              setMessages(updated)
+              if (isNearBottomRef.current && scrollRef.current) {
+                scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+              }
+            })
+          }
         },
         onDone: (fullText) => {
+          if (renderTickRef.current) {
+            cancelAnimationFrame(renderTickRef.current)
+            renderTickRef.current = null
+          }
           const { cleanContent: c1, charts } = parseChartBlocks(fullText)
           const { cleanContent, followUps } = parseFollowUps(c1)
           const cur = getMessages()
@@ -1178,7 +1141,12 @@ export default function ChatPage() {
   }
 
   const handleNewConversation = () => {
-    if (messages.length > 2 && !confirm('¿Iniciar nueva conversación? Se perderá la actual.')) return
+    if (messages.length > 2) { setShowNewConvModal(true); return }
+    clearChatMessages()
+    localStorage.removeItem(CHAT_STORAGE_KEY)
+  }
+  const confirmNewConversation = () => {
+    setShowNewConvModal(false)
     clearChatMessages()
     localStorage.removeItem(CHAT_STORAGE_KEY)
   }
@@ -1199,48 +1167,20 @@ export default function ChatPage() {
           flex: 1,
         }}>
           {/* Header compacto */}
-          <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--sf-border)] shrink-0">
-            <div className="w-6 h-6 rounded-md flex items-center justify-center" style={{ background: 'rgba(29,158,117,0.1)' }}>
-              <span className="text-xs" style={{ color: '#1D9E75' }}>✦</span>
-            </div>
-            <span className="text-sm font-medium" style={{ color: 'var(--sf-t1)' }}>Asistente SalesFlow</span>
+          <div className="flex items-center gap-2 px-4 py-1.5 border-b border-[var(--sf-border)] shrink-0">
+            <span className="text-sm font-semibold" style={{ color: 'var(--sf-t1)' }}>Asistente Virtual</span>
+            {chatSourceBadge && (
+              <span className="flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ background: 'var(--sf-green-bg)', color: 'var(--sf-green)', border: '1px solid var(--sf-green-border)' }}>
+                {chatSourceBadge}
+                <button onClick={() => setChatSourceBadge(null)} className="ml-0.5 hover:opacity-60" style={{ lineHeight: 1 }}>×</button>
+              </span>
+            )}
             <span className="flex items-center gap-1 text-xs" style={{ color: 'var(--sf-t4)' }}>
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
               conectado
             </span>
             {messages.length > 0 && (
-              <div className="ml-auto flex items-center gap-1">
-                <button
-                  onClick={() => {
-                    document.documentElement.classList.add('sf-printing-chat')
-                    const cleanup = () => {
-                      document.documentElement.classList.remove('sf-printing-chat')
-                      window.removeEventListener('afterprint', cleanup)
-                    }
-                    window.addEventListener('afterprint', cleanup)
-                    window.print()
-                  }}
-                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] transition-all"
-                  style={{
-                    color: 'var(--sf-t4)',
-                    background: 'transparent',
-                    border: '1px solid transparent',
-                  }}
-                  onMouseEnter={e => {
-                    e.currentTarget.style.background = 'var(--sf-inset)'
-                    e.currentTarget.style.borderColor = 'var(--sf-border)'
-                    e.currentTarget.style.color = 'var(--sf-t2)'
-                  }}
-                  onMouseLeave={e => {
-                    e.currentTarget.style.background = 'transparent'
-                    e.currentTarget.style.borderColor = 'transparent'
-                    e.currentTarget.style.color = 'var(--sf-t4)'
-                  }}
-                  title="Exportar conversación a PDF"
-                >
-                  <FileText className="w-3 h-3" />
-                  PDF
-                </button>
+              <div className="ml-auto">
                 <button
                   onClick={handleNewConversation}
                   className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] transition-all"
@@ -1268,7 +1208,7 @@ export default function ChatPage() {
           </div>
 
           {/* Messages */}
-          <div ref={scrollRef} className="flex-1 overflow-y-auto p-5 space-y-5 min-h-0" style={{ background: 'transparent' }}>
+          <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto p-5 space-y-5 min-h-0" style={{ background: 'transparent' }}>
             {/* Pantalla de bienvenida */}
             {showEmptyState && (
               <div className="flex flex-col items-center justify-center h-full px-6 select-none">
@@ -1500,41 +1440,12 @@ export default function ChatPage() {
                         </div>
                       )}
                       <div className={cn(
-                        'flex items-center gap-2 mt-1',
+                        'flex items-center mt-1',
                         msg.role === 'user' ? 'justify-end' : 'justify-start'
                       )}>
-                        <p className="text-[9px] text-[var(--sf-t5)]">
+                        <span className="text-[11px]" style={{ color: 'var(--sf-t4)' }}>
                           {format(msg.timestamp, 'HH:mm')}
-                        </p>
-                        {msg.role === 'assistant' && !msg.isError && !(isStreaming && idx === messages.length - 1) && (
-                          <>
-                            <button
-                              onClick={() => handleCopyMsg(idx, msg.content)}
-                              title="Copiar respuesta"
-                              className="flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity p-0.5 rounded text-[var(--sf-t5)] hover:text-[var(--sf-t2)]"
-                            >
-                              {copiedMsgIdx === idx
-                                ? <><Check className="w-3.5 h-3.5 text-[var(--sf-green)]" /><span className="text-[10px] text-[var(--sf-green)]">{'\u2713'}</span></>
-                                : <><Copy className="w-3.5 h-3.5" /><span className="text-[10px]">Copiar</span></>
-                              }
-                            </button>
-                            <button
-                              onClick={() => handleCopyAsImage(idx)}
-                              title="Copiar como imagen"
-                              className="flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity p-0.5 rounded text-[var(--sf-t5)] hover:text-[var(--sf-t2)]"
-                            >
-                              <ImageIcon className="w-3.5 h-3.5" /><span className="text-[10px]">Imagen</span>
-                            </button>
-                            <button
-                              onClick={() => handleShareMsg(msg)}
-                              title="Compartir respuesta"
-                              className="flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity p-0.5 rounded text-[var(--sf-t5)] hover:text-[var(--sf-t2)]"
-                            >
-                              <Share2 className="w-3.5 h-3.5" />
-                              <span className="text-[10px]">Compartir</span>
-                            </button>
-                          </>
-                        )}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -1613,30 +1524,26 @@ export default function ChatPage() {
           {/* Input zone */}
           <div className="shrink-0 border-t border-[var(--sf-border)]" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
             {showTodayButton && (
-              <div className="flex flex-col sm:flex-row gap-2 px-4 pt-3">
-                <div
+              <div className="flex items-center gap-2 px-4 pt-2 pb-1">
+                <button
                   onClick={() => { if (!isLoading && !isStreaming && !isDeepLoading && profundizandoIndex === null) handleDeepAnalysis() }}
-                  className="flex-1 flex items-center gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer transition-colors"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors cursor-pointer"
                   style={{
-                    background: 'var(--sf-card)',
                     border: '1px solid var(--sf-border)',
+                    color: 'var(--sf-t2)',
+                    background: 'transparent',
                     opacity: (isLoading || isStreaming || isDeepLoading || profundizandoIndex !== null) ? 0.4 : 1,
                     cursor: (isLoading || isStreaming || isDeepLoading || profundizandoIndex !== null) ? 'not-allowed' : 'pointer',
                   }}
-                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--sf-hover)')}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'var(--sf-card)')}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'var(--sf-inset)' }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
                 >
                   {isDeepLoading
-                    ? <Loader2 className="w-4 h-4 text-[#a78bfa] shrink-0 animate-spin" />
-                    : <BrainCircuit className="w-4 h-4 text-[#a78bfa] shrink-0" />}
-                  <div className="min-w-0">
-                    <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--sf-t1)' }}>
-                      {isDeepLoading ? 'Pensando en profundidad...' : 'Diagnóstico completo'}
-                    </div>
-                    <div style={{ fontSize: '10px', color: 'var(--sf-t4)' }}>Análisis detallado de todo el negocio · ~10s</div>
-                  </div>
-                </div>
-                <div
+                    ? <Loader2 className="w-3.5 h-3.5 text-[#a78bfa] animate-spin" />
+                    : <BrainCircuit className="w-3.5 h-3.5 text-[#a78bfa]" />}
+                  <span>{isDeepLoading ? 'Analizando...' : 'Diagnóstico completo'}</span>
+                </button>
+                <button
                   onClick={() => {
                     if (!isLoading && !isStreaming && !isDeepLoading && profundizandoIndex === null)
                       handleSend(
@@ -1646,62 +1553,20 @@ export default function ChatPage() {
                         'El usuario quiere un resumen ejecutivo rápido. Responde con exactamente 5 puntos en formato numerado: 1) Ventas del período actual vs anterior (dato concreto), 2) Top vendedor y peor vendedor con cifras, 3) Alerta más crítica ahora mismo, 4) Clientes en riesgo (número y nombres), 5) Veredicto en 1 línea: el negocio va bien/regular/mal y por qué. Máximo 150 palabras total. Sin introducción.',
                       )
                   }}
-                  className="flex-1 flex items-center gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer transition-colors"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors cursor-pointer"
                   style={{
-                    background: 'var(--sf-card)',
                     border: '1px solid var(--sf-border)',
+                    color: 'var(--sf-t2)',
+                    background: 'transparent',
                     opacity: (isLoading || isStreaming || isDeepLoading || profundizandoIndex !== null) ? 0.4 : 1,
                     cursor: (isLoading || isStreaming || isDeepLoading || profundizandoIndex !== null) ? 'not-allowed' : 'pointer',
                   }}
-                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--sf-hover)')}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'var(--sf-card)')}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'var(--sf-inset)' }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
                 >
-                  <BarChart3 className="w-4 h-4 text-[#1D9E75] shrink-0" />
-                  <div className="min-w-0">
-                    <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--sf-t1)' }}>Resumen rápido</div>
-                    <div style={{ fontSize: '10px', color: 'var(--sf-t4)' }}>Estado del negocio en 30s</div>
-                  </div>
-                </div>
-              </div>
-            )}
-            {/* Contextual suggestion chips — visible when conversation has started */}
-            {!showEmptyState && !isLoading && !isStreaming && !isDeepLoading && profundizandoIndex === null && (
-              <div className="px-4 pt-2 flex flex-wrap gap-1.5" style={{ animation: 'fadeIn 0.3s ease-out' }}>
-                {(sidebarSuggestions.type === 'contextual'
-                  ? sidebarSuggestions.questions.slice(0, 4)
-                  : dynamicQuestions.slice(0, 4)
-                ).map((q, i) => (
-                  <button
-                    key={i}
-                    onClick={() => handleSend(q)}
-                    style={{
-                      background: 'var(--sf-inset)',
-                      border: '1px solid var(--sf-border)',
-                      borderRadius: '16px',
-                      padding: '4px 12px',
-                      fontSize: '11px',
-                      color: 'var(--sf-t4)',
-                      cursor: 'pointer',
-                      transition: 'all 150ms',
-                      whiteSpace: 'nowrap',
-                      maxWidth: '280px',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                    }}
-                    onMouseEnter={e => {
-                      e.currentTarget.style.background = 'rgba(29,158,117,0.08)'
-                      e.currentTarget.style.borderColor = 'rgba(29,158,117,0.3)'
-                      e.currentTarget.style.color = 'var(--sf-t1)'
-                    }}
-                    onMouseLeave={e => {
-                      e.currentTarget.style.background = 'var(--sf-inset)'
-                      e.currentTarget.style.borderColor = 'var(--sf-border)'
-                      e.currentTarget.style.color = 'var(--sf-t4)'
-                    }}
-                  >
-                    {q}
-                  </button>
-                ))}
+                  <BarChart3 className="w-3.5 h-3.5 text-[#1D9E75]" />
+                  <span>Resumen rápido</span>
+                </button>
               </div>
             )}
             <div className="px-4 py-3">
@@ -1758,83 +1623,40 @@ export default function ChatPage() {
           </div>
         </div>
 
-        {/* Sidebar — contextual suggestions or generic fallback */}
-        {!showEmptyState && (
-          <div className="hidden md:flex w-56 flex-col gap-4 shrink-0">
-            <div style={{
-              background: 'var(--sf-card)',
-              border: '1px solid var(--sf-border)',
-              borderRadius: '12px',
-              padding: '12px',
-            }}>
-              {sidebarSuggestions.type === 'contextual' && (
-                <div style={{
-                  fontSize: '9px',
-                  color: '#1D9E75',
-                  marginBottom: '4px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  padding: '0 4px',
-                }}>
-                  <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#1D9E75', display: 'inline-block' }} />
-                  Basado en tu última consulta
-                </div>
-              )}
-              <div style={{
-                fontSize: '10px',
-                textTransform: 'uppercase' as const,
-                letterSpacing: '0.08em',
-                color: 'var(--sf-t4)',
-                marginBottom: '8px',
-                padding: '0 4px',
-              }}>
-                {sidebarSuggestions.type === 'contextual' ? 'Siguientes pasos' : 'Preguntas frecuentes'}
-              </div>
-              <div
-                key={sidebarSuggestions.type + '-' + sidebarSuggestions.questions.length}
-                className="space-y-1"
-                style={{ animation: 'fadeIn 0.3s ease-out' }}
-              >
-                {sidebarSuggestions.questions.map((q, idx) => {
-                  const isCtx = sidebarSuggestions.type === 'contextual'
-                  return (
-                    <button
-                      key={idx}
-                      onClick={() => handleSend(q)}
-                      style={{
-                        width: '100%',
-                        textAlign: 'left' as const,
-                        background: 'var(--sf-inset)',
-                        border: '1px solid var(--sf-border)',
-                        borderLeft: isCtx ? '2px solid #1D9E75' : 'none',
-                        borderRadius: '6px',
-                        padding: isCtx ? '7px 10px 7px 10px' : '7px 10px',
-                        fontSize: '11px',
-                        color: 'var(--sf-t4)',
-                        cursor: 'pointer',
-                        transition: 'all 150ms',
-                        lineHeight: '1.4',
-                      }}
-                      onMouseEnter={e => {
-                        e.currentTarget.style.background = 'rgba(29,158,117,0.08)'
-                        e.currentTarget.style.borderColor = 'rgba(29,158,117,0.2)'
-                        e.currentTarget.style.color = 'var(--sf-t1)'
-                      }}
-                      onMouseLeave={e => {
-                        e.currentTarget.style.background = 'var(--sf-inset)'
-                        e.currentTarget.style.borderColor = 'var(--sf-border)'
-                        e.currentTarget.style.color = 'var(--sf-t4)'
-                      }}
-                    >
-                      {q}
-                    </button>
-                  )
-                })}
-              </div>
+      {/* Modal: Nueva conversación */}
+      {showNewConvModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center"
+          style={{ background: 'rgba(0,0,0,0.5)' }}
+          onClick={() => setShowNewConvModal(false)}
+          onKeyDown={e => { if (e.key === 'Escape') setShowNewConvModal(false) }}
+        >
+          <div
+            className="rounded-xl p-6 shadow-2xl"
+            style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', maxWidth: 384, width: '90%' }}
+            onClick={e => e.stopPropagation()}
+          >
+            <p className="text-lg font-semibold" style={{ color: 'var(--sf-t1)' }}>Nueva conversación</p>
+            <p className="text-sm mt-2" style={{ color: 'var(--sf-t3)' }}>La conversación actual se perderá. ¿Continuar?</p>
+            <div className="flex justify-end gap-3 mt-6">
+              <button
+                onClick={() => setShowNewConvModal(false)}
+                className="px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer"
+                style={{ background: 'transparent', border: '1px solid var(--sf-border)', color: 'var(--sf-t3)' }}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--sf-t1)' }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--sf-t3)' }}
+              >Cancelar</button>
+              <button
+                onClick={confirmNewConversation}
+                className="px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer"
+                style={{ background: '#10b981', color: '#fff', border: 'none' }}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#059669' }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = '#10b981' }}
+              >Sí, nueva conversación</button>
             </div>
           </div>
-        )}
+        </div>
+      )}
     </div>
   )
 }

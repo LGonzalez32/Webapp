@@ -354,20 +354,23 @@ export function getDemoData(): { sales: SaleRecord[]; metas: MetaRecord[]; inven
       // Por vendedor
       for (const vendor of VENDORS) {
         const meta = Math.round(vendor.baseDiaria * 8 * 26 * seasonal * 0.95 * growthFactor)
-        metas.push({ mes: m, anio: y, vendedor: vendor.nombre, meta, tipo_meta: 'unidades' })
+        const metaUsd = Math.round(meta * 1.15)
+        metas.push({ mes: m, anio: y, vendedor: vendor.nombre, meta, meta_uds: meta, meta_usd: metaUsd, tipo_meta: 'unidades' })
         supervisorAcum[vendor.supervisor] = (supervisorAcum[vendor.supervisor] ?? 0) + meta
       }
 
       // Por supervisor
       for (const [supervisor, sum] of Object.entries(supervisorAcum)) {
-        metas.push({ mes: m, anio: y, supervisor, meta: Math.round(sum * 1.02), tipo_meta: 'unidades' })
+        const supMeta = Math.round(sum * 1.02)
+        metas.push({ mes: m, anio: y, supervisor, meta: supMeta, meta_uds: supMeta, meta_usd: Math.round(supMeta * 1.15), tipo_meta: 'unidades' })
       }
 
       // Por categoría
       for (const [cat, dailyBase] of Object.entries(CAT_BASELINE_DAILY)) {
+        const catMeta = Math.round(dailyBase * 26 * seasonal * 1.05 * growthFactor)
         metas.push({
           mes: m, anio: y, categoria: cat,
-          meta: Math.round(dailyBase * 26 * seasonal * 1.05 * growthFactor),
+          meta: catMeta, meta_uds: catMeta, meta_usd: Math.round(catMeta * 1.15),
           tipo_meta: 'unidades',
         })
       }

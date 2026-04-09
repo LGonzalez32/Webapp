@@ -12,6 +12,7 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import { restrictToHorizontalAxis, restrictToParentElement } from '@dnd-kit/modifiers'
 import { useNavigate } from 'react-router-dom'
+import { useDemoPath } from '../lib/useDemoPath'
 import {
   ComposedChart, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine,
@@ -120,8 +121,9 @@ function SortablePill({
 export default function RendimientoPage() {
   useAnalysis()
   const navigate = useNavigate()
+  const dp = useDemoPath()
   const { sales, metas, dataAvailability, selectedPeriod, configuracion, forecastData, forecastChartLoading, setForecastData, setForecastChartLoading, dataSource, vendorAnalysis } = useAppStore()
-  const [metric, setMetric] = useState<'unidades' | 'venta_neta'>('unidades')
+  const metric: 'unidades' | 'venta_neta' = (configuracion.metricaGlobal ?? 'usd') === 'usd' ? 'venta_neta' : 'unidades'
   const [showBudget, setShowBudget] = useState(true)
   const [selectedVendor, setSelectedVendor] = useState<string>('todos')
   const [selectedYear, setSelectedYear] = useState<number>(selectedPeriod.year)
@@ -272,7 +274,7 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
   }, [pivotDims])
 
   useEffect(() => {
-    if (sales.length === 0 && dataSource === 'none') navigate('/cargar', { replace: true })
+    if (sales.length === 0 && dataSource === 'none') navigate(dp('/cargar'), { replace: true })
   }, [sales.length, navigate, dataSource])
 
   const useVentaNeta = metric === 'venta_neta' && dataAvailability.has_venta_neta
@@ -578,12 +580,6 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
             </select>
           </div>
           <div className="flex items-center gap-2">
-            <div className="flex p-1 rounded-lg" style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)' }}>
-              <button onClick={() => setMetric('unidades')} className="px-3 py-1.5 rounded text-xs font-bold transition-all" style={metric === 'unidades' ? { background: '#00D68F', color: 'var(--sf-page)' } : { color: 'var(--sf-t5)' }}>Unidades</button>
-              {dataAvailability.has_venta_neta && (
-                <button onClick={() => setMetric('venta_neta')} className="px-3 py-1.5 rounded text-xs font-bold transition-all" style={metric === 'venta_neta' ? { background: '#00D68F', color: 'var(--sf-page)' } : { color: 'var(--sf-t5)' }}>Facturación</button>
-              )}
-            </div>
             {dataAvailability.has_metas && (
               <button onClick={() => setShowBudget(!showBudget)} className="px-3 py-2 rounded-lg text-xs font-bold transition-all" style={showBudget ? { background: '#FFB80018', border: '1px solid #FFB80040', color: 'var(--sf-amber)' } : { background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', color: 'var(--sf-t5)' }}>Meta</button>
             )}
@@ -700,7 +696,7 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
 
       {/* Analyze with AI */}
       <button
-        onClick={() => navigate('/chat', {
+        onClick={() => navigate(dp('/chat'), {
           state: {
             prefill: `Analiza el rendimiento anual. YTD ${useVentaNeta ? formatCurrency(ytdStats.ytdCurr, configuracion.moneda) : formatUnits(ytdStats.ytdCurr)} vs ${useVentaNeta ? formatCurrency(ytdStats.ytdPrev, configuracion.moneda) : formatUnits(ytdStats.ytdPrev)} del año pasado (${ytdStats.variacion !== null ? (ytdStats.variacion >= 0 ? '+' : '') + ytdStats.variacion.toFixed(1) + '%' : 'sin comparación'}). Mejor mes: ${ytdStats.bestMonth >= 0 ? MESES[ytdStats.bestMonth] : '—'}. Proyección cierre: ${useVentaNeta ? formatCurrency(ytdStats.projected, configuracion.moneda) : formatUnits(ytdStats.projected)}. ¿Cuáles son las tendencias y qué recomiendas?`,
             displayPrefill: '✦ Analizar rendimiento con IA',
@@ -1091,7 +1087,7 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
             }] : []}
             analysisText={analysis?.text ?? null}
             onDeepen={expandedRendVendedor && analysis?.text ? () => {
-              navigate('/chat', { state: {
+              navigate(dp('/chat'), { state: {
                 prefill: `Profundizar sobre rendimiento de ${expandedRendVendedor}. ${analysis.text}`,
                 displayPrefill: `Profundizar: rendimiento de ${expandedRendVendedor}`,
                 source: 'Rendimiento',

@@ -1,5 +1,6 @@
 import React, { useMemo, useState, useCallback, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
+import { useDemoPath } from '../lib/useDemoPath'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
 import { Users, ChevronUp, ChevronDown, Search } from 'lucide-react'
@@ -32,6 +33,7 @@ const RECOVERY_CONFIG = {
 export default function ClientesPage() {
   useAnalysis()
   const navigate = useNavigate()
+  const dp = useDemoPath()
   const location = useLocation()
   const locState = location.state as { highlight?: string; openCliente?: string } | null
   const highlightCliente = locState?.highlight ?? null
@@ -60,7 +62,7 @@ export default function ClientesPage() {
   const [tab, setTab] = useState<'dormidos' | 'pareto' | 'riesgo'>('dormidos')
   const [filterVendedor, setFilterVendedor] = useState<string>('all')
   const [searchCliente, setSearchCliente] = useState('')
-  const [metrica, setMetrica] = useState<'unidades' | 'dolares'>('unidades')
+  const metrica: 'unidades' | 'dolares' = (configuracion.metricaGlobal ?? 'usd') === 'usd' ? 'dolares' : 'unidades'
   const [expandedClienteId, setExpandedClienteId] = useState<string | null>(null)
   const [analysisMap, setAnalysisMap] = useState<Record<string, { loading: boolean; text: string | null }>>({})
 
@@ -136,9 +138,7 @@ export default function ClientesPage() {
       `Días inactivo: ${c.dias_sin_actividad}\n` +
       `Compras históricas: ${c.compras_historicas} unidades\n` +
       `Valor histórico: ${configuracion.moneda} ${c.valor_historico.toLocaleString()}\n` +
-      `Score de recuperación: ${c.recovery_score}/100 (${c.recovery_label})\n` +
-      `Explicación: ${c.recovery_explicacion}\n` +
-      (c.frecuencia_esperada_dias ? `Frecuencia esperada: cada ${c.frecuencia_esperada_dias} días\n` : '')
+      `Estado de recuperación: ${c.recovery_label === 'alta' ? 'Alta probabilidad' : c.recovery_label === 'recuperable' ? 'Recuperable' : c.recovery_label === 'dificil' ? 'Difícil' : 'Perdido'} — ${c.dias_sin_actividad} días inactivo${c.frecuencia_esperada_dias ? `, frecuencia habitual cada ${c.frecuencia_esperada_dias} días` : ''}\n`
 
     try {
       const json = await callAI(
@@ -247,7 +247,7 @@ export default function ClientesPage() {
   }, [initialPanelCliente])
 
   useEffect(() => {
-    if (isProcessed && !dataAvailability.has_cliente) navigate('/dashboard')
+    if (isProcessed && !dataAvailability.has_cliente) navigate(dp('/dashboard'))
   }, [isProcessed, dataAvailability.has_cliente, navigate])
 
   if (!dataAvailability.has_cliente) return null
@@ -307,11 +307,11 @@ export default function ClientesPage() {
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-[var(--sf-t1)]">Clientes</h1>
-          <p style={{ fontSize: '12px', color: 'var(--sf-t5)', margin: '3px 0 0' }}>Clientes dormidos, pareto y señales tempranas de riesgo</p>
+          <p style={{ fontSize: '12px', color: 'var(--sf-t5)', margin: '3px 0 0' }}>Clientes inactivos, pareto y señales tempranas de riesgo</p>
         </div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           <span style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'rgba(226,75,74,0.15)', color: '#E24B4A', border: '1px solid rgba(226,75,74,0.25)' }}>
-            {clientesDormidos.length} dormidos
+            {clientesDormidos.length} inactivos
           </span>
           <span style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'rgba(239,159,39,0.15)', color: '#EF9F27', border: '1px solid rgba(239,159,39,0.25)' }}>
             {moneda} {totalValorEnRiesgo >= 1000 ? `${(totalValorEnRiesgo / 1000).toFixed(1)}k` : totalValorEnRiesgo.toLocaleString(undefined, { maximumFractionDigits: 0 })} en riesgo
@@ -379,36 +379,13 @@ export default function ClientesPage() {
             {vendedores.map(v => <option key={v} value={v}>{v}</option>)}
           </select>
         )}
-        {dataAvailability.has_venta_neta && (
-          <div style={{ display: 'inline-flex', background: 'var(--sf-inset)', borderRadius: 8, padding: 2, gap: 2, border: '1px solid var(--sf-border)' }}>
-            {(['unidades', 'dolares'] as const).map(m => (
-              <button
-                key={m}
-                onClick={() => setMetrica(m)}
-                style={{
-                  padding: '6px 12px',
-                  borderRadius: 6,
-                  fontSize: 12,
-                  fontWeight: 500,
-                  background: metrica === m ? 'rgba(29,158,117,0.15)' : 'transparent',
-                  color: metrica === m ? '#1D9E75' : 'var(--sf-t4)',
-                  border: metrica === m ? '1px solid rgba(29,158,117,0.25)' : '1px solid transparent',
-                  cursor: 'pointer',
-                  transition: 'all 150ms',
-                }}
-              >
-                {m === 'unidades' ? 'Uds' : moneda}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
 
       {/* Tabs */}
       <div className="flex flex-wrap items-center gap-3">
         <div style={{ display: 'inline-flex', background: 'var(--sf-inset)', borderRadius: '8px', padding: '3px', gap: '2px' }}>
           {([
-            { key: 'dormidos', label: `Dormidos (${clientesDormidos.length})` },
+            { key: 'dormidos', label: `Inactivos (${clientesDormidos.length})` },
             { key: 'pareto',   label: 'Top Clientes' },
             { key: 'riesgo',   label: 'Riesgo Temprano' },
           ] as const).map(({ key: t, label }) => (
@@ -439,11 +416,25 @@ export default function ClientesPage() {
       {/* Clientes dormidos table */}
       {tab === 'dormidos' && (
         <div style={{ overflow: 'hidden', marginTop: '12px' }}>
+          {/* Headline with impact summary */}
+          {sorted.length > 0 && (
+            <div className="rounded-xl p-4 mb-3" style={{ background: 'var(--sf-red-bg)', border: '1px solid var(--sf-red-border)' }}>
+              <p className="text-sm font-semibold" style={{ color: 'var(--sf-t1)' }}>
+                {sorted.length} cliente{sorted.length > 1 ? 's' : ''} dejaron de comprar
+              </p>
+              {totalValorEnRiesgo > 0 && usaDolares && (
+                <p className="text-xs mt-0.5" style={{ color: 'var(--sf-t3)' }}>
+                  {moneda} {totalValorEnRiesgo >= 1000 ? `${(totalValorEnRiesgo / 1000).toFixed(1)}k` : totalValorEnRiesgo.toLocaleString()} en ventas históricas
+                  {sorted.length > 0 ? ` · ~${moneda} ${Math.round(totalValorEnRiesgo / sorted.length / 1000 * 10) / 10}k promedio por cliente` : ''}
+                </p>
+              )}
+            </div>
+          )}
           {sorted.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-[var(--sf-t4)]">
               <Users className="w-10 h-10 mb-3 opacity-30" />
               <p className="font-bold text-sm">
-                {searchQ || filterVendedor !== 'all' ? 'Sin resultados para esta búsqueda' : 'Sin clientes dormidos'}
+                {searchQ || filterVendedor !== 'all' ? 'Sin resultados para esta búsqueda' : 'Sin clientes inactivos'}
               </p>
               <p className="text-xs mt-1">Todos los clientes han comprado recientemente</p>
             </div>
@@ -456,7 +447,7 @@ export default function ClientesPage() {
                       ['cliente', 'Cliente'],
                       ['vendedor', 'Vendedor'],
                       ['dias_sin_actividad', 'Inactivo'],
-                      ['compras_historicas', 'Compras'],
+                      ['compras_historicas', 'Compras históricas'],
                       ['valor_historico', 'Valor hist.'],
                       ['prioridad', 'Recuperación'],
                     ] as [SortKey, string][]).map(([k, label], i) => (
@@ -532,22 +523,30 @@ export default function ClientesPage() {
                             ? `${(c.valor_historico / 1000).toFixed(1)}k`
                             : c.valor_historico.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                         </td>
-                        <td style={{ padding: '10px 12px' }}>
-                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+                        <td style={{ padding: '10px 12px', maxWidth: 180 }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                             <span style={{
-                              fontSize: '10px', padding: '2px 7px', borderRadius: '3px', fontWeight: 600,
-                              background: score > 60 ? 'rgba(29,158,117,0.15)' : score > 40 ? 'rgba(239,159,39,0.15)' : 'rgba(226,75,74,0.15)',
-                              color: score > 60 ? '#1D9E75' : score > 40 ? '#EF9F27' : '#E24B4A',
+                              fontSize: '10px', padding: '2px 7px', borderRadius: '3px', fontWeight: 600, alignSelf: 'flex-start',
+                              background: c.recovery_label === 'alta' ? 'rgba(29,158,117,0.15)' : c.recovery_label === 'recuperable' ? 'rgba(29,158,117,0.15)' : c.recovery_label === 'dificil' ? 'rgba(239,159,39,0.15)' : 'rgba(226,75,74,0.15)',
+                              color: c.recovery_label === 'alta' ? '#1D9E75' : c.recovery_label === 'recuperable' ? '#1D9E75' : c.recovery_label === 'dificil' ? '#EF9F27' : '#E24B4A',
                             }}>
-                              {score > 60 ? 'Recuperable' : score > 40 ? 'Difícil' : 'Perdido'}
+                              {c.recovery_label === 'alta' ? 'Alta' : c.recovery_label === 'recuperable' ? 'Recuperable' : c.recovery_label === 'dificil' ? 'Difícil' : 'Perdido'}
                             </span>
-                            <div style={{ width: '80px', height: '3px', background: 'var(--sf-inset)', borderRadius: '2px' }}>
-                              <div style={{
-                                width: `${score}%`, height: '100%', borderRadius: '2px',
-                                background: score > 60 ? '#1D9E75' : score > 40 ? '#EF9F27' : '#E24B4A',
-                              }} />
-                            </div>
-                            <span style={{ fontSize: '10px', color: 'var(--sf-t4)' }}>{score}/100</span>
+                            <span style={{ fontSize: '11px', color: 'var(--sf-t4)', lineHeight: 1.3 }}>
+                              {c.recovery_label === 'alta' ? `Comprador frecuente, lleva ${c.dias_sin_actividad} días sin actividad`
+                                : c.recovery_label === 'recuperable' ? `Buen historial, se fue hace ${c.dias_sin_actividad} días`
+                                : c.recovery_label === 'dificil' ? (c.valor_historico > 20000 ? `Cliente de ${moneda} ${(c.valor_historico / 1000).toFixed(0)}k, vale el intento` : 'Historial irregular, respuesta incierta')
+                                : `Sin señales de retorno en ${c.dias_sin_actividad} días`}
+                            </span>
+                            <span style={{
+                              fontSize: '11px', fontWeight: 500, lineHeight: 1.3,
+                              color: c.recovery_label === 'alta' ? '#10b981' : c.recovery_label === 'recuperable' ? '#14b8a6' : c.recovery_label === 'dificil' ? '#f59e0b' : '#f87171',
+                            }}>
+                              {c.recovery_label === 'alta' ? '→ Llámalo hoy, suele responder'
+                                : c.recovery_label === 'recuperable' ? '→ Un contacto puede reactivarlo'
+                                : c.recovery_label === 'dificil' ? '→ Intenta con una oferta concreta'
+                                : '→ Baja prioridad, enfoca energía en otros'}
+                            </span>
                           </div>
                         </td>
                         <td style={{ padding: '9px 16px', textAlign: 'right' }}>
@@ -634,12 +633,12 @@ export default function ClientesPage() {
                                         `Vendedor: ${c.vendedor}`,
                                         `Días inactivo: ${c.dias_sin_actividad}`,
                                         `Valor histórico: ${moneda} ${c.valor_historico.toLocaleString()}`,
-                                        `Recovery: ${c.recovery_score}/100 (${c.recovery_label})`,
+                                        `Estado: ${c.recovery_label === 'alta' ? 'Alta probabilidad de recuperación' : c.recovery_label === 'recuperable' ? 'Recuperable' : c.recovery_label === 'dificil' ? 'Difícil de recuperar' : 'Perdido'}`,
                                         analysis.text ? `\nAnálisis previo:\n${analysis.text}` : '',
                                         ``,
                                         `Con base en este análisis, profundiza: ¿por qué se durmió este cliente, qué productos compraba, hay patrón con otros clientes dormidos del mismo vendedor?`
                                       ].filter(Boolean).join('\n')
-                                      navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage, source: 'Clientes' } })
+                                      navigate(dp('/chat'), { state: { prefill: fullContext, displayPrefill: displayMessage, source: 'Clientes' } })
                                     }}
                                     style={{
                                       marginTop: '12px',
@@ -674,7 +673,7 @@ export default function ClientesPage() {
               </table>
               {filtered.length !== clientesDormidos.length && (
                 <p className="px-5 py-2 text-[10px] text-[var(--sf-t4)] border-t border-[var(--sf-border)]">
-                  Mostrando {filtered.length} de {clientesDormidos.length} clientes dormidos
+                  Mostrando {filtered.length} de {clientesDormidos.length} clientes inactivos
                 </p>
               )}
             </div>
@@ -804,7 +803,14 @@ export default function ClientesPage() {
                           </td>
                           <td style={{ textAlign: 'right', padding: '9px 12px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px' }}>
-                              <div style={{ width: '60px', height: '3px', background: 'var(--sf-inset)', borderRadius: '2px' }}>
+                              <span style={{
+                                fontSize: '9px', fontWeight: 600, padding: '1px 5px', borderRadius: 3,
+                                background: c.cumulativePct <= 50 ? 'rgba(29,158,117,0.12)' : c.cumulativePct <= 80 ? 'rgba(239,159,39,0.12)' : 'rgba(226,75,74,0.12)',
+                                color: c.cumulativePct <= 50 ? '#1D9E75' : c.cumulativePct <= 80 ? '#EF9F27' : '#E24B4A',
+                              }}>
+                                {c.cumulativePct <= 50 ? 'Bajo' : c.cumulativePct <= 80 ? 'Medio' : 'Alto'}
+                              </span>
+                              <div style={{ width: '40px', height: '3px', background: 'var(--sf-inset)', borderRadius: '2px' }}>
                                 <div style={{ width: `${Math.min(c.cumulativePct, 100)}%`, height: '100%', borderRadius: '2px',
                                   background: c.cumulativePct <= 50 ? '#1D9E75' : c.cumulativePct <= 80 ? '#EF9F27' : '#E24B4A' }} />
                               </div>
@@ -1016,7 +1022,7 @@ export default function ClientesPage() {
                 analysis.text ? `\nAnálisis previo:\n${analysis.text}` : '',
                 '', `Con base en este análisis, profundiza: ¿este cliente está creciendo o decreciendo, qué productos compra, hay riesgo de concentración?`
               ].filter(Boolean).join('\n')
-              navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage, source: 'Clientes' } })
+              navigate(dp('/chat'), { state: { prefill: fullContext, displayPrefill: displayMessage, source: 'Clientes' } })
             } : undefined}
             deepenLabel="+ Profundizar en Chat IA"
           />

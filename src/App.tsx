@@ -22,10 +22,12 @@ const AuthPage = lazy(() => import('./pages/AuthPage'))
 const AuthCallbackPage = lazy(() => import('./pages/AuthCallbackPage'))
 const OnboardingPage = lazy(() => import('./pages/OnboardingPage'))
 const InvitationPage = lazy(() => import('./pages/InvitationPage'))
+const DemoPage = lazy(() => import('./pages/DemoPage'))
 const LandingPage = lazy(() => import('./pages/LandingPage'))
 const PricingPage = lazy(() => import('./pages/PricingPage'))
 const TermsPage = lazy(() => import('./pages/TermsPage'))
 const PrivacyPage = lazy(() => import('./pages/PrivacyPage'))
+const AboutPage = lazy(() => import('./pages/AboutPage'))
 
 function LoadingFallback() {
   return (
@@ -55,6 +57,21 @@ export default function App() {
           <Route path="/pricing" element={<PricingPage />} />
           <Route path="/terminos" element={<TermsPage />} />
           <Route path="/privacidad" element={<PrivacyPage />} />
+          <Route path="/nosotros" element={<AboutPage />} />
+
+          {/* Demo — público, sin auth */}
+          <Route element={<DemoPage />}>
+            <Route path="/demo" element={<Navigate to="/demo/dashboard" replace />} />
+            <Route path="/demo/dashboard" element={<EstadoComercialPage />} />
+            <Route path="/demo/vendedores" element={<VendedoresPage />} />
+            <Route path="/demo/rendimiento" element={<RendimientoPage />} />
+            <Route path="/demo/clientes" element={<ClientesPage />} />
+            <Route path="/demo/metas" element={<MetasPage />} />
+            <Route path="/demo/departamentos" element={<DepartamentosPage />} />
+            <Route path="/demo/rotacion" element={<RotacionPage />} />
+            <Route path="/demo/chat" element={<ChatPage />} />
+            <Route path="/demo/configuracion" element={<ConfiguracionPage />} />
+          </Route>
 
           {/* Rutas públicas — auth */}
           <Route path="/login" element={<AuthPage />} />
@@ -89,8 +106,9 @@ export default function App() {
             <Route path="/configuracion" element={<ConfiguracionPage />} />
           </Route>
 
-          {/* Alias: /register → /login con modo registro */}
+          {/* Alias: /register, /registro → /login con modo registro */}
           <Route path="/register" element={<Navigate to="/login?mode=register" replace />} />
+          <Route path="/registro" element={<Navigate to="/login?mode=register" replace />} />
 
           <Route path="*" element={<NotFoundPage />} />
         </Routes>

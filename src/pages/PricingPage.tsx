@@ -30,9 +30,9 @@ const PLANS: Plan[] = [
       '1 usuario',
       'Hasta 10,000 registros por archivo',
       'Los 22 patrones de riesgo (alertas sin indicador de tendencia)',
-      'Chat IA (10 consultas por mes)',
+      'Chat IA (25 consultas por mes)',
       'Exportar PDF',
-      'Período actual solamente',
+      'Solo el mes en curso (sin historial)',
       'Soporte por email',
     ],
     cta: 'Probar 14 días gratis',
@@ -83,10 +83,10 @@ const COMPARE_FEATURES = [
   { label: 'Patrones de riesgo', esencial: '22 patrones', profesional: '22 patrones', empresa: '22 patrones' },
   { label: 'Tendencias (↘→↗)', esencial: '—', profesional: '✓', empresa: '✓' },
   { label: 'Comparativa períodos', esencial: '—', profesional: '✓', empresa: '✓' },
-  { label: 'Chat IA', esencial: '10/mes', profesional: 'Ilimitado', empresa: 'Ilimitado' },
+  { label: 'Chat IA', esencial: '25/mes', profesional: 'Ilimitado', empresa: 'Ilimitado' },
   { label: 'Notas en alertas', esencial: '—', profesional: '✓', empresa: '✓' },
   { label: 'Exportar PDF', esencial: '✓', profesional: '✓ + branding', empresa: '✓ + branding' },
-  { label: 'Historial', esencial: 'Período actual', profesional: '18 meses', empresa: '18 meses' },
+  { label: 'Historial', esencial: 'Mes en curso', profesional: '18 meses', empresa: '18 meses' },
   { label: 'Soporte', esencial: 'Email', profesional: 'WhatsApp', empresa: 'Dedicado' },
   { label: 'Roles y permisos', esencial: '—', profesional: '—', empresa: '✓' },
   { label: 'Dashboard supervisores', esencial: '—', profesional: '—', empresa: '✓' },
@@ -115,9 +115,22 @@ const FAQS = [
   },
 ]
 
+const LOCAL_CURRENCIES: { code: string; rate: number; symbol: string }[] = [
+  { code: 'USD', rate: 1, symbol: '$' },
+  { code: 'MXN', rate: 20, symbol: '$' },
+  { code: 'COP', rate: 4200, symbol: '$' },
+  { code: 'GTQ', rate: 7.8, symbol: 'Q' },
+  { code: 'HNL', rate: 25, symbol: 'L' },
+  { code: 'CRC', rate: 510, symbol: '₡' },
+  { code: 'PEN', rate: 3.7, symbol: 'S/' },
+  { code: 'CLP', rate: 950, symbol: '$' },
+  { code: 'ARS', rate: 1200, symbol: '$' },
+]
+
 export default function PricingPage() {
   const [annual, setAnnual] = useState(false)
   const [openFaq, setOpenFaq] = useState<number | null>(null)
+  const [currency, setCurrency] = useState('USD')
 
   return (
     <PublicLayout>
@@ -157,6 +170,19 @@ export default function PricingPage() {
             Anual <span className="text-xs opacity-80">(-20%)</span>
           </button>
         </div>
+
+        {/* Currency selector */}
+        <div className="mt-4 flex items-center justify-center gap-2">
+          <span className="text-xs" style={{ color: 'var(--sf-t4)' }}>Moneda:</span>
+          <select
+            value={currency}
+            onChange={(e) => setCurrency(e.target.value)}
+            className="text-xs font-medium px-2 py-1 rounded-lg border cursor-pointer"
+            style={{ background: 'var(--sf-card)', color: 'var(--sf-t2)', borderColor: 'var(--sf-border)' }}
+          >
+            {LOCAL_CURRENCIES.map(c => <option key={c.code} value={c.code}>{c.code}</option>)}
+          </select>
+        </div>
       </section>
 
       {/* Plan cards */}
@@ -164,6 +190,7 @@ export default function PricingPage() {
         <div className="grid md:grid-cols-3 gap-6 items-start">
           {PLANS.map((plan) => {
             const price = annual ? plan.annualPrice : plan.monthlyPrice
+            const cur = LOCAL_CURRENCIES.find(c => c.code === currency) ?? LOCAL_CURRENCIES[0]
             const isCustom = price === 'Personalizado'
             return (
               <div
@@ -191,6 +218,15 @@ export default function PricingPage() {
                     {price}
                   </span>
                   {!isCustom && <span className="text-sm ml-1" style={{ color: 'var(--sf-t4)' }}>/mes</span>}
+                  {!isCustom && currency !== 'USD' && (() => {
+                    const usd = parseInt(price.replace('$', ''))
+                    const local = Math.round(usd * cur.rate)
+                    return (
+                      <p className="text-xs mt-1" style={{ color: 'var(--sf-t4)' }}>
+                        ~{cur.symbol}{local.toLocaleString()} {cur.code}
+                      </p>
+                    )
+                  })()}
                 </div>
                 <ul className="space-y-2.5 mb-6">
                   {plan.features.map((f) => (

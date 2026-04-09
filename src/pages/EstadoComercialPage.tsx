@@ -1,21 +1,22 @@
 ﻿import { useEffect, useState, useMemo, useCallback, useDeferredValue, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
-import { ResponsiveContainer, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts'
+import { ResponsiveContainer, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, LabelList } from 'recharts'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
 import type { Insight, InsightTipo, InsightPrioridad, VendorAnalysis } from '../types'
 import { salesInPeriod } from '../lib/analysis'
 import { callAI } from '../lib/chatService'
 import VendedorPanel from '../components/vendedor/VendedorPanel'
-import { Database, Calendar, CheckCircle, RotateCcw, ChevronDown, Printer, GitCompare } from 'lucide-react'
+import { computePulsoCards, type PulsoCard, type PulsoPanelData } from '../lib/pulso-engine'
+import { useDemoPath } from '../lib/useDemoPath'
+import PulsoPanel from '../components/pulso/PulsoPanel'
+import { Calendar, CheckCircle, RotateCcw, ChevronDown, Users, Building2, Star, TrendingUp, TrendingDown, Bell } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAlertStatusStore } from '../store/alertStatusStore'
 import type { AlertStatus } from '../store/alertStatusStore'
 import { getAlertKey } from '../lib/alertKey'
 import FirstTimeTooltip from '../components/ui/FirstTimeTooltip'
-import ComparisonSummary from '../components/ui/ComparisonSummary'
-import { useSubscription } from '../lib/useSubscription'
-import UpgradePrompt from '../components/ui/UpgradePrompt'
 
 const MESES_CORTO = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic']
 const MESES_LARGO = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre']
@@ -60,14 +61,17 @@ function getFeedLabel(tipo: InsightTipo): string {
   }
 }
 
-type FeedFilterKey = 'all' | 'riesgos' | 'hallazgo' | 'cruzado'
+type FeedFilterKey = 'all' | 'urgentes' | 'vendedores' | 'productos' | 'clientes' | 'hallazgo'
 type StatusFilterKey = 'notResolved' | 'following' | 'resolved'
 
-const FEED_FILTERS: { key: FeedFilterKey; label: string; color?: string; match: (t: InsightTipo) => boolean }[] = [
-  { key: 'all', label: 'Todos', match: () => true },
-  { key: 'riesgos', label: 'Riesgos', color: '#ef4444', match: t => t.startsWith('riesgo_') },
-  { key: 'hallazgo', label: 'Oportunidades', color: '#22d3ee', match: t => t === 'hallazgo' },
-  { key: 'cruzado', label: 'Combinados', color: '#a78bfa', match: t => t === 'cruzado' },
+const FEED_FILTERS: { key: FeedFilterKey; label: string; match: (i: Insight) => boolean }[] = [
+  { key: 'all',        label: 'Todas',         match: () => true },
+  { key: 'urgentes',   label: 'Urgentes',      match: i => i.prioridad === 'CRITICA' || i.prioridad === 'ALTA' },
+  { key: 'vendedores', label: 'Equipo',        match: i => i.tipo === 'riesgo_vendedor' || i.tipo === 'riesgo_equipo' },
+  { key: 'hallazgo',   label: 'Oportunidades', match: i => i.tipo === 'hallazgo' },
+  // kept for count logic but not shown as tabs:
+  { key: 'productos',  label: 'Productos',     match: i => i.tipo === 'riesgo_producto' },
+  { key: 'clientes',   label: 'Clientes',      match: i => i.tipo === 'riesgo_cliente' },
 ]
 
 // â"€â"€â"€ InsightCard â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
@@ -87,6 +91,79 @@ function boldifyDescription(text: string) {
       )}
     </>
   )
+}
+
+// ─── Conversational alert titles ────────────────────────────────────────────
+function getAlertaTitle(insight: Insight): string {
+  const { titulo, tipo } = insight
+  const parts = titulo.split(' — ')
+  const base   = parts[0].trim()
+  const entity = parts[1]?.trim() ?? insight.vendedor ?? insight.cliente ?? insight.producto ?? ''
+
+  if (/doble riesgo/i.test(base))                return `🔴 ${entity || 'Vendedor'} necesita apoyo urgente`
+  if (/equipo no cerrará/i.test(base))           return '⚠️ La meta del mes está en riesgo'
+  if (/caída explicada/i.test(base))             return `📉 ${entity || 'Vendedor'} muestra una caída importante`
+  if (/cliente inactivo/i.test(base))            return `💤 ${entity || 'Cliente'} lleva tiempo sin comprar`
+  if (/oportunidad de reactivación/i.test(base)) return `✨ Hay una oportunidad con ${entity || 'un cliente'}`
+  if (/vendedor en riesgo/i.test(base))          return `⚡ ${entity || 'Vendedor'} está por debajo del ritmo`
+  if (/producto sin movimiento/i.test(base))     return '📦 Hay productos que no se están moviendo'
+  if (/meta en peligro/i.test(base))             return `⚠️ ${entity || 'Vendedor'} está lejos de su meta`
+  if (/concentración sistémica/i.test(base))     return '⚠️ Tu negocio depende demasiado de un cliente'
+  if (/racha positiva/i.test(base))              return `✨ ${entity || 'Vendedor'} está en su mejor racha`
+  if (/no renovó/i.test(base))                   return `💤 ${entity || 'Cliente'} no ha vuelto a comprar`
+  if (/sin ventas/i.test(base))                  return `📉 ${entity || 'Vendedor'} no ha registrado ventas`
+  if (/inventario/i.test(base))                  return `📦 Hay un alerta de inventario`
+  // Generic: if has " — Nombre" extract name, else return cleaned base
+  if (entity) return `${entity}: ${base.charAt(0).toLowerCase() + base.slice(1)}`
+  return base
+}
+
+// Extracts a short (≤20 word) summary + key numeric datum + label from an insight
+function formatAlertaContent(
+  insight: Insight,
+  showUSD: boolean,
+  moneda: string,
+): { summary: string; keyData: string; keyLabel: string } {
+  const { descripcion, impacto_economico, valor_numerico, tipo } = insight
+
+  // Summary: first full sentence, truncated to ≤120 chars
+  const rawSentence = descripcion.split(/(?<=[.!?])\s/)[0].trim()
+  const summary = rawSentence.length > 120 ? rawSentence.slice(0, 117) + '…' : rawSentence
+
+  // Key datum: prefer economic impact → valor_numerico → first bold number in text
+  let keyData = ''
+  let keyLabel = ''
+  if (impacto_economico?.valor) {
+    if (showUSD) {
+      const fmt = impacto_economico.valor >= 1_000_000
+        ? `${(impacto_economico.valor / 1_000_000).toFixed(1)}M`
+        : impacto_economico.valor >= 1000
+        ? `${(impacto_economico.valor / 1000).toFixed(1)}k`
+        : Math.round(impacto_economico.valor).toLocaleString('es-SV')
+      keyData = `${moneda} ${fmt}`
+    } else {
+      keyData = impacto_economico.descripcion || `${Math.round(impacto_economico.valor).toLocaleString('es-SV')}`
+    }
+    keyLabel = impacto_economico.tipo === 'perdida' ? 'pérdida estimada'
+      : impacto_economico.tipo === 'oportunidad' ? 'oportunidad recuperable'
+      : 'valor en riesgo'
+  } else if (valor_numerico != null) {
+    keyData = valor_numerico.toLocaleString('es-SV')
+    // Derive label from insight type
+    keyLabel = tipo === 'riesgo_vendedor' ? 'caída % vs promedio'
+      : tipo === 'riesgo_cliente' ? 'días sin actividad'
+      : tipo === 'riesgo_producto' ? 'uds sin movimiento'
+      : tipo === 'riesgo_meta' ? '% cumplimiento'
+      : tipo === 'riesgo_equipo' ? '% brecha vs meta'
+      : tipo === 'cruzado' ? 'factores combinados'
+      : ''
+  } else {
+    // Pull out first "N uds" or "N%" or plain number from description
+    const match = descripcion.match(/(\d[\d,\.]*\s*(?:%|uds?|días?|meses?)?)/i)
+    if (match) keyData = match[1].trim()
+  }
+
+  return { summary, keyData, keyLabel }
 }
 
 // ─── Trend computation ──────────────────────────────────────────────────────
@@ -163,19 +240,17 @@ function relativeTime(isoString: string): string {
 
 export default function EstadoComercialPage() {
   const navigate = useNavigate()
+  const dp = useDemoPath()
   useAnalysis()
   const {
     insights, vendorAnalysis, teamStats, dataAvailability,
     configuracion, selectedPeriod, setSelectedPeriod, sales, loadingMessage,
     clientesDormidos, concentracionRiesgo, categoriasInventario, supervisorAnalysis,
     canalAnalysis, categoriaAnalysis, dataSource,
-    comparisonEnabled, comparisonPeriod, toggleComparison, setComparisonPeriod,
   } = useAppStore()
 
-  const { canAccess } = useSubscription()
-  const [showUpgradeModal, setShowUpgradeModal] = useState(false)
-
   const [vendedorPanel, setVendedorPanel] = useState<VendorAnalysis | null>(null)
+  const [pulsoPanel, setPulsoPanel] = useState<PulsoPanelData | null>(null)
   const [feedFilter, setFeedFilter] = useState<FeedFilterKey>('all')
   const [statusFilter, setStatusFilter] = useState<StatusFilterKey>('notResolved')
   const [feedExpanded, setFeedExpanded] = useState(false)
@@ -188,10 +263,15 @@ export default function EstadoComercialPage() {
   const [openDropdownKey, setOpenDropdownKey] = useState<string | null>(null)
   const [editingNoteKey, setEditingNoteKey] = useState<string | null>(null)
   const [noteDraft, setNoteDraft] = useState('')
+  const dashMetrica = configuracion.metricaGlobal ?? 'usd'
   const dropdownRef = useRef<HTMLDivElement>(null)
+  const [monthDropOpen, setMonthDropOpen] = useState(false)
+  const monthDropRef = useRef<HTMLDivElement>(null)
+  const monthBtnRef = useRef<HTMLButtonElement>(null)
+  const [monthDropRect, setMonthDropRect] = useState<{ top: number; left: number; width: number } | null>(null)
 
   useEffect(() => {
-    if (sales.length === 0 && dataSource === 'none') navigate('/cargar', { replace: true })
+    if (sales.length === 0 && dataSource === 'none') navigate(dp('/cargar'), { replace: true })
   }, [sales, navigate, dataSource])
 
   useEffect(() => {
@@ -237,6 +317,25 @@ export default function EstadoComercialPage() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [openDropdownKey])
 
+  // Cerrar month dropdown al clic fuera (portal-safe: verifica btn + portal)
+  useEffect(() => {
+    if (!monthDropOpen) return
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as Node
+      // Clic dentro del botón trigger → lo maneja el onClick del botón
+      if (monthDropRef.current?.contains(target)) return
+      // Clic dentro del portal (dropdown renderizado en body) → no cerrar
+      // Los nodos del portal son hijos directos de body pero no del ref
+      // Usamos el data-attr para identificar el portal
+      const portalEl = document.getElementById('sf-month-portal')
+      if (portalEl?.contains(target)) return
+      setMonthDropOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [monthDropOpen])
+
+
 
   // â"€â"€ Chips de mes â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const maxDate = useMemo(() =>
@@ -252,10 +351,12 @@ export default function EstadoComercialPage() {
       const m = s.fecha.getMonth()
       months.add(`${y}-${m}`)
     }
-    return [...months]
+    const all = [...months]
       .map(k => { const [y, m] = k.split('-').map(Number); return { year: y, month: m } })
       .sort((a, b) => b.year - a.year || b.month - a.month)
-      .slice(0, 18) // últimos 18 meses como máximo
+    // Solo mostrar meses del año del dato más reciente
+    const latestYear = all[0]?.year ?? new Date().getFullYear()
+    return all.filter(am => am.year === latestYear)
   }, [sales])
 
   // â"€â"€ Slices de ventas cacheados (evitar llamadas repetidas a salesInPeriod) â"€
@@ -408,6 +509,11 @@ export default function EstadoComercialPage() {
       .filter(s => { const d = new Date(s.fecha); return d.getFullYear() === y && d.getMonth() === m })
       .reduce((sum, s) => sum + s.unidades, 0)
 
+    // Helper para calcular venta_neta en un mes/año
+    const totalMesNeto = (y: number, m: number) => sales
+      .filter(s => { const d = new Date(s.fecha); return d.getFullYear() === y && d.getMonth() === m })
+      .reduce((sum, s) => sum + (s.venta_neta ?? 0), 0)
+
     // Helper para calcular total de unidades en un mes/año hasta un día máximo
     const totalMesHastaDia = (y: number, m: number, maxDia: number) => sales
       .filter(s => { const d = new Date(s.fecha); return d.getFullYear() === y && d.getMonth() === m && d.getDate() <= maxDia })
@@ -423,7 +529,9 @@ export default function EstadoComercialPage() {
     const mesPrevYear = month === 0 ? year - 1 : year
 
     const mesActualTotal = totalMes(year, month)
-    const mesPrevTotal = totalMes(mesPrevYear, mesPrevIdx)
+    const mesPrevTotal   = totalMes(mesPrevYear, mesPrevIdx)
+    const mesActualNeto  = totalMesNeto(year, month)
+    const mesPrevNeto    = totalMesNeto(mesPrevYear, mesPrevIdx)
 
     // Mismo mes del año anterior (hasta el mismo día para comparación justa)
     const mesAnioAnteriorTotal = isCurrentMonth ? totalMesHastaDia(year - 1, month, maxDay) : totalMes(year - 1, month)
@@ -452,15 +560,20 @@ export default function EstadoComercialPage() {
     const tm1Total = totalMes(tm1Year, tm1Idx)
     const tm2Total = totalMes(tm2Year, tm2Idx)
     const tm3Total = totalMes(tm3Year, tm3Idx)
+    const tm1Neto  = totalMesNeto(tm1Year, tm1Idx)
+    const tm2Neto  = totalMesNeto(tm2Year, tm2Idx)
+    const tm3Neto  = totalMesNeto(tm3Year, tm3Idx)
+
+    const variacionNeto = mesPrevNeto > 0 ? ((mesActualNeto - mesPrevNeto) / mesPrevNeto) * 100 : 0
 
     const tendencia = tm1Total > 0 && tm2Total > 0 ? (() => {
       const tipo = tm3Total > tm2Total && tm2Total > tm1Total ? 'creciente' as const
         : tm3Total < tm2Total && tm2Total < tm1Total ? 'decreciente' as const
         : 'mixta' as const
       return {
-        m1: { nombre: MESES_CORTO[tm1Idx], total: tm1Total },
-        m2: { nombre: MESES_CORTO[tm2Idx], total: tm2Total },
-        m3: { nombre: MESES_CORTO[tm3Idx], total: tm3Total },
+        m1: { nombre: MESES_CORTO[tm1Idx], total: tm1Total, neto: tm1Neto },
+        m2: { nombre: MESES_CORTO[tm2Idx], total: tm2Total, neto: tm2Neto },
+        m3: { nombre: MESES_CORTO[tm3Idx], total: tm3Total, neto: tm3Neto },
         tipo,
       }
     })() : null
@@ -468,7 +581,8 @@ export default function EstadoComercialPage() {
     return {
       mesActualNombre, mesPrevNombre,
       mesActualTotal, mesPrevTotal,
-      variacion,
+      mesActualNeto, mesPrevNeto,
+      variacion, variacionNeto,
       isCurrentMonth,
       diaActual: isCurrentMonth ? maxDay : null,
       tendencia,
@@ -822,7 +936,7 @@ export default function EstadoComercialPage() {
           urgDetalle = [
             dormidoTop.cliente,
             `${dormidoTop.dias_sin_actividad} días sin comprar`,
-            `Recovery: ${dormidoTop.recovery_label}${canalV ? ' · Canal: ' + canalV : ''}`,
+            `${dormidoTop.recovery_label === 'alta' ? 'Alta probabilidad' : dormidoTop.recovery_label === 'recuperable' ? 'Recuperable' : dormidoTop.recovery_label === 'dificil' ? 'Difícil' : 'Perdido'}${canalV ? ' · Canal: ' + canalV : ''}`,
           ]
           actoresUsados.add(dormidoTop.cliente)
         } else {
@@ -890,8 +1004,8 @@ export default function EstadoComercialPage() {
         tipo: 'oportunidad',
         titulo: tr(`${top.cliente} · ${top.dias_sin_actividad} días sin comprar`, 60),
         detalle: esAlta && stockMatch
-          ? [`Score: ${top.recovery_score} · Alta recuperación`, `${stockMatch.producto}: ${stockMatch.unidades_actuales.toLocaleString()} uds`, `Vendedor: ${top.vendedor}`]
-          : [`Score: ${top.recovery_score} · ${top.recovery_label === 'alta' ? 'Alta recuperación' : 'Recuperable'}`, `Vendedor: ${top.vendedor}`, top.recovery_explicacion].filter(Boolean),
+          ? [`Alta probabilidad de recuperación`, `${stockMatch.producto}: ${stockMatch.unidades_actuales.toLocaleString()} uds`, `Vendedor: ${top.vendedor}`]
+          : [`${top.recovery_label === 'alta' ? 'Alta probabilidad de recuperación' : top.recovery_label === 'recuperable' ? 'Recuperable — contactar esta semana' : top.recovery_label === 'dificil' ? 'Difícil — intentar con oferta concreta' : 'Perdido — evaluar si vale el esfuerzo'}`, `Vendedor: ${top.vendedor}`, top.recovery_explicacion].filter(Boolean),
         chatQ: `${top.cliente} lleva ${top.dias_sin_actividad} días sin comprar. Vendedor: ${top.vendedor}. Dame una estrategia de reactivación con guión de contacto.`,
       })
     } else if (estancados.length > 0) {
@@ -1306,7 +1420,7 @@ export default function EstadoComercialPage() {
 
   const feedFiltered = useMemo(() => {
     const filterDef = FEED_FILTERS.find(f => f.key === feedFilter) ?? FEED_FILTERS[0]
-    const byType = feedInsights.filter(i => filterDef.match(i.tipo))
+    const byType = feedInsights.filter(i => filterDef.match(i))
 
     // Filtrar por estado
     const byStatus = byType.filter(i => {
@@ -1334,11 +1448,13 @@ export default function EstadoComercialPage() {
   }, [feedInsights, feedFilter, alertStatuses, statusFilter, getStatus])
 
   const feedFilterCounts = useMemo(() => {
-    const counts: Record<FeedFilterKey, number> = { all: feedInsights.length, riesgos: 0, hallazgo: 0, cruzado: 0 }
+    const counts: Record<FeedFilterKey, number> = { all: feedInsights.length, urgentes: 0, vendedores: 0, productos: 0, clientes: 0, hallazgo: 0 }
     feedInsights.forEach(i => {
-      if (i.tipo.startsWith('riesgo_')) counts.riesgos++
-      else if (i.tipo === 'hallazgo') counts.hallazgo++
-      else if (i.tipo === 'cruzado') counts.cruzado++
+      if (i.prioridad === 'CRITICA' || i.prioridad === 'ALTA') counts.urgentes++
+      if (i.tipo === 'riesgo_vendedor' || i.tipo === 'riesgo_equipo') counts.vendedores++
+      else if (i.tipo === 'riesgo_producto') counts.productos++
+      else if (i.tipo === 'riesgo_cliente') counts.clientes++
+      else if (i.tipo === 'hallazgo' || i.tipo === 'cruzado' || i.tipo === 'riesgo_meta') counts.hallazgo++
     })
     return counts
   }, [feedInsights])
@@ -1347,7 +1463,7 @@ export default function EstadoComercialPage() {
     const counts = { notResolved: 0, following: 0, resolved: 0 }
     feedInsights.forEach(i => {
       const filterDef = FEED_FILTERS.find(f => f.key === feedFilter) ?? FEED_FILTERS[0]
-      if (!filterDef.match(i.tipo)) return
+      if (!filterDef.match(i)) return
       const s = alertStatuses[getAlertKey(i)]?.status ?? 'pending'
       if (s === 'resolved') counts.resolved++
       else if (s === 'following') { counts.following++; counts.notResolved++ }
@@ -1436,27 +1552,30 @@ export default function EstadoComercialPage() {
   const ytdChart = useMemo(() => {
     const currentYear = selectedPeriod.year
     const previousYear = currentYear - 1
-    const currentMonth = selectedPeriod.month // 0-based in store
-    const maxDay = maxDate.getDate() // día máximo del mes actual para comparación justa
+    const selectedMonth = selectedPeriod.month // 0-based
+    // El mes "en curso" real es el mes del dato más reciente (puede diferir del seleccionado)
+    const latestMonth = maxDate.getFullYear() === currentYear ? maxDate.getMonth() : selectedMonth
+    const maxDay = maxDate.getDate() // día hasta el que hay datos en el mes en curso
 
     const data: { month: string; actual: number; anterior: number; isPartial: boolean; daysElapsed: number; daysTotal: number }[] = []
     let totalActual = 0
     let totalAnterior = 0
 
-    for (let m = 0; m <= currentMonth; m++) {
-      const isCurrentMonth = m === currentMonth
+    for (let m = 0; m <= selectedMonth; m++) {
+      // Mes realmente parcial = el mes donde están los últimos datos (mes en curso)
+      const isPartialMonth = m === latestMonth
       const daysInMonth = new Date(currentYear, m + 1, 0).getDate()
 
       const ventasActual = sales
         .filter(s => { const d = new Date(s.fecha); return d.getFullYear() === currentYear && d.getMonth() === m })
         .reduce((sum, s) => sum + s.unidades, 0)
 
-      // Para el mes actual: solo contar ventas del año anterior hasta el mismo día
+      // Filtro de día solo para el mes en curso (parcial); meses cerrados se comparan completos
       const ventasAnterior = sales
         .filter(s => {
           const d = new Date(s.fecha)
           if (d.getFullYear() !== previousYear || d.getMonth() !== m) return false
-          if (isCurrentMonth && d.getDate() > maxDay) return false
+          if (isPartialMonth && d.getDate() > maxDay) return false
           return true
         })
         .reduce((sum, s) => sum + s.unidades, 0)
@@ -1468,13 +1587,81 @@ export default function EstadoComercialPage() {
         month: MESES_CORTO[m],
         actual: ventasActual,
         anterior: ventasAnterior,
-        isPartial: isCurrentMonth,
-        daysElapsed: isCurrentMonth ? maxDay : daysInMonth,
+        isPartial: isPartialMonth,
+        daysElapsed: isPartialMonth ? maxDay : daysInMonth,
         daysTotal: daysInMonth,
       })
     }
     return { data, totalActual, totalAnterior, maxDay }
   }, [sales, selectedPeriod.year, selectedPeriod.month, maxDate])
+
+  // ── YTD chart en dólares (solo si has_venta_neta) ──
+  const ytdChartUSD = useMemo(() => {
+    if (!dataAvailability.has_venta_neta) return null
+    const currentYear = selectedPeriod.year
+    const previousYear = currentYear - 1
+    const selectedMonth = selectedPeriod.month
+    const latestMonth = maxDate.getFullYear() === currentYear ? maxDate.getMonth() : selectedMonth
+    const maxDay = maxDate.getDate()
+    const data: { month: string; actual: number; anterior: number; isPartial: boolean; daysElapsed: number; daysTotal: number }[] = []
+    let totalActual = 0
+    let totalAnterior = 0
+    for (let m = 0; m <= selectedMonth; m++) {
+      const isPartialMonth = m === latestMonth
+      const daysInMonth = new Date(currentYear, m + 1, 0).getDate()
+      const ventasActual = sales
+        .filter(s => { const d = new Date(s.fecha); return d.getFullYear() === currentYear && d.getMonth() === m })
+        .reduce((sum, s) => sum + (s.venta_neta ?? 0), 0)
+      const ventasAnterior = sales
+        .filter(s => {
+          const d = new Date(s.fecha)
+          if (d.getFullYear() !== previousYear || d.getMonth() !== m) return false
+          if (isPartialMonth && d.getDate() > maxDay) return false
+          return true
+        })
+        .reduce((sum, s) => sum + (s.venta_neta ?? 0), 0)
+      totalActual += ventasActual
+      totalAnterior += ventasAnterior
+      data.push({ month: MESES_CORTO[m], actual: ventasActual, anterior: ventasAnterior, isPartial: isPartialMonth, daysElapsed: isPartialMonth ? maxDay : daysInMonth, daysTotal: daysInMonth })
+    }
+    return { data, totalActual, totalAnterior, maxDay }
+  }, [sales, selectedPeriod.year, selectedPeriod.month, maxDate, dataAvailability.has_venta_neta])
+
+  // ── PULSO cards — must be before early return to respect Rules of Hooks ──
+  const pulsoResult = useMemo(() => {
+    if (!teamStats) return { visible: [] as PulsoCard[], total: 0 }
+    const cumpl = teamStats.meta_equipo
+      ? ((teamStats.proyeccion_equipo ?? vendorAnalysis.reduce((s, v) => s + (v.proyeccion_cierre ?? 0), 0)) / teamStats.meta_equipo) * 100
+      : (teamStats.cumplimiento_equipo ?? 0)
+    const em = {
+      estado: 'sin_base' as string,
+      proyeccion_cierre: 0, actual: 0, historico_mes: 0,
+      diasTranscurridos: teamStats.dias_transcurridos, diasTotales: teamStats.dias_totales,
+      gap_pct: null as number | null, ingreso_actual: 0,
+    }
+    const sliceActual = salesInPeriod(sales, selectedPeriod.year, selectedPeriod.month)
+    const slicePrev = salesInPeriod(sales, selectedPeriod.year - 1, selectedPeriod.month)
+    em.actual = sliceActual.reduce((a, s) => a + s.unidades, 0)
+    em.ingreso_actual = sliceActual.reduce((a, s) => a + (s.venta_neta ?? 0), 0)
+    em.historico_mes = slicePrev.reduce((a, s) => a + s.unidades, 0)
+    const ritmo = teamStats.dias_transcurridos > 0 ? em.actual / teamStats.dias_transcurridos : 0
+    em.proyeccion_cierre = Math.round(ritmo * teamStats.dias_totales)
+    const esperado = teamStats.dias_totales > 0 && em.historico_mes > 0
+      ? Math.round(em.historico_mes * (teamStats.dias_transcurridos / teamStats.dias_totales)) : 0
+    em.gap_pct = esperado > 0 ? Math.round(((em.actual - esperado) / esperado) * 100) : null
+    const ratio = esperado > 0 ? em.actual / esperado : null
+    em.estado = ratio === null ? 'sin_base' : ratio >= 1.05 ? 'adelantado' : ratio >= 0.85 ? 'en_linea' : 'atrasado'
+    const sUSD = configuracion.metricaGlobal === 'usd' && dataAvailability.has_venta_neta && !!ytdChartUSD
+    return computePulsoCards({
+      vendorAnalysis, teamStats, clientesDormidos, concentracionRiesgo,
+      categoriasInventario, canalAnalysis, supervisorAnalysis, insights, dataAvailability,
+      moneda: configuracion.moneda, showUSD: sUSD, estadoMes: em, cumplimientoFinal: cumpl,
+      sales, selectedPeriod,
+    })
+  }, [teamStats, vendorAnalysis, clientesDormidos, concentracionRiesgo,
+    categoriasInventario, canalAnalysis, supervisorAnalysis, insights, dataAvailability,
+    configuracion.moneda, configuracion.metricaGlobal, ytdChartUSD,
+    sales, selectedPeriod])
 
   if (!teamStats) {
     if (sales.length === 0) return null // el useEffect redirige a /cargar
@@ -1532,7 +1719,7 @@ export default function EstadoComercialPage() {
   // Derived card metrics
   const dormidosRec      = clientesDormidos.filter(c => c.recovery_label === 'alta' || c.recovery_label === 'recuperable')
   const activosMes       = new Set(salesActual.filter(s => s.cliente).map(s => s.cliente)).size
-  const valorRiesgoClien = dormidosRec.reduce((s, c) => s + c.valor_historico, 0)
+  const valorRiesgoClien = clientesDormidos.reduce((s, c) => s + c.valor_historico, 0)
   const canalPrincipal   = [...canalAnalysis].sort((a, b) => b.participacion_pct - a.participacion_pct)[0] ?? null
   const canalesActivos   = canalAnalysis.filter(c => c.activo_periodo).length
   const canalesEnCaida   = canalAnalysis.filter(c => c.tendencia === 'caida' || c.tendencia === 'desaparecido').length
@@ -1550,6 +1737,12 @@ export default function EstadoComercialPage() {
   const ytdChartPct = ytdChart.totalAnterior > 0
     ? ((ytdDiff / ytdChart.totalAnterior) * 100)
     : null
+
+  const showUSD = dashMetrica === 'usd' && dataAvailability.has_venta_neta && !!ytdChartUSD
+  const activeYtdChart = showUSD ? ytdChartUSD! : ytdChart
+  const activeYtdDiff = activeYtdChart.totalActual - activeYtdChart.totalAnterior
+  const activeYtdUp = activeYtdDiff >= 0
+  const activeYtdPct = activeYtdChart.totalAnterior > 0 ? ((activeYtdDiff / activeYtdChart.totalAnterior) * 100) : null
 
   const rawMesLabel = new Date(selectedPeriod.year, selectedPeriod.month, 1).toLocaleDateString('es-MX', { month: 'long', year: 'numeric' })
   const mesLabel = rawMesLabel.charAt(0).toUpperCase() + rawMesLabel.slice(1)
@@ -1573,6 +1766,12 @@ export default function EstadoComercialPage() {
   const cumplimientoFinal = teamStats?.meta_equipo
     ? (proyFinal / teamStats.meta_equipo) * 100
     : (teamStats?.cumplimiento_equipo ?? 0)
+
+
+  const fmtBig = (n: number) =>
+    n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M`
+    : n >= 1000    ? `${(n / 1000).toFixed(1)}k`
+    : Math.round(n).toLocaleString('es-SV')
 
   return (
     <>
@@ -1610,6 +1809,23 @@ export default function EstadoComercialPage() {
         </>
       )}
 
+      {/* PulsoPanel — categorías / inventario */}
+      {pulsoPanel && (
+        <>
+          <div className="fixed inset-0 bg-black/60 z-40" onClick={() => setPulsoPanel(null)} />
+          <PulsoPanel
+            data={pulsoPanel}
+            moneda={configuracion.moneda}
+            onClose={() => setPulsoPanel(null)}
+            onChat={(q) => {
+              setPulsoPanel(null)
+              const isDemo = location.pathname.startsWith('/demo')
+              navigate(`${isDemo ? '/demo' : ''}/chat`, { state: { prefill: q, source: 'Pulso' } })
+            }}
+          />
+        </>
+      )}
+
       {/* â"€â"€ CONTENIDO PRINCIPAL â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€ */}
       <div style={{ fontFamily: "'Inter', sans-serif" }}>
 
@@ -1630,87 +1846,68 @@ export default function EstadoComercialPage() {
             ✓ En orden
           </span>
         ) : null}
-        <div className="sf-no-print relative flex items-center">
-          <Calendar className="absolute left-2 w-3 h-3 pointer-events-none" style={{ color: 'var(--sf-t5)' }} />
-          <select
-            value={`${selectedPeriod.year}-${selectedPeriod.month}`}
-            onChange={e => {
-              const [y, m] = e.target.value.split('-').map(Number)
-              setSelectedPeriod({ year: y, month: m })
+        {/* Month selector */}
+        <div className="sf-no-print" ref={monthDropRef}>
+          <button
+            ref={monthBtnRef}
+            onClick={() => {
+              if (!monthDropOpen && monthBtnRef.current) {
+                const r = monthBtnRef.current.getBoundingClientRect()
+                setMonthDropRect({ top: r.bottom + 6, left: r.left, width: r.width })
+              }
+              setMonthDropOpen(v => !v)
             }}
-            className="appearance-none focus:outline-none cursor-pointer"
-            style={{
-              background: 'var(--sf-inset)',
-              border: '1px solid var(--sf-border)',
-              borderRadius: 20,
-              color: 'var(--sf-t2)',
-              fontSize: 11,
-              fontWeight: 500,
-              padding: '4px 24px 4px 24px',
-              height: 28,
-            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors"
+            style={{ background: 'var(--sf-inset)', color: 'var(--sf-t2)', border: '1px solid var(--sf-border)' }}
           >
-            {availableMonths.map(({ year, month }) => {
-              const label = `${MESES_CORTO[month]} ${year}`
-              return <option key={`${year}-${month}`} value={`${year}-${month}`}>{label}</option>
-            })}
-          </select>
-          <ChevronDown className="absolute right-2 w-3 h-3 pointer-events-none" style={{ color: 'var(--sf-t5)' }} />
-        </div>
-        {/* Comparison toggle */}
-        <button
-          className="sf-no-print flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium cursor-pointer transition-colors"
-          style={{
-            background: comparisonEnabled ? 'var(--sf-green-bg)' : 'var(--sf-inset)',
-            color: comparisonEnabled ? 'var(--sf-green)' : 'var(--sf-t4)',
-            border: comparisonEnabled ? '1px solid var(--sf-green-border)' : '1px solid var(--sf-border)',
-          }}
-          onClick={() => {
-            if (!comparisonEnabled && !canAccess('period_comparison')) {
-              setShowUpgradeModal(true)
-              return
-            }
-            toggleComparison()
-          }}
-          title="Comparar con período anterior"
-        >
-          <GitCompare className="w-3 h-3" />
-          {comparisonEnabled && comparisonPeriod
-            ? `vs ${MESES_CORTO[comparisonPeriod.month]} ${comparisonPeriod.year}`
-            : 'Comparar'}
-        </button>
-        {comparisonEnabled && comparisonPeriod && (
-          <div className="sf-no-print relative flex items-center">
-            <select
-              value={`${comparisonPeriod.year}-${comparisonPeriod.month}`}
-              onChange={e => {
-                const [y, m] = e.target.value.split('-').map(Number)
-                setComparisonPeriod({ year: y, month: m })
-              }}
-              className="appearance-none focus:outline-none cursor-pointer"
+            <Calendar className="w-3.5 h-3.5" style={{ color: 'var(--sf-t4)' }} />
+            {MESES_LARGO[selectedPeriod.month].charAt(0).toUpperCase() + MESES_LARGO[selectedPeriod.month].slice(1)} {selectedPeriod.year}
+            <ChevronDown className="w-3 h-3" style={{ color: 'var(--sf-t4)', transform: monthDropOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+          </button>
+          {monthDropOpen && monthDropRect && createPortal(
+            <div
+              id="sf-month-portal"
               style={{
-                background: 'var(--sf-green-bg)',
-                border: '1px solid var(--sf-green-border)',
-                borderRadius: 20,
-                color: 'var(--sf-green)',
-                fontSize: 10,
-                fontWeight: 500,
-                padding: '3px 20px 3px 8px',
-                height: 26,
+                position: 'fixed',
+                top: monthDropRect.top,
+                left: monthDropRect.left,
+                minWidth: Math.max(monthDropRect.width, 160),
+                maxHeight: 300,
+                overflowY: 'auto',
+                zIndex: 9999,
+                background: 'var(--sf-card)',
+                border: '1px solid var(--sf-border)',
+                borderRadius: 12,
+                boxShadow: '0 20px 40px rgba(0,0,0,0.35)',
               }}
             >
-              {availableMonths
-                .filter(({ year, month }) => !(year === selectedPeriod.year && month === selectedPeriod.month))
-                .map(({ year, month }) => (
-                  <option key={`c-${year}-${month}`} value={`${year}-${month}`}>
-                    {MESES_CORTO[month]} {year}
-                  </option>
-                ))
-              }
-            </select>
-            <ChevronDown className="absolute right-1.5 w-2.5 h-2.5 pointer-events-none" style={{ color: 'var(--sf-green)' }} />
-          </div>
-        )}
+              <div className="p-1.5 flex flex-col gap-0.5">
+                {availableMonths.map(({ year, month }) => {
+                  const isSelected = year === selectedPeriod.year && month === selectedPeriod.month
+                  const label = MESES_LARGO[month].charAt(0).toUpperCase() + MESES_LARGO[month].slice(1)
+                  return (
+                    <button
+                      key={`${year}-${month}`}
+                      onClick={() => {
+                        setSelectedPeriod({ year, month })
+                        setMonthDropOpen(false)
+                      }}
+                      className="w-full px-3 py-1.5 rounded-lg text-[12px] font-medium text-left flex items-center justify-between transition-colors cursor-pointer"
+                      style={{
+                        background: isSelected ? 'var(--sf-green-bg)' : 'transparent',
+                        color: isSelected ? 'var(--sf-green)' : 'var(--sf-t3)',
+                      }}
+                    >
+                      {label}
+                      {isSelected && <span style={{ color: 'var(--sf-green)', fontSize: 10 }}>✓</span>}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>,
+            document.body
+          )}
+        </div>
         <span
           className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px]"
           style={{ background: 'var(--sf-inset)', color: 'var(--sf-t4)' }}
@@ -1718,87 +1915,81 @@ export default function EstadoComercialPage() {
           <Calendar className="w-3 h-3" />
           Día {teamStats.dias_transcurridos} de {teamStats.dias_totales}
         </span>
-        <span
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium"
-          style={{ background: 'var(--sf-green-bg)', color: 'var(--sf-green)' }}
-          title="Registros procesados del archivo de ventas cargado"
-        >
-          <Database className="w-3 h-3" />
-          {sales.length.toLocaleString()} registros
-        </span>
-        <button
-          className="sf-no-print flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium cursor-pointer transition-colors ml-auto"
-          style={{ background: 'var(--sf-inset)', color: 'var(--sf-t4)', border: '1px solid var(--sf-border)' }}
-          onClick={() => window.print()}
-          onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--sf-green)'; e.currentTarget.style.color = 'var(--sf-green)' }}
-          onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--sf-border)'; e.currentTarget.style.color = 'var(--sf-t4)' }}
-          title="Exportar como PDF (Ctrl+P)"
-        >
-          <Printer className="w-3 h-3" />
-          Exportar PDF
-        </button>
       </div>
 
-      {/* ── COMPARISON SUMMARY ────────────────────────────────────────────── */}
-      {comparisonEnabled && comparisonPeriod && (
-        <ComparisonSummary sales={sales} insights={insights} compPeriod={comparisonPeriod} />
-      )}
-      {showUpgradeModal && (
-        <UpgradePrompt feature="period_comparison" onClose={() => setShowUpgradeModal(false)} />
-      )}
-
       {/* ── KPI CARDS ──────────────────────────────────────────────────────── */}
-      <div className="intel-fade grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6" style={{ animationDelay: '30ms' }}>
-        {/* Card 1 — VENTAS YTD */}
-        <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
-          <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t5)' }}>Ventas YTD</p>
-          <p className="text-2xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-t1)' }}>
-            {ytdChart.totalActual >= 1_000_000 ? `${(ytdChart.totalActual / 1_000_000).toFixed(1)}M` : ytdChart.totalActual >= 1000 ? `${(ytdChart.totalActual / 1000).toFixed(1)}k` : ytdChart.totalActual.toLocaleString()}
-            <span className="text-sm font-normal ml-1" style={{ color: 'var(--sf-t5)' }}>uds</span>
-          </p>
-          {dataAvailability.has_venta_neta && ytd_neto > 0 && (
-            <p className="text-xs mt-1" style={{ color: 'var(--sf-t4)' }}>{configuracion.moneda} {Math.round(ytd_neto).toLocaleString('es-SV')}</p>
-          )}
-        </div>
-
-        {/* Card 2 — VS AÑO ANTERIOR */}
-        <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
-          <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t5)' }}>Vs misma fecha {selectedPeriod.year - 1}</p>
-          <p className="text-2xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: ytdVar == null ? 'var(--sf-t5)' : ytdVar >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
-            {ytdVar == null ? '—' : `${ytdVar >= 0 ? '+' : ''}${ytdVar.toFixed(1)}%`}
-          </p>
-          <p className="text-xs mt-1" style={{ color: 'var(--sf-t5)' }}>
-            {dataAvailability.has_venta_neta && ytd_anterior_neto > 0
-              ? `${configuracion.moneda} ${Math.round(ytd_anterior_neto).toLocaleString('es-SV')} al ${fechaCompLabel}`
-              : teamStats.ytd_anterior_equipo
-                ? `${Math.round(teamStats.ytd_anterior_equipo).toLocaleString('es-SV')} uds al ${fechaCompLabel}`
-                : ''}
-          </p>
-        </div>
+      <div className="intel-fade grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6" style={{ animationDelay: '30ms' }}>
+        {/* Card 1 — VENTAS YTD + variación vs año anterior */}
+        {(() => {
+          const mainUds  = ytdChart.totalActual
+          const mainNeto = ytd_neto
+          // Usar siempre activeYtdPct para que KPI y gráfica muestren el mismo porcentaje
+          const varPct   = activeYtdPct
+          const label = `YTD — vs mismo periodo ${selectedPeriod.year - 1}`
+          return (
+            <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
+              <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t5)' }}>
+                Ventas YTD
+              </p>
+              {showUSD && mainNeto > 0 ? (
+                <p className="text-2xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-t1)' }}>
+                  {configuracion.moneda} {fmtBig(mainNeto)}
+                </p>
+              ) : (
+                <p className="text-2xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-t1)' }}>
+                  {fmtBig(mainUds)}<span className="text-sm font-normal ml-1" style={{ color: 'var(--sf-t5)' }}>uds</span>
+                </p>
+              )}
+              {varPct != null && (
+                <p className="text-xs font-semibold mt-1.5" style={{ color: varPct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
+                  {varPct >= 0 ? '+' : ''}{varPct.toFixed(1)}% <span style={{ color: 'var(--sf-t5)', fontWeight: 400 }}>{label}</span>
+                </p>
+              )}
+              {comparacionMes && comparacionMes.mesPrevTotal > 0 && (
+                <p className="text-[10px] mt-1" style={{ color: comparacionMes.variacion >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
+                  vs {comparacionMes.mesPrevNombre}: {comparacionMes.variacion >= 0 ? '+' : ''}{comparacionMes.variacion.toFixed(1)}%
+                </p>
+              )}
+            </div>
+          )
+        })()}
 
         {/* Card 3 — PROYECCIÓN CIERRE */}
         {(() => {
           const hasNeta = dataAvailability.has_venta_neta
           const proyVal = hasNeta ? proyeccion_neta : estadoMes.proyeccion_cierre
           const hasMeta = !!teamStats?.meta_equipo && teamStats.meta_equipo > 0
-          // Compare projection against meta (in units); for neta use proportional scaling
           const metaVal = hasMeta ? teamStats!.meta_equipo! : 0
-          const proyVsMeta = hasMeta ? Math.round((proyVal / (hasNeta ? (metaVal * (proyeccion_neta / (estadoMes.proyeccion_cierre || 1))) : metaVal)) * 100) : null
-          // Simpler: compare proyFinal (units) vs meta_equipo (units)
           const proyVsMetaPct = hasMeta ? Math.round((proyFinal / metaVal) * 100) : null
           const metaColor = proyVsMetaPct !== null ? (proyVsMetaPct >= 100 ? 'var(--sf-green)' : 'var(--sf-red)') : 'var(--sf-t1)'
+          const belowMeta = proyVsMetaPct !== null && proyVsMetaPct < 100
+          // Brecha en USD (estimada con ratio promedio ytd)
+          const avgRevPerUnit = ytd_neto > 0 && ytdChart.totalActual > 0 ? ytd_neto / ytdChart.totalActual : 0
+          const metaNeta = avgRevPerUnit > 0 ? Math.round(metaVal * avgRevPerUnit) : 0
+          const brechaNeta = hasNeta && metaNeta > 0 ? proyeccion_neta - metaNeta : null
+          const brechaUnits = proyFinal - metaVal
           return (
             <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
               <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t5)' }}>Proyección cierre</p>
               <p className="text-2xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: metaColor }}>
-                {hasNeta ? `${configuracion.moneda} ${Math.round(proyVal).toLocaleString('es-SV')}` : (
-                  <>{Math.round(proyVal).toLocaleString('es-SV')}<span className="text-sm font-normal ml-1" style={{ color: 'var(--sf-t5)' }}>uds</span></>
-                )}
+                {showUSD && hasNeta
+                  ? `${configuracion.moneda} ${Math.round(proyeccion_neta).toLocaleString('es-SV')}`
+                  : <>{Math.round(estadoMes.proyeccion_cierre).toLocaleString('es-SV')}<span className="text-sm font-normal ml-1" style={{ color: 'var(--sf-t5)' }}>uds</span></>
+                }
               </p>
               {proyVsMetaPct !== null ? (
-                <p className="text-xs font-semibold mt-1" style={{ color: metaColor }}>
-                  vs meta: {proyVsMetaPct}%
-                </p>
+                belowMeta ? (
+                  <p className="text-xs font-semibold mt-1" style={{ color: 'var(--sf-red)' }}>
+                    {showUSD && brechaNeta !== null
+                      ? `${configuracion.moneda} ${Math.abs(Math.round(brechaNeta)).toLocaleString('es-SV')} vs meta`
+                      : `${Math.abs(brechaUnits).toLocaleString('es-SV')} uds vs meta`
+                    }
+                  </p>
+                ) : (
+                  <p className="text-xs font-semibold mt-1" style={{ color: 'var(--sf-green)' }}>
+                    vs meta: {proyVsMetaPct}%
+                  </p>
+                )
               ) : (
                 <p className="text-xs mt-1" style={{ color: 'var(--sf-t5)' }}>Sin meta configurada</p>
               )}
@@ -1815,7 +2006,10 @@ export default function EstadoComercialPage() {
                 {Math.round(cumplimientoFinal)}%
               </p>
               <p className="text-xs mt-1" style={{ color: 'var(--sf-t4)' }}>
-                {estadoMes.actual.toLocaleString()} / {teamStats.meta_equipo.toLocaleString()} uds
+                {showUSD && estadoMes.ingreso_actual > 0
+                  ? `${configuracion.moneda} ${fmtBig(estadoMes.ingreso_actual)} / ${configuracion.moneda} ${fmtBig(teamStats.meta_equipo)}`
+                  : `${estadoMes.actual.toLocaleString()} / ${teamStats.meta_equipo.toLocaleString()} uds`
+                }
               </p>
               <div className="mt-2 rounded-full overflow-hidden" style={{ height: 4, background: 'var(--sf-inset)' }}>
                 <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(cumplimientoFinal, 100)}%`, background: cumplimientoFinal >= 100 ? 'var(--sf-green)' : cumplimientoFinal >= 70 ? '#eab308' : 'var(--sf-red)' }} />
@@ -1833,34 +2027,37 @@ export default function EstadoComercialPage() {
       <div className="intel-fade" style={{ animationDelay: '60ms' }}>
         <div className="rounded-2xl p-4 flex flex-col" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
           <div className="flex items-center justify-between mb-3">
-            <p className="text-[11px] font-bold uppercase tracking-[0.15em]" style={{ color: 'var(--sf-t5)' }}>Evolución YTD</p>
-            <div className="flex items-center gap-4 text-xs">
+            <p className="text-[11px] font-bold uppercase tracking-[0.15em]" style={{ color: 'var(--sf-t5)' }}>Ventas mes a mes</p>
+            <div className="flex items-center gap-3 text-xs">
               <span className="flex items-center gap-1.5">
-                <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: '#22c55e' }} />
-                <span style={{ color: 'var(--sf-t3)' }}>{selectedPeriod.year} sobre anterior</span>
+                <span style={{ color: '#10B981', fontSize: 10, lineHeight: 1 }}>▲</span>
+                <span style={{ color: 'var(--sf-t4)' }}>{selectedPeriod.year} creció vs {selectedPeriod.year - 1}</span>
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: '#ef4444' }} />
-                <span style={{ color: 'var(--sf-t3)' }}>{selectedPeriod.year} bajo anterior</span>
+                <span style={{ color: '#ef4444', fontSize: 10, lineHeight: 1 }}>▼</span>
+                <span style={{ color: 'var(--sf-t4)' }}>{selectedPeriod.year} cayó vs {selectedPeriod.year - 1}</span>
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: 'var(--sf-t5, #b5ada4)', opacity: 0.4 }} />
+                <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: '#6B7280' }} />
                 <span style={{ color: 'var(--sf-t4)' }}>{selectedPeriod.year - 1}</span>
               </span>
             </div>
           </div>
 
-          {ytdChart.data.length > 0 ? (
+          {activeYtdChart.data.length > 0 ? (() => {
+            const yMax = Math.max(...activeYtdChart.data.flatMap(d => [d.actual, d.anterior]), 1)
+            const yDomain: [number, number] = [0, Math.ceil(yMax * 1.15)]
+            return (
             <div className="flex-1" style={{ minHeight: 200 }}>
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={ytdChart.data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }} barGap={2} barCategoryGap="20%">
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={activeYtdChart.data} margin={{ top: 30, right: 10, left: 0, bottom: 16 }} barGap={2} barCategoryGap="20%" style={{ cursor: 'default' }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--sf-border, rgba(255,255,255,0.06))" vertical={false} />
                   <XAxis
                     dataKey="month"
                     axisLine={false}
                     tickLine={false}
                     tick={(props: { x: number; y: number; payload: { value: string; index: number } }) => {
-                      const entry = ytdChart.data[props.payload.index]
+                      const entry = activeYtdChart.data[props.payload.index]
                       return (
                         <g>
                           <text x={props.x} y={props.y + 12} textAnchor="middle" fontSize={11} fill="var(--sf-t4, #8c857d)">
@@ -1875,40 +2072,92 @@ export default function EstadoComercialPage() {
                       )
                     }}
                   />
-                  <YAxis tick={{ fontSize: 10, fill: 'var(--sf-t5, #b5ada4)' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)} width={40} />
+                  <YAxis type="number" tick={{ fontSize: 10, fill: 'var(--sf-t2, #C8DDEF)' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)} width={40} domain={yDomain} allowDataOverflow={false} />
                   <Tooltip
-                    formatter={(value: number, name: string) => [
-                      `${Number(value).toLocaleString('es-SV')} uds`,
-                      name,
-                    ]}
-                    contentStyle={{ background: 'var(--sf-card, #1a1a2e)', border: '1px solid var(--sf-border, #e5e1db)', borderRadius: 8, fontSize: 12 }}
+                    cursor={{ fill: 'rgba(255,255,255,0.04)', stroke: 'none' }}
+                    content={({ active, payload, label }: any) => {
+                      if (!active || !payload?.length) return null
+                      const anteriorEntry = payload.find((e: any) => e.dataKey === 'anterior')
+                      const actualEntry = payload.find((e: any) => e.dataKey === 'actual')
+                      const valAnterior = Number(anteriorEntry?.value ?? 0)
+                      const valActual = Number(actualEntry?.value ?? 0)
+                      const pct = valAnterior > 0 ? ((valActual - valAnterior) / valAnterior) * 100 : null
+                      const fmtVal = (v: number) => showUSD
+                        ? `${configuracion.moneda} ${v.toLocaleString('es-SV')}`
+                        : `${v.toLocaleString('es-SV')} uds`
+                      return (
+                        <div style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderRadius: 10, padding: '12px 16px', boxShadow: '0 4px 12px rgba(0,0,0,0.3)', minWidth: 160 }}>
+                          <p style={{ color: 'var(--sf-t2)', fontWeight: 700, fontSize: 13, marginBottom: 8 }}>{label}</p>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, color: 'var(--sf-t1)', fontWeight: 600, fontSize: 12 }}>
+                            <span>{selectedPeriod.year}</span>
+                            <span>{fmtVal(valActual)}</span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, color: 'var(--sf-t4)', fontWeight: 400, fontSize: 12, marginTop: 2 }}>
+                            <span>{selectedPeriod.year - 1}</span>
+                            <span>{fmtVal(valAnterior)}</span>
+                          </div>
+                          {pct !== null && (
+                            <p style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid var(--sf-border)', fontSize: 12, fontWeight: 600, color: pct >= 0 ? '#10B981' : '#ef4444' }}>
+                              {pct >= 0 ? '▲' : '▼'} {pct >= 0 ? '+' : ''}{pct.toFixed(1)}%
+                            </p>
+                          )}
+                        </div>
+                      )
+                    }}
                   />
                   <Bar dataKey="anterior" name={String(selectedPeriod.year - 1)} radius={[4, 4, 0, 0]}>
-                    {ytdChart.data.map((entry, index) => (
-                      <Cell key={index} fill="var(--sf-t5, #b5ada4)" fillOpacity={entry.isPartial ? 0.2 : 0.4} strokeDasharray={entry.isPartial ? '3 2' : undefined} stroke={entry.isPartial ? 'var(--sf-t5, #b5ada4)' : 'none'} />
+                    {activeYtdChart.data.map((entry, index) => (
+                      <Cell key={index} fill="#6B7280" fillOpacity={entry.isPartial ? 0.2 : 0.5} strokeDasharray={entry.isPartial ? '3 2' : undefined} stroke={entry.isPartial ? '#6B7280' : 'none'} />
                     ))}
                   </Bar>
                   <Bar dataKey="actual" name={String(selectedPeriod.year)} radius={[4, 4, 0, 0]}>
-                    {ytdChart.data.map((entry, index) => {
-                      const baseColor = entry.actual >= entry.anterior ? '#22c55e' : '#ef4444'
-                      return <Cell key={index} fill={baseColor} fillOpacity={entry.isPartial ? 0.4 : 1} strokeDasharray={entry.isPartial ? '3 2' : undefined} stroke={entry.isPartial ? baseColor : 'none'} />
+                    {activeYtdChart.data.map((entry, index) => {
+                      const isUp = entry.actual >= entry.anterior
+                      const barColor = isUp ? '#10B981' : '#ef4444'
+                      return <Cell key={index} fill={barColor} fillOpacity={entry.isPartial ? 0.5 : 1} strokeDasharray={entry.isPartial ? '3 2' : undefined} stroke={entry.isPartial ? barColor : 'none'} />
                     })}
+                    <LabelList
+                      dataKey="actual"
+                      position="top"
+                      content={(props: any) => {
+                        const entry = activeYtdChart.data[props.index]
+                        if (!entry || entry.anterior === 0) return null
+                        const pct = ((entry.actual - entry.anterior) / entry.anterior) * 100
+                        const color = pct >= 0 ? '#10B981' : '#ef4444'
+                        return (
+                          <text
+                            x={Number(props.x) + Number(props.width) / 2}
+                            y={Number(props.y) - 4}
+                            textAnchor="middle"
+                            fontSize={13}
+                            fontWeight={700}
+                            fill={color}
+                          >
+                            {pct >= 0 ? '+' : ''}{pct.toFixed(1)}%
+                          </text>
+                        )
+                      }}
+                    />
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
-          ) : (
+            )
+          })() : (
             <p className="text-[12px] italic flex-1 flex items-center" style={{ color: 'var(--sf-t5)' }}>Primer período analizado — sin historial comparable</p>
           )}
 
-          {ytdChart.totalActual > 0 && (
+          {activeYtdChart.totalActual > 0 && (
             <div className="flex items-center justify-between mt-2 text-xs">
               <span style={{ color: 'var(--sf-t3)' }}>
-                {ytdChart.totalActual.toLocaleString('es-SV')} uds acumuladas
+                {showUSD
+                  ? `${configuracion.moneda} ${activeYtdChart.totalActual.toLocaleString('es-SV')} acumulados`
+                  : `${activeYtdChart.totalActual.toLocaleString('es-SV')} uds acumuladas`
+                }
               </span>
-              {ytdChartPct !== null && (
-                <span style={{ fontFamily: "'DM Mono', monospace", fontWeight: 600, color: ytdChartUp ? '#22c55e' : '#ef4444' }}>
-                  {ytdChartUp ? '+' : ''}{ytdChartPct.toFixed(1)}% vs misma fecha {selectedPeriod.year - 1}
+              {activeYtdPct !== null && (
+                <span style={{ fontFamily: "'DM Mono', monospace", fontWeight: 600, color: activeYtdUp ? '#10B981' : '#ef4444' }}>
+                  {activeYtdUp ? '+' : ''}{activeYtdPct.toFixed(1)}% vs misma fecha {selectedPeriod.year - 1}
                 </span>
               )}
             </div>
@@ -1916,210 +2165,141 @@ export default function EstadoComercialPage() {
         </div>
       </div>
 
-      {/* ── RESUMEN EJECUTIVO ──────────────────────────────────────────────── */}
-      {resumenEjecutivo.length > 0 && (
-        <div
-          className="intel-fade rounded-xl p-5"
-          style={{ animationDelay: '100ms', background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}
-        >
-          <div className="relative flex items-center gap-2 mb-3">
-            <span style={{ fontSize: 14, color: 'var(--sf-green)' }}>✦</span>
-            <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--sf-t5)' }}>Resumen del mes</p>
+      {/* ── PULSO ─────────────────────────────────────────────────────────── */}
+      {pulsoResult.visible.length > 0 && (
+        <div className="intel-fade" style={{ animationDelay: '100ms' }}>
+          <div className="flex items-center gap-2 mb-3">
+            <span className="pulse-danger" style={{ fontSize: 14, color: pulsoResult.visible.filter(c => c.severity === 'critical').length >= 3 ? 'var(--sf-red)' : pulsoResult.visible.some(c => c.severity === 'critical') ? 'var(--sf-amber)' : 'var(--sf-green)' }}>◉</span>
+            <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--sf-t5)' }}>Pulso</p>
+            <span className="text-[9px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'var(--sf-overlay-light)', color: 'var(--sf-t4)' }}>{pulsoResult.total} señales</span>
             {estadoMes.estado !== 'sin_base' && (
               <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded" style={{
-                color: estadoMes.estado === 'atrasado' ? '#ef4444' : estadoMes.estado === 'adelantado' ? '#22c55e' : 'var(--sf-t4)',
-                background: estadoMes.estado === 'atrasado' ? 'rgba(239,68,68,0.1)' : estadoMes.estado === 'adelantado' ? 'rgba(34,197,94,0.1)' : 'var(--sf-overlay-light)',
+                color: estadoMes.estado === 'atrasado' ? 'var(--sf-red)' : estadoMes.estado === 'adelantado' ? 'var(--sf-green)' : 'var(--sf-t4)',
+                background: estadoMes.estado === 'atrasado' ? 'var(--sf-red-bg)' : estadoMes.estado === 'adelantado' ? 'var(--sf-green-bg)' : 'var(--sf-overlay-light)',
               }}>
                 {estadoMes.estado === 'atrasado' ? '↓ Atraso' : estadoMes.estado === 'adelantado' ? '↑ Adelanto' : '→ En línea'}
               </span>
             )}
-            <FirstTimeTooltip
-              storageKey="sf_tip_resumen"
-              text="Este resumen se actualiza automaticamente cada vez que subes nuevos datos"
-            />
           </div>
-          <div className="space-y-2">
-            {resumenEjecutivo.map((bullet, i) => (
-              <div key={i}>
-                <div className="flex items-start gap-2">
-                  <span
-                    className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0"
-                    style={{
-                      background: bullet.tipo === 'alerta' ? 'var(--sf-red)' : bullet.tipo === 'positivo' ? 'var(--sf-green)' : 'var(--sf-t5)',
-                    }}
-                  />
-                  <p
-                    className="text-[13px] leading-relaxed"
-                    style={{ color: bullet.tipo === 'alerta' ? 'var(--sf-t2)' : bullet.tipo === 'positivo' ? 'var(--sf-t2)' : 'var(--sf-t3)' }}
-                  >
-                    {bullet.texto}
-                  </p>
-                </div>
-                {bullet.sub && (
-                  <p className="text-[11px] ml-[18px] mt-0.5" style={{ color: bullet.subColor ?? 'var(--sf-t5)' }}>
-                    {bullet.sub}
-                  </p>
-                )}
-              </div>
-            ))}
-          </div>
-          <div className="mt-4 pt-3" style={{ borderTop: '1px solid var(--sf-border-subtle)' }}>
-            <button
-              onClick={() => navigate('/chat', { state: { prefill: 'Dame un análisis completo del equipo este mes: estado vs meta, vendedores críticos, clientes dormidos y recomendaciones concretas.', source: 'Estado Comercial' } })}
-              className="inline-flex items-center gap-1.5 text-[12px] font-medium cursor-pointer transition-opacity duration-150 hover:opacity-70"
-              style={{ color: 'var(--sf-green)', background: 'none', border: 'none', padding: 0 }}
-            >
-              ✦ Análisis completo con IA →
-            </button>
-            {(() => {
-              const alerts: { icon: string; text: string; prefill: string }[] = []
-
-              const vendedoresRiesgo = vendorAnalysis.filter(v => v.riesgo === 'riesgo' || v.riesgo === 'critico')
-              if (vendedoresRiesgo.length > 0) {
-                alerts.push({
-                  icon: '🔴',
-                  text: `${vendedoresRiesgo.length} vendedor${vendedoresRiesgo.length > 1 ? 'es' : ''} en riesgo necesita${vendedoresRiesgo.length > 1 ? 'n' : ''} atención`,
-                  prefill: `¿Por qué ${vendedoresRiesgo.map(v => v.vendedor).join(' y ')} están en riesgo? Dame un plan de acción para cada uno.`
-                })
+          {/* ── Pulso Cards Grid ──────────────────────────────────────── */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-1">
+            {pulsoResult.visible.map((card) => {
+              const sevColors: Record<string, { border: string; accent: string; bg: string }> = {
+                critical: { border: 'var(--sf-red-border)', accent: 'var(--sf-red)', bg: 'var(--sf-red-bg)' },
+                warning:  { border: 'var(--sf-amber-border)', accent: 'var(--sf-amber)', bg: 'var(--sf-amber-bg)' },
+                positive: { border: 'var(--sf-green-border)', accent: 'var(--sf-green)', bg: 'var(--sf-green-bg)' },
+                info:     { border: 'var(--sf-border)', accent: 'var(--sf-t4)', bg: 'var(--sf-overlay-light)' },
               }
-
-              const dormidosAltoValor = clientesDormidos
-                .filter(c => (c.valor_historico || 0) > 10000)
-                .sort((a, b) => (b.valor_historico || 0) - (a.valor_historico || 0))
-                .slice(0, 2)
-              if (dormidosAltoValor.length > 0) {
-                const nombres = dormidosAltoValor.map(c => c.cliente).join(' y ')
-                alerts.push({
-                  icon: '⚠️',
-                  text: `${nombres} lleva${dormidosAltoValor.length > 1 ? 'n' : ''} ${dormidosAltoValor[0].dias_sin_actividad} días sin comprar`,
-                  prefill: `Dame un plan de recuperación para ${nombres}. ¿Cuál es la probabilidad de recuperarlos y qué acción tomar esta semana?`
-                })
-              }
-
-              if (alerts.length === 0) return null
-
+              const sc = sevColors[card.severity]
+              const isDemo = location.pathname.startsWith('/demo')
+              const prefix = isDemo ? '/demo' : ''
               return (
-                <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {alerts.map((alert, i) => (
-                    <button
-                      key={i}
-                      onClick={() => navigate('/chat', { state: { prefill: alert.prefill, source: 'Estado Comercial' } })}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 8,
-                        fontSize: 12, color: 'var(--sf-t3)',
-                        background: 'none', border: 'none', padding: 0,
-                        cursor: 'pointer', textAlign: 'left',
-                        transition: 'opacity 0.2s',
-                      }}
-                      onMouseEnter={e => (e.currentTarget.style.opacity = '0.7')}
-                      onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
-                    >
-                      <span>{alert.icon}</span>
-                      <span style={{ textDecoration: 'underline', textDecorationStyle: 'dotted', textUnderlineOffset: '2px' }}>
-                        {alert.text} → Analizar
+                <div
+                  key={card.type}
+                  className="rounded-xl p-4 cursor-pointer transition-all duration-200 group"
+                  style={{
+                    background: 'var(--sf-card)',
+                    borderTop: '1px solid var(--sf-border)',
+                    borderRight: '1px solid var(--sf-border)',
+                    borderBottom: '1px solid var(--sf-border)',
+                    borderLeft: `3px solid ${sc.accent}`,
+                  }}
+                  onClick={() => {
+                    if (card.action.type === 'panel') {
+                      if (card.entityType === 'vendedor' && card.entityId) {
+                        const va = vendorAnalysis.find(v => v.vendedor === card.entityId)
+                        if (va) setVendedorPanel(va)
+                      }
+                    } else if (card.action.type === 'pulso_panel' && card.action.panelData) {
+                      setPulsoPanel(card.action.panelData)
+                    } else if (card.action.type === 'chat') {
+                      navigate(`${prefix}/chat`, { state: { prefill: card.action.target, source: 'Pulso' } })
+                    }
+                  }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.boxShadow = '0 4px 12px rgba(0,0,0,0.08)' }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.boxShadow = '' }}
+                >
+                  <div className="flex items-start justify-between mb-2">
+                    <p className="text-[12px] font-semibold leading-snug" style={{ color: 'var(--sf-t1)' }}>{card.title}</p>
+                    {card.tag && (
+                      <span className="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded shrink-0 ml-2" style={{ background: sc.bg, color: sc.accent }}>
+                        {card.tag}
                       </span>
-                    </button>
-                  ))}
+                    )}
+                  </div>
+                  <div className="flex items-baseline gap-2 mb-1.5">
+                    <span className="text-xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: sc.accent }}>
+                      {card.metric}
+                    </span>
+                    <span className="text-[10px]" style={{ color: 'var(--sf-t5)' }}>{card.metricLabel}</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed" style={{ color: 'var(--sf-t4)' }}>{card.detail}</p>
+                  <p className="text-[10px] font-medium mt-2 opacity-0 group-hover:opacity-100 transition-opacity" style={{ color: 'var(--sf-green)' }}>
+                    {card.action.label} →
+                  </p>
                 </div>
               )
-            })()}
+            })}
           </div>
+          {/* +N señales más */}
+          {pulsoResult.total > pulsoResult.visible.length && (
+            <button
+              onClick={() => {
+                const el = document.getElementById('sf-alertas')
+                if (el) el.scrollIntoView({ behavior: 'smooth' })
+              }}
+              className="w-full text-center py-3 mt-2 text-xs font-medium cursor-pointer transition-colors hover:underline"
+              style={{ color: 'var(--sf-t5)' }}
+            >
+              +{pulsoResult.total - pulsoResult.visible.length} señales más →
+            </button>
+          )}
         </div>
       )}
 
 
-      {/* ── INTELIGENCIA COMERCIAL ──────────────────────────────────────── */}
-      <div style={{ borderTop: '1px solid var(--sf-border)' }} />
 
-      <div className="intel-fade space-y-4" style={{ animationDelay: '160ms' }}>
-        {/* Header + count */}
-        <div className="relative flex items-center gap-2 flex-wrap">
+      {/* ── ALERTAS Y OPORTUNIDADES ──────────────────────────────────── */}
+      <div id="sf-alertas" style={{ borderTop: '1px solid var(--sf-border)' }} />
+
+      <div className="intel-fade space-y-3" style={{ animationDelay: '160ms' }}>
+        {/* Header */}
+        <div className="flex items-center gap-2">
+          <Bell className="w-3.5 h-3.5" style={{ color: 'var(--sf-t5)' }} />
           <p className="text-[11px] font-bold uppercase tracking-[0.15em]" style={{ color: 'var(--sf-t5)' }}>
-            Inteligencia Comercial
+            Alertas y Oportunidades
           </p>
           <FirstTimeTooltip
             storageKey="sf_tip_inteligencia"
             text="Estas son alertas sobre riesgos y oportunidades que detectamos. Marcalas como atendidas cuando tomes accion"
           />
-          <span style={{
-            fontFamily: "'DM Mono', monospace",
-            fontSize: 11,
-            color: 'var(--sf-t5)',
-            background: 'var(--sf-overlay-medium)',
-            padding: '2px 8px',
-            borderRadius: 5,
-          }}>
-            {feedInsights.length}
-          </span>
-          {pendingCount > 0 && (
-            <span style={{
-              fontFamily: "'DM Mono', monospace",
-              fontSize: 10,
-              fontWeight: 600,
-              color: '#ef4444',
-              background: 'rgba(239,68,68,0.1)',
-              border: '1px solid rgba(239,68,68,0.2)',
-              padding: '2px 8px',
-              borderRadius: 5,
-            }}>
-              {pendingCount} pendiente{pendingCount > 1 ? 's' : ''}
-            </span>
-          )}
         </div>
 
-        {/* Filter chips */}
-        <div className="flex gap-1.5 flex-wrap">
-          {FEED_FILTERS.map(f => {
-            if (f.key !== 'all' && feedFilterCounts[f.key] === 0) return null
-            const isActive = feedFilter === f.key
+        {/* Text-underline tabs */}
+        <div className="flex gap-0 border-b" style={{ borderColor: 'var(--sf-border)' }}>
+          {([
+            { key: 'all'        as FeedFilterKey, label: 'Todas',         count: feedFilterCounts.all },
+            { key: 'urgentes'   as FeedFilterKey, label: 'Urgentes',      count: feedFilterCounts.urgentes },
+            { key: 'vendedores' as FeedFilterKey, label: 'Equipo',        count: feedFilterCounts.vendedores },
+            { key: 'hallazgo'   as FeedFilterKey, label: 'Oportunidades', count: feedFilterCounts.hallazgo },
+          ]).filter(t => t.key === 'all' || t.count > 0).map(tab => {
+            const isActive = feedFilter === tab.key
             return (
               <button
-                key={f.key}
-                onClick={() => { setFeedFilter(f.key); setFeedExpanded(false) }}
-                className="px-3 py-1.5 rounded-lg text-xs font-medium border transition-all duration-150 cursor-pointer inline-flex items-center gap-1.5"
-                style={isActive && f.color
-                  ? { borderColor: f.color + '40', color: f.color, background: f.color + '10' }
-                  : isActive
-                  ? { borderColor: 'var(--sf-border-active)', color: 'var(--sf-t1)', background: 'var(--sf-overlay-medium)' }
-                  : { borderColor: 'var(--sf-overlay-medium)', color: 'var(--sf-t5)', background: 'transparent' }
-                }
+                key={tab.key}
+                onClick={() => { setFeedFilter(tab.key); setFeedExpanded(false) }}
+                className="px-3 py-2 text-xs font-medium cursor-pointer transition-colors duration-150 relative"
+                style={{ color: isActive ? 'var(--sf-t1)' : 'var(--sf-t5)', background: 'transparent', border: 'none' }}
               >
-                {f.color && (
-                  <span style={{ width: 6, height: 6, borderRadius: 2, background: f.color, display: 'inline-block' }} />
+                {tab.label}
+                {tab.count > 0 && (
+                  <span className="ml-1.5 text-[10px]" style={{ color: isActive ? 'var(--sf-t3)' : 'var(--sf-t6)', fontFamily: "'DM Mono', monospace" }}>
+                    {tab.count}
+                  </span>
                 )}
-                {f.label}
-                <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, opacity: 0.6 }}>
-                  {feedFilterCounts[f.key]}
-                </span>
-              </button>
-            )
-          })}
-        </div>
-
-        {/* Status filter chips */}
-        <div className="flex gap-1.5 flex-wrap">
-          {(
-            [
-              { key: 'notResolved', label: '📋 Pendientes',  count: statusCounts.notResolved },
-              { key: 'following',   label: '🔧 En trabajo',  count: statusCounts.following },
-              { key: 'resolved',    label: '✅ Resueltas',   count: statusCounts.resolved },
-            ] as { key: StatusFilterKey; label: string; count: number }[]
-          ).map(({ key, label, count }) => {
-            const isActive = statusFilter === key
-            const dotColor = key === 'following' ? '#f59e0b' : key === 'resolved' ? '#22c55e' : 'var(--sf-t5)'
-            return (
-              <button
-                key={key}
-                onClick={() => { setStatusFilter(key); setFeedExpanded(false) }}
-                className="px-2.5 py-1 rounded-lg text-[11px] font-medium border transition-all duration-150 cursor-pointer inline-flex items-center gap-1.5"
-                style={isActive
-                  ? { borderColor: dotColor + '50', color: dotColor, background: dotColor + '12' }
-                  : { borderColor: 'var(--sf-overlay-medium)', color: 'var(--sf-t5)', background: 'transparent' }
-                }
-              >
-                <span style={{ width: 5, height: 5, borderRadius: '50%', background: dotColor, display: 'inline-block', flexShrink: 0 }} />
-                {label}
-                <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, opacity: 0.6 }}>{count}</span>
+                {isActive && (
+                  <span className="absolute bottom-0 left-0 right-0 h-0.5 rounded-t" style={{ background: 'var(--sf-green)' }} />
+                )}
               </button>
             )
           })}
@@ -2203,268 +2383,113 @@ export default function EstadoComercialPage() {
 
                         {/* Content */}
                         <div className={`flex-1 min-w-0 ${cardPadding}`}>
-                          {/* Line 1: badge + title + urgency badge + status badge */}
-                          <div className="flex items-center gap-2 mb-1 flex-wrap">
-                            <span
-                              className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
-                              style={{
-                                fontFamily: "'DM Mono', monospace",
-                                color: accent,
-                                background: accent + '15',
-                              }}
-                            >
-                              {label}
+                          {/* Title + status badges */}
+                          <div className="flex items-start gap-2 mb-1.5 flex-wrap">
+                            <span className={`${titleSize} leading-snug flex-1`} style={{ color: 'var(--sf-t1)' }}>
+                              {getAlertaTitle(insight)}
                             </span>
-                            {impact === 'alto' && !isResolved && (
-                              <span
-                                className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
-                                style={{ fontFamily: "'DM Mono', monospace", color: '#ef4444', background: 'rgba(239,68,68,0.12)' }}
-                              >
-                                URGENTE
-                              </span>
-                            )}
-                            <span className={`${titleSize} leading-tight`} style={{ color: 'var(--sf-t1)' }}>
-                              {insight.titulo}
-                            </span>
-                            {/* Badge de estado */}
                             {isFollowing && (
-                              <span className="inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
-                                style={{ color: '#f59e0b', background: 'rgba(245,158,11,0.12)', fontFamily: "'DM Mono', monospace" }}>
+                              <span className="inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded shrink-0"
+                                style={{ color: '#f59e0b', background: 'rgba(245,158,11,0.12)' }}>
                                 🔧 En trabajo
                               </span>
                             )}
                             {isResolved && (
-                              <span className="inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
-                                style={{ color: '#22c55e', background: 'rgba(34,197,94,0.12)', fontFamily: "'DM Mono', monospace" }}>
+                              <span className="inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded shrink-0"
+                                style={{ color: '#22c55e', background: 'rgba(34,197,94,0.12)' }}>
                                 ✅ Resuelta
                               </span>
                             )}
                             {insightReopened && (
-                              <span className="inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
-                                style={{ color: '#f97316', background: 'rgba(249,115,22,0.12)', fontFamily: "'DM Mono', monospace" }}>
+                              <span className="inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded shrink-0"
+                                style={{ color: '#f97316', background: 'rgba(249,115,22,0.12)' }}>
                                 <RotateCcw className="w-2.5 h-2.5" /> Reabierta
                               </span>
                             )}
-                            {/* Trend indicator */}
-                            {(() => {
-                              const trend = computeInsightTrend(insight, vendorAnalysis, clientesDormidos)
-                              const tc = TREND_CONFIG[trend]
-                              return (
-                                <span
-                                  className="shrink-0 ml-auto text-[13px] font-bold leading-none"
-                                  style={{ color: tc.color }}
-                                  title={tc.label}
-                                >
-                                  {tc.symbol}
-                                </span>
-                              )
+                            {idx < 3 && !isResolved && (() => {
+                              // Urgency badge for top 3 alerts
+                              const isCriticoVendedor = insight.tipo === 'riesgo_vendedor' && insight.prioridad === 'CRITICA'
+                              const isCruzadoCritico = insight.tipo === 'cruzado' && insight.prioridad === 'CRITICA'
+                              const isMetaBaja = insight.tipo === 'riesgo_equipo' || insight.tipo === 'riesgo_meta'
+                              const isProductoColapso = insight.tipo === 'riesgo_producto' && insight.prioridad === 'CRITICA'
+                              if (isCriticoVendedor || isCruzadoCritico) {
+                                return <span className="text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0" style={{ color: '#ef4444', background: 'rgba(239,68,68,0.12)' }}>Actuar hoy</span>
+                              }
+                              if (isMetaBaja || isProductoColapso) {
+                                return <span className="text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0" style={{ color: '#f59e0b', background: 'rgba(245,158,11,0.12)' }}>Esta semana</span>
+                              }
+                              return null
                             })()}
                           </div>
 
-                          {/* Line 2: description */}
-                          <p className={`${descSize} leading-relaxed`} style={{ color: 'var(--sf-t4)' }}>
-                            {boldifyDescription(insight.descripcion)}
-                          </p>
-
-                          {/* Action row: dropdown de estado + Analizar con IA */}
-                          <div className="flex items-center justify-between mt-2 gap-2">
-                            {/* Dropdown de estado */}
-                            {(() => {
-                              const alertKey = getAlertKey(insight)
-                              const record = alertStatuses[alertKey]
-                              const currentOpt = STATUS_OPTIONS.find(o => o.value === insightStatus) ?? STATUS_OPTIONS[0]
-                              const isOpen = openDropdownKey === alertKey
-                              const savedNote = record?.note
-                              const isEditingNote = editingNoteKey === alertKey
-
-                              return (
-                                <div className="relative" ref={isOpen ? dropdownRef : undefined} onClick={e => e.stopPropagation()}>
-                                  {/* Trigger button */}
-                                  <button
-                                    onClick={() => setOpenDropdownKey(isOpen ? null : alertKey)}
-                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium cursor-pointer transition-all duration-150"
-                                    style={{
-                                      color: currentOpt.color,
-                                      background: currentOpt.bg,
-                                      border: `1px solid ${currentOpt.border}`,
-                                    }}
-                                  >
-                                    <span>{currentOpt.emoji}</span>
-                                    <span>{currentOpt.label}</span>
-                                    {savedNote && <span title="Tiene nota">📝</span>}
-                                    <ChevronDown className={`w-3 h-3 transition-transform duration-150 ${isOpen ? 'rotate-180' : ''}`} />
-                                  </button>
-
-                                  {/* Timestamp */}
-                                  {record?.updatedAt && (
-                                    <span className="block text-[9px] mt-0.5" style={{ color: 'var(--sf-t6)', fontFamily: "'DM Mono', monospace" }}>
-                                      {relativeTime(record.updatedAt)}
-                                    </span>
-                                  )}
-
-                                  {/* Note display */}
-                                  {savedNote && !isEditingNote && (
-                                    <button
-                                      onClick={() => { setEditingNoteKey(alertKey); setNoteDraft(savedNote) }}
-                                      className="block text-[11px] mt-1.5 text-left cursor-pointer rounded-lg px-2.5 py-1.5 max-w-[260px] transition-colors"
-                                      style={{ color: 'var(--sf-t3)', background: 'var(--sf-inset)', border: '1px solid var(--sf-border-subtle)' }}
-                                      title="Click para editar nota"
-                                    >
-                                      <span className="flex items-start gap-1.5">
-                                        <span className="shrink-0">📝</span>
-                                        <span className="whitespace-pre-wrap break-words">{savedNote}</span>
-                                      </span>
-                                      {record?.updatedAt && (
-                                        <span className="block text-[9px] mt-1 opacity-60" style={{ fontFamily: "'DM Mono', monospace" }}>
-                                          {relativeTime(record.updatedAt)}
-                                        </span>
-                                      )}
-                                    </button>
-                                  )}
-
-                                  {/* Note edit — textarea */}
-                                  {isEditingNote && (
-                                    <div className="mt-1.5 max-w-[280px]">
-                                      <textarea
-                                        autoFocus
-                                        value={noteDraft}
-                                        onChange={e => { if (e.target.value.length <= 500) setNoteDraft(e.target.value) }}
-                                        onKeyDown={e => {
-                                          if (e.key === 'Enter' && !e.shiftKey) {
-                                            e.preventDefault()
-                                            handleStatusChange(insight, insightStatus, noteDraft || undefined)
-                                            setEditingNoteKey(null)
-                                          }
-                                          if (e.key === 'Escape') setEditingNoteKey(null)
-                                        }}
-                                        placeholder="¿Qué acción tomaste? ej: Llamé a Carlos, el problema es falta de stock..."
-                                        rows={3}
-                                        className="w-full text-[11px] px-2.5 py-2 rounded-lg border bg-transparent outline-none resize-none"
-                                        style={{ borderColor: 'var(--sf-border)', color: 'var(--sf-t2)' }}
-                                      />
-                                      <div className="flex items-center justify-between mt-1">
-                                        <span className="text-[9px]" style={{ color: 'var(--sf-t6)' }}>{noteDraft.length}/500</span>
-                                        <div className="flex items-center gap-1.5">
-                                          <button
-                                            onClick={() => setEditingNoteKey(null)}
-                                            className="text-[10px] px-2 py-0.5 rounded cursor-pointer"
-                                            style={{ color: 'var(--sf-t4)' }}
-                                          >Cancelar</button>
-                                          <button
-                                            onClick={() => {
-                                              handleStatusChange(insight, insightStatus, noteDraft || undefined)
-                                              setEditingNoteKey(null)
-                                            }}
-                                            className="text-[10px] px-2.5 py-0.5 rounded-md cursor-pointer font-semibold"
-                                            style={{ color: '#fff', background: 'var(--sf-green)' }}
-                                          >Guardar</button>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  )}
-
-                                  {/* Dropdown menu */}
-                                  {isOpen && (
-                                    <div
-                                      className="absolute left-0 top-full mt-1 z-50 rounded-lg shadow-lg py-1 min-w-[170px]"
-                                      style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}
-                                    >
-                                      {STATUS_OPTIONS.map(opt => (
-                                        <button
-                                          key={opt.value}
-                                          onClick={() => {
-                                            handleStatusChange(insight, opt.value)
-                                            if ((opt.value === 'following' || opt.value === 'resolved') && !savedNote) {
-                                              setEditingNoteKey(alertKey)
-                                              setNoteDraft('')
-                                            }
-                                          }}
-                                          className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors cursor-pointer"
-                                          style={{
-                                            color: opt.value === insightStatus ? opt.color : 'var(--sf-t3)',
-                                            background: opt.value === insightStatus ? opt.bg : 'transparent',
-                                            fontWeight: opt.value === insightStatus ? 600 : 400,
-                                          }}
-                                          onMouseEnter={e => { (e.target as HTMLElement).style.background = 'var(--sf-hover)' }}
-                                          onMouseLeave={e => { (e.target as HTMLElement).style.background = opt.value === insightStatus ? opt.bg : 'transparent' }}
-                                        >
-                                          <span>{opt.emoji}</span>
-                                          <span>{opt.label}</span>
-                                          {opt.value === insightStatus && <CheckCircle className="w-3 h-3 ml-auto" />}
-                                        </button>
-                                      ))}
-                                      {/* Add note option */}
-                                      <div style={{ borderTop: '1px solid var(--sf-border-subtle)', margin: '4px 0' }} />
-                                      <button
-                                        onClick={() => {
-                                          setEditingNoteKey(alertKey)
-                                          setNoteDraft(savedNote ?? '')
-                                          setOpenDropdownKey(null)
-                                        }}
-                                        className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors cursor-pointer"
-                                        style={{ color: 'var(--sf-t4)' }}
-                                        onMouseEnter={e => { (e.target as HTMLElement).style.background = 'var(--sf-hover)' }}
-                                        onMouseLeave={e => { (e.target as HTMLElement).style.background = 'transparent' }}
-                                      >
-                                        <span>📝</span>
-                                        <span>{savedNote ? 'Editar nota' : 'Agregar nota'}</span>
-                                      </button>
-                                    </div>
-                                  )}
-                                </div>
-                              )
-                            })()}
-
-                          {/* Navigation link — contextual based on alert type, with entity name */}
+                          {/* Summary + key datum */}
                           {(() => {
-                            // Extract entity name from title: "Descripción — NombreEntidad"
-                            const entityName = insight.titulo.includes(' — ') ? insight.titulo.split(' — ').pop()!.trim() : null
-                            const navLink = insight.tipo === 'riesgo_vendedor'
-                              ? { label: entityName ? `${entityName} →` : 'Ver vendedores →', path: '/vendedores', highlight: entityName }
-                              : insight.tipo === 'riesgo_equipo'
-                              ? { label: 'Ver equipo →', path: '/vendedores', highlight: null }
-                              : insight.tipo === 'riesgo_producto'
-                              ? { label: entityName ? `${entityName} →` : 'Ver rotación →', path: '/rotacion', highlight: entityName }
-                              : insight.tipo === 'riesgo_cliente'
-                              ? { label: entityName ? `${entityName} →` : 'Ver clientes →', path: '/clientes', highlight: entityName, openCliente: entityName }
-                              : insight.tipo === 'cruzado'
-                              ? { label: entityName ? `${entityName} →` : 'Ver vendedores →', path: '/vendedores', highlight: entityName }
-                              : insight.tipo === 'riesgo_meta'
-                              ? { label: entityName ? `${entityName} →` : 'Ver metas →', path: '/metas', highlight: null }
-                              : insight.tipo === 'hallazgo'
-                              ? (insight.vendedor
-                                ? { label: `${insight.vendedor} →`, path: '/vendedores', highlight: insight.vendedor }
-                                : insight.producto
-                                ? { label: `${insight.producto} →`, path: '/rotacion', highlight: insight.producto }
-                                : null)
-                              : null
-                            return navLink ? (
-                              <button
-                                onClick={(e) => { e.stopPropagation(); navigate(navLink.path, { state: navLink.highlight ? { highlight: navLink.highlight, source: 'alert', ...('openCliente' in navLink && navLink.openCliente ? { openCliente: navLink.openCliente } : {}) } : undefined }) }}
-                                className="text-[11px] font-medium cursor-pointer hover:underline transition-colors"
-                                style={{ color: 'var(--sf-green)' }}
-                              >
-                                {navLink.label}
-                              </button>
-                            ) : null
+                            const { summary, keyData, keyLabel } = formatAlertaContent(insight, showUSD, configuracion.moneda)
+                            return (
+                              <>
+                                <p className="text-[12px] leading-relaxed mb-1.5" style={{ color: 'var(--sf-t4)' }}>
+                                  {summary}
+                                </p>
+                                {keyData && (
+                                  <div className="flex items-baseline gap-2">
+                                    <p className="text-base font-semibold leading-tight" style={{ color: 'var(--sf-t1)', fontFamily: "'DM Mono', monospace" }}>
+                                      {keyData}
+                                    </p>
+                                    {keyLabel && (
+                                      <span className="text-[10px]" style={{ color: 'var(--sf-t5)' }}>{keyLabel}</span>
+                                    )}
+                                  </div>
+                                )}
+                              </>
+                            )
                           })()}
 
-                          {/* Analizar con IA — dentro del action row */}
-                          {!analysis && (
+                          {/* Action row: nav link + explain with AI */}
+                          <div className="flex items-center mt-2 gap-3">
+                            {(() => {
+                              const entityName = insight.titulo.includes(' — ') ? insight.titulo.split(' — ').pop()!.trim() : null
+                              const navLink = insight.tipo === 'riesgo_vendedor'
+                                ? { label: entityName ? `${entityName} →` : 'Ver vendedores →', path: `/vendedores${entityName ? `?vendedor=${encodeURIComponent(entityName)}` : ''}` }
+                                : insight.tipo === 'riesgo_equipo'
+                                ? { label: 'Ver equipo →', path: '/vendedores' }
+                                : insight.tipo === 'riesgo_producto'
+                                ? { label: entityName ? `${entityName} →` : 'Ver rotación →', path: `/rotacion${entityName ? `?categoria=${encodeURIComponent(entityName)}` : ''}` }
+                                : insight.tipo === 'riesgo_cliente'
+                                ? { label: entityName ? `${entityName} →` : 'Ver clientes →', path: '/clientes', openCliente: entityName }
+                                : insight.tipo === 'cruzado'
+                                ? { label: entityName ? `${entityName} →` : 'Ver vendedores →', path: `/vendedores${entityName ? `?vendedor=${encodeURIComponent(entityName)}` : ''}` }
+                                : insight.tipo === 'riesgo_meta'
+                                ? { label: entityName ? `${entityName} →` : 'Ver metas →', path: '/metas' }
+                                : insight.tipo === 'hallazgo'
+                                ? (insight.vendedor
+                                  ? { label: `${insight.vendedor} →`, path: `/vendedores?vendedor=${encodeURIComponent(insight.vendedor)}` }
+                                  : insight.producto
+                                  ? { label: `${insight.producto} →`, path: `/rotacion?categoria=${encodeURIComponent(insight.producto)}` }
+                                  : null)
+                                : null
+                              return navLink ? (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); navigate(dp(navLink.path), { state: 'openCliente' in navLink && navLink.openCliente ? { openCliente: navLink.openCliente, source: 'alert' } : undefined }) }}
+                                  className="text-[11px] font-medium cursor-pointer hover:underline transition-colors"
+                                  style={{ color: 'var(--sf-green)' }}
+                                >
+                                  {navLink.label}
+                                </button>
+                              ) : null
+                            })()}
                             <button
-                              onClick={(e) => { e.stopPropagation(); handleAnalyzeInsight(insight) }}
-                              className={`inline-flex items-center gap-1.5 rounded-lg font-medium cursor-pointer transition-all duration-150 ml-auto ${impact === 'bajo' ? 'px-2 py-1 text-[11px]' : 'px-3 py-1.5 text-xs'}`}
-                              style={{
-                                color: 'var(--sf-green)',
-                                background: 'var(--sf-green-bg)',
-                                border: '1px solid var(--sf-green-border)',
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                const { summary } = formatAlertaContent(insight, showUSD, configuracion.moneda)
+                                navigate(dp('/chat'), { state: { prefill: `Explica la alerta: ${insight.titulo}. ${summary}`, displayPrefill: `Explicar: ${insight.titulo}`, source: 'Alertas' } })
                               }}
-                              onMouseEnter={e => { e.currentTarget.style.opacity = '0.8' }}
-                              onMouseLeave={e => { e.currentTarget.style.opacity = '1' }}
+                              className="text-[11px] font-medium cursor-pointer hover:underline transition-colors"
+                              style={{ color: 'var(--sf-t3)' }}
+                              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--sf-t1)' }}
+                              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--sf-t3)' }}
                             >
-                              ✦ Analizar con IA
+                              ✦ Explicar con IA
                             </button>
-                          )}
                           </div>{/* /Action row */}
 
                           {/* Loading spinner — replaces button while analyzing */}
@@ -2503,7 +2528,7 @@ export default function EstadoComercialPage() {
                                     ``,
                                     `Con base en este análisis, profundiza: ¿qué está causando esto específicamente, qué datos adicionales lo confirman, y qué patrón hay detrás?`
                                   ].filter(Boolean).join('\n')
-                                  navigate('/chat', { state: { prefill: fullContext, displayPrefill: displayMessage, source: 'Estado Comercial' } })
+                                  navigate(dp('/chat'), { state: { prefill: fullContext, displayPrefill: displayMessage, source: 'Estado Comercial' } })
                                 }}
                                 className="mt-3 px-4 py-2 rounded-lg text-xs font-medium cursor-pointer"
                                 style={{ border: '1px solid var(--sf-green-border)', background: 'var(--sf-green-bg)', color: 'var(--sf-green)' }}
@@ -2551,31 +2576,27 @@ export default function EstadoComercialPage() {
                   )
                 })}
 
-                {/* Show more / collapse */}
+                {/* Show more / collapse — subtle text link */}
                 {!feedExpanded && remainingCount > 0 && (
                   <button
                     onClick={() => setFeedExpanded(true)}
-                    className="w-full py-3 rounded-xl text-[13px] font-medium transition-all duration-150 cursor-pointer"
-                    style={{
-                      border: '1px dashed var(--sf-border-subtle)',
-                      background: 'transparent',
-                      color: 'var(--sf-t5)',
-                    }}
-                    onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--sf-border-active)'; e.currentTarget.style.color = 'var(--sf-t3)' }}
-                    onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--sf-border-subtle)'; e.currentTarget.style.color = 'var(--sf-t5)' }}
+                    className="w-full py-2 text-[12px] font-medium transition-colors duration-150 cursor-pointer"
+                    style={{ color: 'var(--sf-t5)', background: 'transparent', border: 'none' }}
+                    onMouseEnter={e => { e.currentTarget.style.color = 'var(--sf-green)' }}
+                    onMouseLeave={e => { e.currentTarget.style.color = 'var(--sf-t5)' }}
                   >
-                    Ver las {remainingCount} alertas restantes
+                    Ver {remainingCount} alertas más →
                   </button>
                 )}
                 {feedExpanded && feedFiltered.length > TOP_COUNT && (
                   <button
                     onClick={() => setFeedExpanded(false)}
-                    className="w-full py-2 rounded-xl text-[12px] font-medium transition-all duration-150 cursor-pointer"
-                    style={{ color: 'var(--sf-t5)' }}
+                    className="w-full py-2 text-[12px] font-medium transition-colors duration-150 cursor-pointer"
+                    style={{ color: 'var(--sf-t5)', background: 'transparent', border: 'none' }}
                     onMouseEnter={e => { e.currentTarget.style.color = 'var(--sf-t3)' }}
                     onMouseLeave={e => { e.currentTarget.style.color = 'var(--sf-t5)' }}
                   >
-                    Colapsar
+                    ↑ Mostrar menos
                   </button>
                 )}
               </>
@@ -2584,10 +2605,8 @@ export default function EstadoComercialPage() {
         </div>
       </div>
 
-      {/* ── ACCESO DIRECTO ─────────────────────────────────────────────────── */}
-      <div style={{ borderTop: '1px solid var(--sf-border)' }} />
-
-      <div className="intel-fade" style={{ animationDelay: '400ms' }}>
+      {/* Explorar Dimensiones removed — replaced by Pulso above */}
+      {false && <div className="intel-fade" style={{ animationDelay: '400ms' }}>
         <div className="relative mb-3">
           <p className="text-[11px] font-bold uppercase tracking-[0.15em]" style={{ color: 'var(--sf-t5)' }}>Explorar dimensiones</p>
           <FirstTimeTooltip
@@ -2653,15 +2672,13 @@ export default function EstadoComercialPage() {
                 <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 28, fontWeight: 400, color: 'var(--sf-red)', lineHeight: 1 }}>
                   {clientesDormidos.length}
                 </div>
-                <div className="text-xs mt-1" style={{ color: 'var(--sf-t3)' }}>dormidos</div>
+                <div className="text-xs mt-1" style={{ color: 'var(--sf-t3)' }}>inactivos</div>
                 <div className="text-xs mt-2" style={{ color: 'var(--sf-t3)' }}>
-                  {dormidosRec.length} recuperables · {activosMes} activos este mes
+                  {showUSD && valorRiesgoClien > 0
+                    ? <><span style={{ color: 'var(--sf-amber)' }}>{configuracion.moneda} {Math.round(valorRiesgoClien).toLocaleString('es-SV')} en riesgo</span> · {activosMes} activos</>
+                    : <>{activosMes} activos este mes</>
+                  }
                 </div>
-                {valorRiesgoClien > 0 && (
-                  <div className="text-xs mt-1" style={{ color: 'var(--sf-amber)' }}>
-                    Valor en riesgo: {Math.round(valorRiesgoClien).toLocaleString('es-SV')} uds
-                  </div>
-                )}
                 <div className="text-xs mt-3 opacity-0 group-hover:opacity-100 transition-opacity duration-200" style={{ color: 'var(--sf-green)' }}>
                   Ver clientes →
                 </div>
@@ -2759,7 +2776,7 @@ export default function EstadoComercialPage() {
             )
           })()}
         </div>
-      </div>
+      </div>}
       </div>{/* end space-y-8 */}
       </div>{/* end Inter wrapper */}
     </>

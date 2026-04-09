@@ -6,9 +6,9 @@ import { useOrgStore } from '../../store/orgStore'
 /** Pages visible by default when allowed_pages is null */
 const DEFAULTS: Record<string, string[]> = {
   viewer: ['/dashboard', '/vendedores', '/metas', '/clientes', '/rotacion',
-    '/departamentos', '/rendimiento', '/chat'],
+    '/departamentos', '/rendimiento', '/chat', '/configuracion'],
   editor: ['/dashboard', '/vendedores', '/metas', '/clientes', '/rotacion',
-    '/departamentos', '/rendimiento', '/chat', '/cargar'],
+    '/departamentos', '/rendimiento', '/chat', '/cargar', '/configuracion'],
   admin: ['/dashboard', '/vendedores', '/metas', '/clientes', '/rotacion',
     '/departamentos', '/rendimiento', '/chat', '/cargar', '/configuracion'],
 }

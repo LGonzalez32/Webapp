@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useDemoPath } from '../../lib/useDemoPath'
 import { salesInPeriod, prevPeriod } from '../../lib/analysis'
 import { useAppStore } from '../../store/appStore'
 import type { SaleRecord, ClienteDormido, DataAvailability, Insight } from '../../types'
@@ -33,6 +34,7 @@ export default function ClientePanel({
   onClose,
 }: Props) {
   const navigate = useNavigate()
+  const dp = useDemoPath()
   const configuracion = useAppStore(s => s.configuracion)
   const moneda = configuracion.moneda
   const hasVenta = dataAvailability.has_venta_neta
@@ -479,7 +481,7 @@ export default function ClientePanel({
                 'Analiza este cliente en profundidad: tendencia, productos principales, riesgos y oportunidades.',
               ].filter(Boolean).join('\n')
               const displayMessage = `Analizar cliente: ${clienteName}`
-              navigate('/chat', { state: { prefill: prompt, displayPrefill: displayMessage, source: 'Clientes' } })
+              navigate(dp('/chat'), { state: { prefill: prompt, displayPrefill: displayMessage, source: 'Clientes' } })
             }}
           >
             Analizar {clienteName} con IA {'\u2192'}

@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useDemoPath } from '../../lib/useDemoPath'
 import { useAppStore } from '../../store/appStore'
 import { salesInPeriod } from '../../lib/analysis'
 import type { CategoriaInventario, SaleRecord, Insight } from '../../types'
@@ -25,6 +26,7 @@ interface Props {
 
 export default function ProductoPanel({ producto, sales, selectedPeriod, insights, onClose }: Props) {
   const navigate = useNavigate()
+  const dp = useDemoPath()
   const configuracion = useAppStore(s => s.configuracion)
 
   const clasi = CLASI_CONFIG[producto.clasificacion] ?? CLASI_CONFIG.normal
@@ -303,7 +305,7 @@ export default function ProductoPanel({ producto, sales, selectedPeriod, insight
                 '',
                 'Analiza este producto: tendencia de ventas, quiénes lo venden, riesgo de quiebre o sobrestock, y qué acción tomar.',
               ].filter(Boolean).join('\n')
-              navigate('/chat', { state: { prefill: prompt, displayPrefill: `Analizar: ${producto.producto}`, source: 'Rotación' } })
+              navigate(dp('/chat'), { state: { prefill: prompt, displayPrefill: `Analizar: ${producto.producto}`, source: 'Rotación' } })
             }}
           >
             Analizar {producto.producto} con IA {'\u2192'}

@@ -90,7 +90,8 @@ export default function ConfiguracionPage() {
               type="text"
               value={local.empresa}
               onChange={(e) => setLocal({ ...local, empresa: e.target.value })}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[#00B894]/50 transition-all"
+              className="w-full rounded-xl px-4 py-3 text-sm focus:outline-none transition-all"
+              style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', color: 'var(--sf-t1)' }}
             />
           </div>
           <div className="space-y-1.5">
@@ -100,7 +101,8 @@ export default function ConfiguracionPage() {
             <select
               value={local.moneda}
               onChange={(e) => setLocal({ ...local, moneda: e.target.value })}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[#00B894]/50 transition-all"
+              className="w-full rounded-xl px-4 py-3 text-sm focus:outline-none transition-all"
+              style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', color: 'var(--sf-t1)' }}
             >
               {CURRENCIES.map((c) => (
                 <option key={c.code} value={c.code}>{c.code} — {c.name}</option>
@@ -114,7 +116,8 @@ export default function ConfiguracionPage() {
             <select
               value={local.giro}
               onChange={(e) => setLocal({ ...local, giro: e.target.value, giro_custom: e.target.value !== 'Otro' ? '' : local.giro_custom })}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[#00B894]/50 transition-all"
+              className="w-full rounded-xl px-4 py-3 text-sm focus:outline-none transition-all"
+              style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', color: 'var(--sf-t1)' }}
             >
               <option value="">Selecciona tu giro…</option>
               {local.giro && !(GIRO_OPTIONS as readonly string[]).includes(local.giro) && local.giro !== 'Otro' && (

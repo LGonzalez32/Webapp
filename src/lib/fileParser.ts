@@ -602,7 +602,9 @@ export async function parseMetasFile(file: File): Promise<ParseResult<MetaRecord
     }
 
     const record: MetaRecord = {
-      mes, anio, meta, tipo_meta,
+      mes, anio,
+      ...(tipo_meta === 'venta_neta' ? { meta_usd: meta } : { meta_uds: meta }),
+      meta, tipo_meta, // keep for backward compat
       ...(mapped.vendedor     !== undefined ? { vendedor:     String(mapped.vendedor)     } : {}),
       ...(mapped.cliente      !== undefined ? { cliente:      String(mapped.cliente)      } : {}),
       ...(mapped.producto     !== undefined ? { producto:     String(mapped.producto)     } : {}),

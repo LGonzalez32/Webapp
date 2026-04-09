@@ -204,11 +204,22 @@ type MetaDim = typeof META_DIMS[number]
 export function getMetaMultiDim(
   metas: MetaRecord[],
   filtros: { mes: number; anio: number } & Partial<Record<MetaDim, string>>,
+  tipoMetaActivo?: 'uds' | 'usd',
 ): number | null {
+  const resolved = getMetaRecordMultiDim(metas, filtros)
+  if (!resolved) return null
+  if (tipoMetaActivo === 'usd') return resolved.meta_usd ?? resolved.meta ?? null
+  return resolved.meta_uds ?? resolved.meta ?? null
+}
+
+/** Returns the best-matching MetaRecord (most specific) */
+export function getMetaRecordMultiDim(
+  metas: MetaRecord[],
+  filtros: { mes: number; anio: number } & Partial<Record<MetaDim, string>>,
+): MetaRecord | null {
   const periodMetas = metas.filter((m) => m.mes === filtros.mes && m.anio === filtros.anio)
   if (periodMetas.length === 0) return null
 
-  // A meta matches if every dimension it defines matches the corresponding filtro
   const matches = periodMetas
     .filter((m) => {
       for (const dim of META_DIMS) {
@@ -226,7 +237,7 @@ export function getMetaMultiDim(
     }))
     .sort((a, b) => b.specificity - a.specificity)
 
-  return matches.length > 0 ? matches[0].meta.meta : null
+  return matches.length > 0 ? matches[0].meta : null
 }
 
 // ─── UTILIDAD: VARIACIÓN SEGURA ───────────────────────────────────────────────
@@ -285,26 +296,50 @@ function analyzeVendor(
   has_cliente: boolean,
   has_producto: boolean,
   has_canal: boolean,
+  tipoMetaActivo?: 'uds' | 'usd',
 ): VendorAnalysis {
   const { year, month } = selectedPeriod
 
-  const periodSales = vendorSales.filter((s) => s.fecha >= periodStart && s.fecha <= periodEnd)
+  const periodSalesAll = vendorSales.filter((s) => s.fecha >= periodStart && s.fecha <= periodEnd)
   const prevSales = vendorSales.filter((s) => s.fecha >= prevStart && s.fecha <= prevEnd)
 
-  const ventas_periodo = periodSales.reduce((a, s) => a + s.unidades, 0)
+  // Meta del período (multi-dimensional) — get both values + dimension filters
+  const metaRecord = getMetaRecordMultiDim(metas, { mes: month + 1, anio: year, vendedor })
+  const meta_uds_val = metaRecord?.meta_uds ?? metaRecord?.meta ?? null
+  const meta_usd_val = metaRecord?.meta_usd ?? null
+
+  // Dimension filter: if meta specifies canal/departamento/producto, only count matching sales
+  const hasDimFilter = !!(metaRecord?.canal || metaRecord?.departamento || metaRecord?.producto)
+  const dimFilter = (s: SaleRecord) => {
+    if (metaRecord?.canal && s.canal !== metaRecord.canal) return false
+    if (metaRecord?.departamento && s.departamento !== metaRecord.departamento) return false
+    if (metaRecord?.producto && s.producto !== metaRecord.producto) return false
+    return true
+  }
+  const periodSales = hasDimFilter ? periodSalesAll.filter(dimFilter) : periodSalesAll
+
+  // Always compute both metrics (filtered by meta dimensions)
+  const unidades_periodo = periodSales.reduce((a, s) => a + s.unidades, 0)
+  const ventas_neta_periodo = periodSales.reduce((a, s) => a + (s.venta_neta ?? 0), 0)
+  // ventas_mes_anterior uses ALL vendor sales (no dimension filter)
   const ventas_mes_anterior = prevSales.reduce((a, s) => a + s.unidades, 0)
-  const variacion_pct = ventas_mes_anterior > 0 ? safePct(ventas_periodo, ventas_mes_anterior) : null
+
+  // ventas_periodo = the "active" metric based on tipoMetaActivo
+  const ventas_periodo = tipoMetaActivo === 'usd' ? ventas_neta_periodo : unidades_periodo
+  // variacion_pct uses unfiltered period sales for fair comparison
+  const unidades_periodo_all = hasDimFilter ? periodSalesAll.reduce((a, s) => a + s.unidades, 0) : unidades_periodo
+  const variacion_pct = ventas_mes_anterior > 0 ? safePct(unidades_periodo_all, ventas_mes_anterior) : null
 
   const promedioN = promedioUltimosN(vendorSales, year, month, 3)
   const variacion_vs_promedio_pct = promedioN.promedio > 0
-    ? Math.round(safePct(ventas_periodo, promedioN.promedio))
+    ? Math.round(safePct(unidades_periodo_all, promedioN.promedio))
     : null
 
+  // Projection uses the active metric (filtered)
   const ritmo_diario = ventas_periodo / Math.max(1, diasTranscurridos)
   const proyeccion_cierre = Math.round(ritmo_diario * diasTotales)
-
-  // Meta del período (multi-dimensional)
-  const metaVal = getMetaMultiDim(metas, { mes: month + 1, anio: year, vendedor })
+  // Active meta based on tipoMetaActivo
+  const metaVal = tipoMetaActivo === 'usd' ? meta_usd_val : meta_uds_val
   const meta = metaVal ?? undefined
   const cumplimiento_pct = meta ? (ventas_periodo / meta) * 100 : undefined
   const ritmo_necesario =
@@ -312,18 +347,18 @@ function analyzeVendor(
       ? Math.max(0, (meta - ventas_periodo) / diasRestantes)
       : undefined
 
-  // Ticket promedio (solo si hay venta_neta)
-  const hasVentaNeta = periodSales.some((s) => s.venta_neta != null)
-  const ventaNeta = periodSales.reduce((a, s) => a + (s.venta_neta ?? 0), 0)
+  // Ticket promedio (solo si hay venta_neta) — uses ALL sales, not filtered
+  const hasVentaNeta = periodSalesAll.some((s) => s.venta_neta != null)
+  const ventaNeta = periodSalesAll.reduce((a, s) => a + (s.venta_neta ?? 0), 0)
   const ticket_promedio =
-    hasVentaNeta && periodSales.length > 0
-      ? ventaNeta / periodSales.length
+    hasVentaNeta && periodSalesAll.length > 0
+      ? ventaNeta / periodSalesAll.length
       : undefined
 
-  // Clientes activos (solo si hay cliente)
-  const hasCliente = periodSales.some((s) => s.cliente != null)
+  // Clientes activos (solo si hay cliente) — uses ALL sales
+  const hasCliente = periodSalesAll.some((s) => s.cliente != null)
   const clientes_activos = hasCliente
-    ? new Set(periodSales.map((s) => s.cliente).filter(Boolean)).size
+    ? new Set(periodSalesAll.map((s) => s.cliente).filter(Boolean)).size
     : undefined
 
   // Semanas en racha negativa (works on vendor's own sales subset)
@@ -357,7 +392,7 @@ function analyzeVendor(
   let top_clientes_periodo: VendorAnalysis['top_clientes_periodo'] = null
   if (has_cliente) {
     const clienteMap = new Map<string, { unidades: number; venta_neta: number }>()
-    for (const s of periodSales) {
+    for (const s of periodSalesAll) {
       if (!s.cliente) continue
       const acc = clienteMap.get(s.cliente) ?? { unidades: 0, venta_neta: 0 }
       acc.unidades += s.unidades
@@ -378,7 +413,7 @@ function analyzeVendor(
   let productos_ausentes: VendorAnalysis['productos_ausentes'] = null
   if (has_producto) {
     const productosActuales = new Set<string>()
-    for (const s of periodSales) {
+    for (const s of periodSalesAll) {
       if (s.producto) productosActuales.add(s.producto)
     }
     let pm3Y = year, pm3M = month - 3
@@ -414,8 +449,10 @@ function analyzeVendor(
 
   return {
     vendedor,
-    ventas_periodo,
-    unidades_periodo: ventas_periodo,
+    ventas_periodo: ventas_neta_periodo,   // always USD
+    unidades_periodo,                       // always units
+    meta_uds: meta_uds_val,
+    meta_usd: meta_usd_val,
     ventas_mes_anterior,
     variacion_pct,
     meta,
@@ -435,6 +472,11 @@ function analyzeVendor(
     top_clientes_periodo,
     productos_ausentes,
     canal_principal,
+    filtro_meta: metaRecord && hasDimFilter ? {
+      canal: metaRecord.canal ?? null,
+      departamento: metaRecord.departamento ?? null,
+      producto: metaRecord.producto ?? null,
+    } : null,
     productos_lentos_con_historial: null, // enriched in computeCommercialAnalysis
   }
 }
@@ -649,6 +691,7 @@ export function computeCommercialAnalysis(
   selectedPeriod: { year: number; month: number },
   config: Configuracion,
   index?: SaleIndex,
+  tipoMetaActivo?: 'uds' | 'usd',
 ): CommercialAnalysisResult {
   const { year, month } = selectedPeriod
 
@@ -676,6 +719,7 @@ export function computeCommercialAnalysis(
       diasTranscurridos, diasTotales, diasRestantes, fechaReferencia,
       periodStart, periodEnd, prevStart, prevEnd,
       idx.has_cliente, idx.has_producto, idx.has_canal,
+      tipoMetaActivo,
     )
   )
 
@@ -727,18 +771,21 @@ export function computeCommercialAnalysis(
 
   const periodSales = getSalesByPeriod(idx, year, month)
   const prevSales = getSalesByPeriod(idx, prev.year, prev.month)
-  const total_ventas = periodSales.reduce((a, s) => a + s.unidades, 0)
+  const total_unidades = periodSales.reduce((a, s) => a + s.unidades, 0)
+  const total_ventas = periodSales.reduce((a, s) => a + (s.venta_neta ?? 0), 0)
   const prevTotal = prevSales.reduce((a, s) => a + s.unidades, 0)
-  const variacion_pct = prevTotal > 0 ? safePct(total_ventas, prevTotal) : null
+  const variacion_pct = prevTotal > 0 ? safePct(total_unidades, prevTotal) : null
 
   const metasDelPeriodo = metas.filter((m) => m.mes === month + 1 && m.anio === year)
+  const getMetaVal = (m: MetaRecord) => tipoMetaActivo === 'usd' ? (m.meta_usd ?? 0) : (m.meta_uds ?? m.meta ?? 0)
+  // Only sum vendedor-level metas (exclude supervisor/categoria metas)
+  const vendedorMetas = metasDelPeriodo.filter((m) => m.vendedor && !m.supervisor && !m.categoria)
   const meta_equipo =
-    metasDelPeriodo.length > 0
-      ? metasDelPeriodo.reduce((a, m) => a + m.meta, 0)
+    vendedorMetas.length > 0
+      ? vendedorMetas.reduce((a, m) => a + getMetaVal(m), 0)
       : undefined
-  const vendedorMetas = metasDelPeriodo.filter((m) => m.vendedor !== undefined)
   const meta_equipo_total: number | null =
-    vendedorMetas.length > 0 ? vendedorMetas.reduce((a, m) => a + m.meta, 0) : null
+    vendedorMetas.length > 0 ? vendedorMetas.reduce((a, m) => a + getMetaVal(m), 0) : null
 
   const proyeccion_equipo = vendorAnalysis.reduce(
     (a, v) => a + (v.proyeccion_cierre ?? 0),
@@ -795,7 +842,7 @@ export function computeCommercialAnalysis(
 
   const teamStats: TeamStats = {
     total_ventas,
-    total_unidades: total_ventas,
+    total_unidades,
     variacion_pct,
     meta_equipo,
     meta_equipo_total,

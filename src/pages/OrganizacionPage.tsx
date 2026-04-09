@@ -29,6 +29,12 @@ const ROLE_LABELS: Record<string, string> = {
   viewer: 'Visor',
 }
 
+const PLAN_LIMITS: Record<string, { label: string; max: number | null }> = {
+  free:       { label: 'Free',       max: 2 },
+  pro:        { label: 'Pro',        max: 10 },
+  enterprise: { label: 'Enterprise', max: null },
+}
+
 const ROLE_BADGE_STYLES: Record<string, CSSProperties> = {
   owner: { background: 'var(--sf-green-bg)', color: 'var(--sf-green)', border: '1px solid var(--sf-green-border)' },
   admin: { background: 'rgba(168,85,247,0.12)', color: '#a855f7', border: '1px solid rgba(168,85,247,0.25)' },
@@ -495,9 +501,21 @@ export default function OrganizacionPage() {
         {/* Footer */}
         {!loadingMembers && !membersError && (
           <div className="px-5 py-3">
-            <p className="text-[11px]" style={{ color: 'var(--sf-t6)' }}>
-              {members.length} {members.length === 1 ? 'miembro' : 'miembros'} en esta organización
-            </p>
+            {(() => {
+              const planKey = (org as any)?.plan ?? 'free'
+              const plan = PLAN_LIMITS[planKey] ?? PLAN_LIMITS.free
+              const limitText = plan.max !== null ? `${members.length} de ${plan.max}` : `${members.length}`
+              return (
+                <p className="text-[11px]" style={{ color: 'var(--sf-t6)' }}>
+                  {limitText} {members.length === 1 ? 'miembro' : 'miembros'} · Plan {plan.label}
+                  {plan.max !== null && members.length >= plan.max && (
+                    <span className="ml-2 text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.2)' }}>
+                      límite alcanzado
+                    </span>
+                  )}
+                </p>
+              )
+            })()}
           </div>
         )}
       </div>

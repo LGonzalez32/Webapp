@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { useNavigate, useSearchParams, Link } from 'react-router-dom'
+import { useNavigate, useSearchParams, useLocation, Link } from 'react-router-dom'
 import { Zap, Loader2 } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { useAppStore } from '../store/appStore'
@@ -9,11 +9,13 @@ type Mode = 'login' | 'register'
 
 export default function AuthPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [searchParams] = useSearchParams()
   const joinOrgId = searchParams.get('join')
   const isProcessed = useAppStore((s) => s.isProcessed)
 
-  const [mode, setMode] = useState<Mode>('login')
+  const modeParam = searchParams.get('mode') || (location.state as { mode?: string } | null)?.mode
+  const [mode, setMode] = useState<Mode>(modeParam === 'register' ? 'register' : 'login')
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -91,14 +93,20 @@ export default function AuthPage() {
   }
 
   const handleForgotPassword = async () => {
-    if (!email) {
-      setError('Ingresa tu email primero.')
+    setError(null)
+    setSuccess(null)
+    if (!email.trim()) {
+      setError('Ingresa tu email primero para restablecer tu contraseña.')
       return
     }
-    await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/auth/callback`,
-    })
-    setSuccess('Revisa tu email para restablecer tu contraseña.')
+    try {
+      await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: `${window.location.origin}/auth/callback`,
+      })
+      setSuccess('Te enviamos un email para restablecer tu contraseña. Revisa tu bandeja de entrada.')
+    } catch {
+      setError('No se pudo enviar el email. Intenta de nuevo.')
+    }
   }
 
   const handleSubmit = (e: FormEvent) => {

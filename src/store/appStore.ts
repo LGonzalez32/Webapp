@@ -31,7 +31,7 @@ const DEFAULT_CONFIG: Configuracion = {
   umbral_baja_cobertura: 20,
   umbral_normal: 60,
   tema: 'dark',
-  deepseek_api_key: 'sk-be7fa627e4a04ca6a0d0be9bdb3fc29c',
+  metricaGlobal: 'usd',
   giro: '',
   giro_custom: '',
 }
@@ -84,6 +84,7 @@ interface AppState {
   orgId: string
   dataSource: 'none' | 'demo' | 'real'
   selectedPeriod: { year: number; month: number }
+  tipoMetaActivo: 'uds' | 'usd'
 
   // Comparativa de períodos
   comparisonEnabled: boolean
@@ -116,6 +117,7 @@ interface AppState {
   setLoadingMessage: (msg: string) => void
   setDataSource: (source: 'none' | 'demo' | 'real') => void
   setSelectedPeriod: (period: { year: number; month: number }) => void
+  setTipoMetaActivo: (tipo: 'uds' | 'usd') => void
   setConfiguracion: (config: Partial<Configuracion>) => void
   setChatContextVendedor: (v: VendorAnalysis | null) => void
   setChatContextCliente: (c: ChatClienteContext | null) => void
@@ -169,6 +171,7 @@ export const useAppStore = create<AppState>()(
         month: new Date().getMonth(), // 0-indexed
       },
       configuracion: DEFAULT_CONFIG,
+      tipoMetaActivo: 'uds',
 
       // Actions
       setSales: (sales) => set({ sales }),
@@ -192,6 +195,7 @@ export const useAppStore = create<AppState>()(
       setLoadingMessage: (loadingMessage) => set({ loadingMessage }),
       setIsLoading: (isLoading) => set({ isLoading }),
       setSelectedPeriod: (selectedPeriod) => set({ selectedPeriod, isProcessed: false }),
+      setTipoMetaActivo: (tipoMetaActivo) => set({ tipoMetaActivo, isProcessed: false }),
       setConfiguracion: (config) =>
         set((state) => ({
           configuracion: { ...state.configuracion, ...config },
@@ -254,20 +258,23 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'salesflow-storage',
-      version: 7,
-      migrate: (persistedState: any) => ({
+      version: 8,
+      migrate: (persistedState: any) => {
+        // v8: remove deepseek_api_key from persisted config (now handled by backend proxy)
+        const { deepseek_api_key: _, ...cleanConfig } = persistedState?.configuracion ?? {}
+        return {
         selectedPeriod: persistedState?.selectedPeriod ?? {
           year: new Date().getFullYear(),
           month: new Date().getMonth(),
         },
         configuracion: {
           ...DEFAULT_CONFIG,
-          ...persistedState?.configuracion,
-          deepseek_api_key: persistedState?.configuracion?.deepseek_api_key ?? DEFAULT_CONFIG.deepseek_api_key,
+          ...cleanConfig,
         },
         orgId: persistedState?.orgId ?? '',
         dataSource: persistedState?.dataSource ?? 'none',
-      }) as any,
+      } as any
+      },
       // sales/metas/inventory NO se persisten: son muy grandes para localStorage
       // y bloquean el hilo principal al serializarse. Se restauran via IndexedDB o getDemoData().
       partialize: (state) => ({
@@ -275,6 +282,7 @@ export const useAppStore = create<AppState>()(
         configuracion: state.configuracion,
         orgId: state.orgId,
         dataSource: state.dataSource,
+        tipoMetaActivo: state.tipoMetaActivo,
       }) as any,
     }
   )

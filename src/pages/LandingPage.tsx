@@ -24,10 +24,10 @@ const TABS: FeatureTab[] = [
     icon: BarChart3,
     shortName: 'Estado Comercial',
     title: 'Tu negocio en una sola pantalla',
-    description: 'KPIs del mes, proyeccion de cierre y resumen por IA.',
+    description: 'KPIs del mes, proyección de cierre y resumen por IA.',
     bullets: [
-      'Evolucion YTD vs ano pasado',
-      'Proyeccion automatica de cierre',
+      'Evolución YTD vs año pasado',
+      'Proyección automática de cierre',
       '29+ alertas de riesgo activas',
     ],
     visual: () => (
@@ -39,7 +39,7 @@ const TABS: FeatureTab[] = [
             <div className="text-sm font-bold text-emerald-400">+6.3%</div>
           </div>
           <div className="flex-1 rounded-lg p-2.5 bg-slate-800">
-            <div className="text-[11px] text-slate-400">Proyeccion</div>
+            <div className="text-[11px] text-slate-400">Proyección</div>
             <div className="text-sm font-bold text-white">$52k</div>
           </div>
           <div className="flex-1 rounded-lg p-2.5 bg-slate-800">
@@ -47,10 +47,10 @@ const TABS: FeatureTab[] = [
             <div className="text-sm font-bold text-white">62%</div>
           </div>
         </div>
-        {/* Evolucion YTD - 6 meses pareados */}
+        {/* Evolución YTD - 6 meses pareados */}
         <div className="rounded-lg bg-slate-800/60 p-3">
           <div className="flex items-center justify-between mb-2">
-            <div className="text-[11px] text-slate-400 font-medium">Evolucion YTD</div>
+            <div className="text-[11px] text-slate-400 font-medium">Evolución YTD</div>
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-1">
                 <div className="w-2 h-2 rounded-sm bg-slate-500" />
@@ -87,8 +87,8 @@ const TABS: FeatureTab[] = [
         </div>
         {/* Alerta */}
         <div className="rounded-lg p-2.5" style={{ background: 'rgba(239,68,68,0.08)', borderLeft: '2px solid #ef4444' }}>
-          <div className="text-[11px] text-slate-300 font-medium">Doble riesgo — C. Ramirez</div>
-          <div className="text-[9px] text-slate-500">2 clientes dormidos · Recovery: dificil</div>
+          <div className="text-[11px] text-slate-300 font-medium">Doble riesgo — C. Ramírez</div>
+          <div className="text-[9px] text-slate-500">2 clientes dormidos · Recovery: difícil</div>
         </div>
       </div>
     ),
@@ -96,7 +96,7 @@ const TABS: FeatureTab[] = [
   {
     icon: Bot,
     shortName: 'Chat IA',
-    title: 'Preguntale a tus datos lo que quieras',
+    title: 'Pregúntale a tus datos lo que quieras',
     description: 'Un chat que conoce todo tu negocio.',
     bullets: [
       'Respuestas con datos reales',
@@ -116,7 +116,7 @@ const TABS: FeatureTab[] = [
         {/* User question */}
         <div className="flex justify-end">
           <div className="rounded-xl rounded-tr-sm px-3 py-1.5 bg-slate-700 max-w-[75%]">
-            <span className="text-[11px] text-slate-200">Por que bajaron las ventas este mes?</span>
+            <span className="text-[11px] text-slate-200">¿Por qué bajaron las ventas este mes?</span>
           </div>
         </div>
         {/* AI response - structured */}
@@ -125,20 +125,20 @@ const TABS: FeatureTab[] = [
           <div className="space-y-1 pl-1">
             <div className="flex items-start gap-1.5">
               <span className="text-[10px] text-red-400 mt-0.5">&#8226;</span>
-              <span className="text-[10px] text-slate-400">Carlos Ramirez: -34% (2 clientes dormidos)</span>
+              <span className="text-[10px] text-slate-400">Carlos Ramírez: -34% (2 clientes dormidos)</span>
             </div>
             <div className="flex items-start gap-1.5">
               <span className="text-[10px] text-red-400 mt-0.5">&#8226;</span>
               <span className="text-[10px] text-slate-400">Categoria Refrescos: -81.5% vs mes anterior</span>
             </div>
           </div>
-          <div className="text-[11px] text-slate-300 font-semibold">Accion recomendada:</div>
-          <div className="text-[10px] text-slate-400 pl-1">Reactivar Supermercado Lopez (USD 45k historico)</div>
+          <div className="text-[11px] text-slate-300 font-semibold">Acción recomendada:</div>
+          <div className="text-[10px] text-slate-400 pl-1">Reactivar Supermercado López (USD 45k histórico)</div>
         </div>
         {/* Suggested questions */}
         <div className="flex gap-1.5">
           <div className="flex-1 rounded-lg px-2 py-1.5 border border-slate-700 text-center">
-            <span className="text-[9px] text-emerald-400">Plan de recuperacion?</span>
+            <span className="text-[9px] text-emerald-400">¿Plan de recuperación?</span>
           </div>
           <div className="flex-1 rounded-lg px-2 py-1.5 border border-slate-700 text-center">
             <span className="text-[9px] text-emerald-400">Detalle por vendedor</span>
@@ -151,10 +151,10 @@ const TABS: FeatureTab[] = [
     icon: Users,
     shortName: 'Vendedores',
     title: 'Quien vende, quien no, y por que',
-    description: 'Ranking automatico con alertas por vendedor.',
+    description: 'Ranking automático con alertas por vendedor.',
     bullets: [
       'Ranking por volumen y crecimiento',
-      'Alertas de caida por vendedor',
+      'Alertas de caída por vendedor',
       'Detalle de clientes por vendedor',
     ],
     visual: () => (
@@ -180,10 +180,10 @@ const TABS: FeatureTab[] = [
     icon: Target,
     shortName: 'Metas',
     title: 'Sabes si vas a llegar a la meta?',
-    description: 'Avance en tiempo real con proyeccion automatica.',
+    description: 'Avance en tiempo real con proyección automática.',
     bullets: [
       'Avance del equipo en tiempo real',
-      'Proyeccion inteligente de cierre',
+      'Proyección inteligente de cierre',
       'Brecha exacta para llegar a meta',
     ],
     visual: () => (
@@ -208,7 +208,7 @@ const TABS: FeatureTab[] = [
         {/* Stats row */}
         <div className="flex gap-2">
           <div className="flex-1 rounded-lg p-2 bg-slate-800 text-center">
-            <div className="text-[11px] text-slate-400">Dias restantes</div>
+            <div className="text-[11px] text-slate-400">Días restantes</div>
             <div className="text-sm font-bold text-white">12</div>
           </div>
           <div className="flex-1 rounded-lg p-2 bg-slate-800 text-center">
@@ -222,12 +222,12 @@ const TABS: FeatureTab[] = [
   {
     icon: UserCheck,
     shortName: 'Clientes',
-    title: 'Clientes que se te estan escapando',
+    title: 'Clientes que se te están escapando',
     description: 'Detecta clientes en riesgo antes de perderlos.',
     bullets: [
       'Clientes dormidos y en fuga',
       'Concentracion de riesgo por cliente',
-      'Recuperacion: facil, media o dificil',
+      'Recuperación: fácil, media o difícil',
     ],
     visual: () => (
       <div className="space-y-2">
@@ -256,16 +256,16 @@ const TABS: FeatureTab[] = [
   {
     icon: Package,
     shortName: 'Inventario',
-    title: 'Que se mueve y que no',
-    description: 'Rotacion de productos con alertas de estancamiento.',
+    title: 'Qué se mueve y qué no',
+    description: 'Rotación de productos con alertas de estancamiento.',
     bullets: [
-      'Top productos por rotacion',
+      'Top productos por rotación',
       'Productos estancados al instante',
-      'Tendencia vs periodo anterior',
+      'Tendencia vs período anterior',
     ],
     visual: () => (
       <div className="space-y-1.5">
-        <div className="text-[11px] text-slate-400 mb-2 font-medium">Rotacion de productos</div>
+        <div className="text-[11px] text-slate-400 mb-2 font-medium">Rotación de productos</div>
         {[
           { name: 'Producto A', days: '12 dias', status: 'Alta', color: '#10b981' },
           { name: 'Producto B', days: '28 dias', status: 'Media', color: '#f59e0b' },
@@ -294,7 +294,7 @@ const TABS: FeatureTab[] = [
     description: 'Cada departamento desglosado con sus propios KPIs.',
     bullets: [
       'KPIs por departamento o zona',
-      'Comparativa entre lineas',
+      'Comparativa entre líneas',
       'Alertas especificas por area',
     ],
     visual: () => {
@@ -358,12 +358,12 @@ const TABS: FeatureTab[] = [
   },
   {
     icon: Sparkles,
-    shortName: 'Que hago hoy?',
+    shortName: '¿Qué hago hoy?',
     title: 'La pregunta que cambia todo',
-    description: 'Las acciones mas importantes del dia, priorizadas por IA.',
+    description: 'Las acciones más importantes del día, priorizadas por IA.',
     bullets: [
       'Prioridades basadas en datos reales',
-      'Acciones concretas, no graficas',
+      'Acciones concretas, no gráficas',
       'Se actualiza con cada archivo nuevo',
     ],
     visual: () => (
@@ -373,7 +373,7 @@ const TABS: FeatureTab[] = [
           {
             num: '1',
             action: 'Reactivar Supermercado Lopez',
-            reason: 'Cliente mas valioso (USD 45k), 35 dias inactivo.',
+            reason: 'Cliente más valioso (USD 45k), 35 días inactivo.',
             tagColor: '#ef4444',
             tag: 'Urgente',
           },
@@ -387,7 +387,7 @@ const TABS: FeatureTab[] = [
           {
             num: '3',
             action: 'Revisar stock de Queso Fresco 400g',
-            reason: 'Solo 6 dias de inventario restante.',
+            reason: 'Solo 6 días de inventario restante.',
             tagColor: '#64748b',
             tag: 'Preventivo',
           },
@@ -398,7 +398,7 @@ const TABS: FeatureTab[] = [
               <span className="text-[11px] text-slate-200 font-medium flex-1">{item.action}</span>
               <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ background: `${item.tagColor}20`, color: item.tagColor }}>{item.tag}</span>
             </div>
-            <div className="text-[10px] text-slate-500 pl-4 italic">Por que hoy: {item.reason}</div>
+            <div className="text-[10px] text-slate-500 pl-4 italic">Por qué hoy: {item.reason}</div>
           </div>
         ))}
       </div>
@@ -406,13 +406,13 @@ const TABS: FeatureTab[] = [
   },
   {
     icon: Building2,
-    shortName: 'Organizacion',
+    shortName: 'Organización',
     title: 'Comparte con tu equipo',
-    description: 'Invita miembros y controla que puede ver cada uno.',
+    description: 'Invita miembros y controla qué puede ver cada uno.',
     bullets: [
-      'Link de invitacion con un click',
+      'Link de invitación con un clic',
       'Roles: Visor, Editor, Admin',
-      'Permisos por pagina individual',
+      'Permisos por página individual',
     ],
     visual: () => (
       <div className="space-y-2">
@@ -466,7 +466,7 @@ const PLANS: PricingPlan[] = [
       'Chat IA (10 consultas/mes)',
       'Exportar PDF',
     ],
-    cta: 'Probar 14 dias gratis',
+    cta: 'Probar 14 días gratis',
     href: '/login',
   },
   {
@@ -478,12 +478,12 @@ const PLANS: PricingPlan[] = [
     features: [
       'Hasta 5 usuarios',
       'Registros ilimitados',
-      'Tendencias (crecimiento, caida)',
+      'Tendencias (crecimiento, caída)',
       'Chat IA ilimitado',
-      'Comparativa vs periodo anterior',
+      'Comparativa vs período anterior',
       'Historial 18 meses',
     ],
-    cta: 'Probar 14 dias gratis',
+    cta: 'Probar 14 días gratis',
     href: '/login',
   },
   {
@@ -518,8 +518,8 @@ export default function LandingPage() {
 
       {/* ─── Hero ─────────────────────────────────────────────── */}
       <section style={{ background: '#faf9f6' }}>
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16 sm:py-24">
-          <div className="grid lg:grid-cols-2 gap-12 items-center">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-14">
+          <div className="grid lg:grid-cols-2 gap-8 lg:gap-12 items-center">
             <div>
               <h1
                 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold leading-tight tracking-tight"
@@ -529,8 +529,8 @@ export default function LandingPage() {
                 <span style={{ color: '#10b981' }}>SalesFlow te los muestra.</span>
               </h1>
               <p className="mt-5 text-base sm:text-lg leading-relaxed max-w-xl" style={{ color: '#475569' }}>
-                Sube tu archivo de ventas y en 2 minutos sabras que vendedores estan fallando,
-                que clientes se te escapan, y que hacer al respecto.
+                Sube tu archivo de ventas y en 2 minutos sabrás qué vendedores están fallando,
+                qué clientes se te escapan, y qué hacer al respecto.
               </p>
               <div className="mt-8 flex flex-col sm:flex-row gap-3">
                 <Link
@@ -539,11 +539,11 @@ export default function LandingPage() {
                   className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl text-base font-semibold text-white transition-opacity hover:opacity-90"
                   style={{ background: '#10b981' }}
                 >
-                  Probar 14 dias gratis
+                  Probar 14 días gratis
                   <ArrowRight className="w-4 h-4" />
                 </Link>
                 <Link
-                  to="/login"
+                  to="/demo"
                   className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl text-base font-semibold transition-colors"
                   style={{ border: '1px solid #d1d5db', color: '#374151', background: 'transparent' }}
                 >
@@ -553,7 +553,7 @@ export default function LandingPage() {
             </div>
 
             {/* Dashboard mockup */}
-            <div className="hidden lg:flex items-center justify-center relative">
+            <div className="hidden lg:flex items-center justify-center relative" style={{ maxHeight: 420 }}>
               <div
                 className="absolute inset-0 pointer-events-none"
                 style={{ background: 'radial-gradient(ellipse at center, rgba(16,185,129,0.1) 0%, transparent 70%)' }}
@@ -577,7 +577,7 @@ export default function LandingPage() {
                   </div>
                   <div className="flex gap-2">
                     <div className="flex-1 bg-slate-800 rounded-lg p-2">
-                      <div className="text-[9px] text-slate-400">Proyeccion</div>
+                      <div className="text-[9px] text-slate-400">Proyección</div>
                       <div className="text-xs font-bold text-emerald-400">USD 325,848</div>
                     </div>
                     <div className="flex-1 bg-slate-800 rounded-lg p-2">
@@ -590,7 +590,7 @@ export default function LandingPage() {
                     </div>
                   </div>
                   <div className="mt-2 bg-slate-800 rounded-lg p-2">
-                    <div className="text-[9px] text-slate-400 mb-1.5">Evolucion YTD</div>
+                    <div className="text-[9px] text-slate-400 mb-1.5">Evolución YTD</div>
                     <div className="flex items-end justify-center gap-4 h-12">
                       {[
                         { label: 'Ene', prev: 16, curr: 20 },
@@ -609,11 +609,11 @@ export default function LandingPage() {
                   </div>
                   <div className="mt-2 space-y-1">
                     <div className="bg-red-500/10 border-l-2 border-red-500 rounded p-1.5">
-                      <div className="text-[9px] text-slate-300 font-medium">Doble riesgo — Carlos Ramirez</div>
-                      <div className="text-[10px] text-slate-500">2 clientes dormidos - Recovery: dificil</div>
+                      <div className="text-[9px] text-slate-300 font-medium">Doble riesgo — Carlos Ramírez</div>
+                      <div className="text-[10px] text-slate-500">2 clientes dormidos - Recovery: difícil</div>
                     </div>
                     <div className="bg-amber-500/10 border-l-2 border-amber-500 rounded p-1.5">
-                      <div className="text-[9px] text-slate-300 font-medium">Equipo no cerrara la meta del mes</div>
+                      <div className="text-[9px] text-slate-300 font-medium">Equipo no cerrará la meta del mes</div>
                       <div className="text-[10px] text-slate-500">Brecha: 23,473 uds de 46,057</div>
                     </div>
                   </div>
@@ -628,7 +628,7 @@ export default function LandingPage() {
       <section style={{ borderTop: '1px solid #e2e6ef', borderBottom: '1px solid #e2e6ef', background: '#f1f5f9' }}>
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
           <p className="text-center text-xs font-medium uppercase tracking-wider mb-4" style={{ color: '#64748b' }}>
-            Disenado para equipos comerciales en LATAM
+            Diseñado para equipos comerciales en LATAM
           </p>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
             {[
@@ -654,7 +654,7 @@ export default function LandingPage() {
               Todo lo que incluye tu reporte
             </h2>
             <p className="mt-2 text-base" style={{ color: '#64748b' }}>
-              Un solo archivo. Todo este analisis.
+              Un solo archivo. Todo este análisis.
             </p>
           </div>
 
@@ -723,28 +723,47 @@ export default function LandingPage() {
       <section style={{ background: '#f1f5f9', borderTop: '1px solid #e2e6ef', borderBottom: '1px solid #e2e6ef' }}>
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-14">
           <h2 className="text-2xl sm:text-3xl font-bold text-center mb-8" style={{ color: '#1a1a2e' }}>
-            Como funciona
+            Cómo funciona
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
             {[
-              { step: 1, icon: Upload, title: 'Sube tu archivo', desc: 'Arrastra tu Excel o CSV de ventas' },
-              { step: 2, icon: Zap, title: 'Analisis automatico', desc: 'SalesFlow detecta patrones en segundos' },
-              { step: 3, icon: Target, title: 'Actua con confianza', desc: 'Recibe alertas claras y recomendaciones' },
+              { step: 1, icon: Upload, title: 'Sube tu archivo', desc: 'Arrastra tu Excel o CSV de ventas. Compatible con cualquier sistema.' },
+              { step: 2, icon: Zap, title: 'Análisis automático', desc: 'SalesFlow detecta 22 patrones de riesgo en segundos, sin configuración.' },
+              { step: 3, icon: Target, title: 'Actúa con confianza', desc: 'Recibe alertas claras con acciones concretas y análisis de IA.' },
             ].map((s) => (
-              <div key={s.step} className="flex items-start gap-3 sm:flex-col sm:items-center sm:text-center">
+              <div key={s.step} className="rounded-xl p-5 text-center" style={{ background: '#ffffff', border: '1px solid #e2e6ef' }}>
                 <div
-                  className="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
-                  style={{ background: 'rgba(16,185,129,0.1)', border: '2px solid rgba(16,185,129,0.25)' }}
+                  className="w-12 h-12 rounded-xl flex items-center justify-center mx-auto mb-3"
+                  style={{ background: 'rgba(16,185,129,0.1)' }}
                 >
-                  <s.icon className="w-4 h-4" style={{ color: '#10b981' }} />
+                  <s.icon className="w-5 h-5" style={{ color: '#10b981' }} />
                 </div>
-                <div>
-                  <h3 className="text-sm font-semibold mb-0.5" style={{ color: '#1a1a2e' }}>{s.title}</h3>
-                  <p className="text-xs leading-relaxed" style={{ color: '#64748b' }}>{s.desc}</p>
-                </div>
+                <div className="text-xs font-bold mb-1" style={{ color: '#10b981' }}>Paso {s.step}</div>
+                <h3 className="text-sm font-bold mb-1" style={{ color: '#1a1a2e' }}>{s.title}</h3>
+                <p className="text-xs leading-relaxed" style={{ color: '#64748b' }}>{s.desc}</p>
               </div>
             ))}
           </div>
+        </div>
+      </section>
+
+      {/* ─── Interactive demo CTA ─────────────────────────────── */}
+      <section style={{ background: '#faf9f6' }}>
+        <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-14 sm:py-18 text-center">
+          <h2 className="text-2xl sm:text-3xl font-bold mb-3" style={{ color: '#1a1a2e' }}>
+            Descúbrelo tú mismo
+          </h2>
+          <p className="text-base mb-6" style={{ color: '#64748b' }}>
+            Explora el dashboard completo con datos de ejemplo — sin registro, sin tarjeta.
+          </p>
+          <Link
+            to="/demo"
+            className="inline-flex items-center justify-center gap-2 px-8 py-3.5 rounded-xl text-base font-semibold transition-opacity hover:opacity-90"
+            style={{ background: '#0f172a', color: '#ffffff' }}
+          >
+            <Sparkles className="w-4 h-4" />
+            Ver demo interactiva
+          </Link>
         </div>
       </section>
 
@@ -756,7 +775,7 @@ export default function LandingPage() {
               Precios simples, sin sorpresas
             </h2>
             <p className="mt-2 text-base" style={{ color: '#64748b' }}>
-              Todos los planes incluyen 14 dias de prueba gratis.
+              Todos los planes incluyen 14 días de prueba gratis.
             </p>
 
             {/* Toggle */}
@@ -801,7 +820,7 @@ export default function LandingPage() {
                     className="absolute -top-3 left-1/2 -translate-x-1/2 text-xs font-bold px-3 py-0.5 rounded-full text-white"
                     style={{ background: '#10b981' }}
                   >
-                    Mas popular
+                    Más popular
                   </div>
                 )}
 
@@ -864,6 +883,20 @@ export default function LandingPage() {
               </div>
             ))}
           </div>
+
+          {/* WhatsApp help */}
+          <div className="text-center mt-8">
+            <p className="text-sm mb-2" style={{ color: '#94a3b8' }}>¿Tienes dudas sobre qué plan elegir?</p>
+            <a
+              href="https://wa.me/50499999999?text=Hola,%20tengo%20dudas%20sobre%20los%20planes%20de%20SalesFlow"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 text-sm font-medium transition-colors hover:underline"
+              style={{ color: '#10b981' }}
+            >
+              Escríbenos por WhatsApp →
+            </a>
+          </div>
         </div>
       </section>
 
@@ -876,7 +909,7 @@ export default function LandingPage() {
       >
         <div className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-16 sm:py-20 text-center">
           <h2 className="text-2xl sm:text-3xl font-bold mb-4" style={{ color: '#1a1a2e' }}>
-            Empieza a tomar decisiones con datos, no con intuicion.
+            Empieza a tomar decisiones con datos, no con intuición.
           </h2>
           <Link
             to="/login"
@@ -884,11 +917,11 @@ export default function LandingPage() {
             className="inline-flex items-center justify-center gap-2 px-8 py-3.5 rounded-xl text-base font-semibold text-white transition-opacity hover:opacity-90 mt-6"
             style={{ background: '#10b981' }}
           >
-            Probar 14 dias gratis
+            Probar 14 días gratis
             <ArrowRight className="w-4 h-4" />
           </Link>
           <p className="mt-4 text-xs" style={{ color: '#94a3b8' }}>
-            Sin tarjeta de credito · 2 minutos para empezar
+            Sin tarjeta de crédito · 2 minutos para empezar
           </p>
         </div>
       </section>

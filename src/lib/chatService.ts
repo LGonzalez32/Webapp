@@ -226,6 +226,12 @@ CÓMO RESPONDER:
 - Solicitudes de acción ("¿qué hago?") → acciones específicas con nombres reales y plazos
 - Números siempre: %, días, unidades, montos
 
+TABLAS Y DATOS NUMÉRICOS:
+Cuando generes tablas con datos numéricos, SIEMPRE incluye:
+1. Un header de columna claro que explique qué es cada valor (ej: "Vendedor", "Cumpl. Meta %", "Ventas Mes", etc.)
+2. La unidad en cada valor o en el header (%, uds, ${mon}, días, etc.)
+3. Si es un ranking o comparación, indica quién está bien y quién está mal con un indicador visual (🟢🟡🔴)
+
 ════════════════════
 PERÍODO ANALIZADO: ${mes} ${año}
 ════════════════════
@@ -280,7 +286,7 @@ Variación vs período anterior: ${teamStats?.variacion_pct != null ? teamStats.
           if (dataAvailability.has_venta_neta && c.valor_historico) {
             p += ` | Valor hist: ${c.valor_historico.toLocaleString()} ${mon}`
           }
-          p += ` | Recovery: ${c.recovery_score}/100 (${c.recovery_label}) — ${c.recovery_explicacion}`
+          p += ` | Estado: ${c.recovery_label === 'alta' ? 'Alta probabilidad' : c.recovery_label === 'recuperable' ? 'Recuperable' : c.recovery_label === 'dificil' ? 'Difícil' : 'Perdido'}`
         }
       }
 
@@ -664,23 +670,37 @@ export async function callAI(
   messages: { role: string; content: string }[],
   options?: { max_tokens?: number; temperature?: number; model?: string; top_p?: number; frequency_penalty?: number },
 ): Promise<{ choices: { message: { content: string } }[] }> {
-  const response = await fetch(`${BACKEND_URL}/api/v1/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      messages,
-      model: options?.model || 'deepseek-chat',
-      max_tokens: options?.max_tokens || 1024,
-      temperature: options?.temperature ?? 0.3,
-      ...(options?.top_p != null && { top_p: options.top_p }),
-      ...(options?.frequency_penalty != null && { frequency_penalty: options.frequency_penalty }),
-    }),
-  })
-  if (response.status === 401) throw new Error('INVALID_KEY')
-  if (response.status === 429) throw new Error('RATE_LIMIT')
-  if (!response.ok) throw new Error('API_ERROR')
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/v1/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages,
+        model: options?.model || 'deepseek-chat',
+        max_tokens: options?.max_tokens || 1024,
+        temperature: options?.temperature ?? 0.3,
+        ...(options?.top_p != null && { top_p: options.top_p }),
+        ...(options?.frequency_penalty != null && { frequency_penalty: options.frequency_penalty }),
+      }),
+    })
+    if (response.status === 401) throw new Error('INVALID_KEY')
+    if (response.status === 429) throw new Error('RATE_LIMIT')
+    if (!response.ok) throw new Error('API_ERROR')
 
-  return response.json() as Promise<{ choices: { message: { content: string } }[] }>
+    return response.json() as Promise<{ choices: { message: { content: string } }[] }>
+  } catch (err) {
+    // In demo mode, return a canned response instead of failing
+    if (typeof window !== 'undefined' && window.location.pathname.startsWith('/demo')) {
+      return {
+        choices: [{
+          message: {
+            content: '📊 **Análisis de ejemplo** — Esta es una vista previa del análisis con IA.\n\nEn la versión completa, el asistente analiza tus datos en tiempo real y genera recomendaciones personalizadas con nombres, cifras y acciones concretas.\n\n💡 **Regístrate gratis** para desbloquear el análisis con IA sobre tus propios datos.',
+          },
+        }],
+      }
+    }
+    throw err
+  }
 }
 
 async function callDeepSeek(_storeKey: string, payload: Record<string, unknown>): Promise<string> {

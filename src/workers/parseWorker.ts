@@ -116,7 +116,10 @@ function parseMetas(rows: Record<string, unknown>[]): unknown[] {
 
     if (!mes || !anio || meta === null) continue
 
-    const record: Record<string, unknown> = { mes, anio, meta, tipo_meta }
+    const record: Record<string, unknown> = {
+      mes, anio, meta, tipo_meta,
+      ...(tipo_meta === 'venta_neta' ? { meta_usd: meta } : { meta_uds: meta }),
+    }
     for (const key of ['vendedor', 'cliente', 'producto', 'categoria', 'departamento', 'supervisor', 'canal']) {
       if (mapped[key] !== undefined) record[key] = String(mapped[key])
     }

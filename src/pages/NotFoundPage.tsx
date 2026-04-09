@@ -12,13 +12,24 @@ export default function NotFoundPage() {
       <p className="text-zinc-500 max-w-md mb-10">
         Lo sentimos, la página que estás buscando no existe o ha sido movida.
       </p>
-      <Link 
-        to="/" 
+      <Link
+        to="/"
         className="flex items-center gap-2 px-8 py-4 bg-emerald-500 hover:bg-emerald-400 text-black rounded-2xl font-bold transition-all shadow-xl shadow-emerald-500/20 group"
       >
         <Home className="w-5 h-5 group-hover:-translate-y-0.5 transition-transform" />
         Ir al inicio
       </Link>
+      <p className="mt-6 text-sm text-zinc-500">
+        ¿Buscabas algo específico?{' '}
+        <a
+          href="https://wa.me/50499999999?text=Hola,%20necesito%20ayuda%20con%20SalesFlow"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-emerald-400 hover:text-emerald-300 underline transition-colors"
+        >
+          Escríbenos
+        </a>
+      </p>
     </div>
   );
 }
