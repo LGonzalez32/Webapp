@@ -134,7 +134,7 @@ function CategoriasContent({ categorias, moneda }: { categorias: Array<{ nombre:
             </span>
             {hasUSD && (
               <span className="text-right" style={{ color: 'var(--sf-t3)', fontFamily: "'DM Mono', monospace" }}>
-                {moneda} {fmtK(c.perdidaUSD)}
+                {moneda}{fmtK(c.perdidaUSD)}
               </span>
             )}
           </div>
@@ -145,7 +145,7 @@ function CategoriasContent({ categorias, moneda }: { categorias: Array<{ nombre:
       {hasUSD && (
         <div className="flex justify-end">
           <span className="text-sm font-bold" style={{ color: 'var(--sf-t1)' }}>
-            Total en riesgo: {moneda} {fmtK(total)}
+            Total en riesgo: {moneda}{fmtK(total)}
           </span>
         </div>
       )}

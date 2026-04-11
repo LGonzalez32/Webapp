@@ -18,12 +18,12 @@ const PAGE_TITLES: Record<string, { title: string; sub: string }> = {
 export default function TopBar() {
   const location  = useLocation()
   const navigate  = useNavigate()
-  const { dataSource, configuracion, setConfiguracion, dataAvailability } = useAppStore()
+  const { dataSource, configuracion, setConfiguracion, dataAvailability, setTipoMetaActivo } = useAppStore()
   const tema = configuracion.tema
   const metricaGlobal = configuracion.metricaGlobal ?? 'usd'
 
   const toggleTema = () => setConfiguracion({ tema: tema === 'dark' ? 'light' : 'dark' })
-  const setMetricaGlobal = (m: 'usd' | 'uds') => setConfiguracion({ metricaGlobal: m })
+  const setMetricaGlobal = (m: 'usd' | 'uds') => { setConfiguracion({ metricaGlobal: m }); setTipoMetaActivo(m) }
 
   // Demo badge state
   const [demoHover, setDemoHover] = useState(false)
@@ -158,7 +158,7 @@ export default function TopBar() {
               title="Mostrar en moneda"
             >
               <DollarSign className="w-3.5 h-3.5" style={{ color: metricaGlobal === 'usd' ? '#10b981' : 'inherit' }} />
-              <span className="hidden sm:inline">{configuracion.moneda}</span>
+              <span className="hidden sm:inline">USD</span>
             </button>
             <button
               onClick={() => setMetricaGlobal('uds')}

@@ -27,6 +27,14 @@ export function useAnalysis() {
     setCanalAnalysis,
     setInsights,
     setDataAvailability,
+    setClienteSummaries,
+    setProductoSummaries,
+    setDepartamentoSummaries,
+    setMesesDisponibles,
+    setCanalesDisponibles,
+    setMonthlyTotals,
+    setMonthlyTotalsSameDay,
+    setFechaRefISO,
     setIsProcessed,
     setIsLoading,
     setLoadingMessage,
@@ -54,6 +62,14 @@ export function useAnalysis() {
     setCanalAnalysis: s.setCanalAnalysis,
     setInsights: s.setInsights,
     setDataAvailability: s.setDataAvailability,
+    setClienteSummaries: s.setClienteSummaries,
+    setProductoSummaries: s.setProductoSummaries,
+    setDepartamentoSummaries: s.setDepartamentoSummaries,
+    setMesesDisponibles: s.setMesesDisponibles,
+    setCanalesDisponibles: s.setCanalesDisponibles,
+    setMonthlyTotals: s.setMonthlyTotals,
+    setMonthlyTotalsSameDay: s.setMonthlyTotalsSameDay,
+    setFechaRefISO: s.setFechaRefISO,
     setIsProcessed: s.setIsProcessed,
     setIsLoading: s.setIsLoading,
     setLoadingMessage: s.setLoadingMessage,
@@ -118,31 +134,23 @@ export function useAnalysis() {
         if (supervisorAnalysis)    setSupervisorAnalysis(supervisorAnalysis)
         if (categoriaAnalysis)     setCategoriaAnalysis(categoriaAnalysis)
         if (canalAnalysis)         setCanalAnalysis(canalAnalysis)
+        if (data.clienteSummaries) setClienteSummaries(data.clienteSummaries)
+        if (data.productoSummaries) setProductoSummaries(data.productoSummaries)
+        if (data.departamentoSummaries) setDepartamentoSummaries(data.departamentoSummaries)
+        if (data.mesesDisponibles) setMesesDisponibles(data.mesesDisponibles)
+        if (data.canalesDisponibles) setCanalesDisponibles(data.canalesDisponibles)
+        if (data.monthlyTotals) setMonthlyTotals(data.monthlyTotals)
+        if (data.monthlyTotalsSameDay) setMonthlyTotalsSameDay(data.monthlyTotalsSameDay)
+        if (data.fechaRefISO) setFechaRefISO(data.fechaRefISO)
         setInsights(insights)
         setIsProcessed(true)
         setIsLoading(false)
         setLoadingMessage('')
 
-        // Fetch projections — non-blocking; if found, delegate enrichment to worker
-        const metric = dataAvailability.has_venta_neta ? 'revenue' : 'units'
-        const vendedores = vendorAnalysis.map((v: { vendedor: string }) => v.vendedor)
-        setForecastLoading(true)
-        try {
-          const projections = await getProjectionsFromBackend(
-            selectedPeriod.year, vendedores, metric, 'vendedor',
-          )
-          if (projections.size > 0 && workerRef.current) {
-            // Send projections to worker — generateInsights re-runs off-thread
-            workerRef.current.postMessage({
-              type: 'enrich',
-              projections: Object.fromEntries(projections),
-            })
-            return  // worker stays alive; waits for type: 'enriched'
-          }
-        } catch {
-          // Backend not available — keep linear projections
-        }
-        // No projections or error: clean up now
+        // Forecast backend desactivado — el endpoint /forecast/* requiere
+        // numpy/pandas que no están instalados en Render. Las proyecciones
+        // lineales calculadas localmente son suficientes por ahora.
+        // Pendiente: reconectar cuando el backend tenga forecast habilitado.
         setForecastLoading(false)
         worker.terminate()
         workerRef.current = null

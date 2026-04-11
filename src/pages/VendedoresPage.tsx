@@ -6,8 +6,10 @@ import { cn } from '../lib/utils'
 import { useDemoPath } from '../lib/useDemoPath'
 import type { VendorAnalysis } from '../types'
 import VendedorPanel from '../components/vendedor/VendedorPanel'
-import { ChevronDown, ChevronRight, Search } from 'lucide-react'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import AnalysisDrawer from '../components/ui/AnalysisDrawer'
+import { SFSelect } from '../components/ui/SFSelect'
+import { SFSearch } from '../components/ui/SFSearch'
 import { callAI } from '../lib/chatService'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -900,80 +902,34 @@ Reglas:
       {/* ── Filtros ───────────────────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-2">
         {/* search */}
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none" style={{ color: 'var(--sf-t5)' }} />
-          <input
-            type="text"
-            placeholder="Buscar vendedor..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="focus:outline-none"
-            style={{
-              background: 'var(--sf-inset)',
-              border: '1px solid var(--sf-border)',
-              borderRadius: 8,
-              color: 'var(--sf-t1)',
-              fontSize: 13,
-              height: 36,
-              paddingLeft: 32,
-              paddingRight: 12,
-              width: 180,
-              transition: 'border-color 150ms ease',
-            }}
-            onMouseEnter={e => (e.currentTarget.style.borderColor = '#00D68F40')}
-            onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--sf-border)')}
-          />
-        </div>
+        <SFSearch
+          placeholder="Buscar vendedor..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          style={{ width: 180 }}
+        />
 
         {/* estado select — synced with pills */}
-        <select
+        <SFSelect
           value={filterEstado}
           onChange={e => setFilterEstado(e.target.value)}
-          className="focus:outline-none cursor-pointer"
-          style={{
-            background: 'var(--sf-inset)',
-            border: '1px solid var(--sf-border)',
-            borderRadius: 8,
-            color: 'var(--sf-t1)',
-            fontSize: 13,
-            height: 36,
-            paddingLeft: 12,
-            paddingRight: 28,
-            transition: 'border-color 150ms ease',
-          }}
-          onMouseEnter={e => (e.currentTarget.style.borderColor = '#00D68F40')}
-          onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--sf-border)')}
         >
           <option value="all">Estado: todos</option>
           <option value="critico">Crítico</option>
           <option value="riesgo">En riesgo</option>
           <option value="ok">OK</option>
           <option value="superando">Superando</option>
-        </select>
+        </SFSelect>
 
         {/* canal select */}
         {dataAvailability.has_canal && canales.length > 0 && (
-          <select
+          <SFSelect
             value={filterCanal}
             onChange={e => setFilterCanal(e.target.value)}
-            className="focus:outline-none cursor-pointer"
-            style={{
-              background: 'var(--sf-inset)',
-              border: '1px solid var(--sf-border)',
-              borderRadius: 8,
-              color: 'var(--sf-t1)',
-              fontSize: 13,
-              height: 36,
-              paddingLeft: 12,
-              paddingRight: 28,
-              transition: 'border-color 150ms ease',
-            }}
-            onMouseEnter={e => (e.currentTarget.style.borderColor = '#00D68F40')}
-            onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--sf-border)')}
           >
             <option value="all">Canal: todos</option>
             {canales.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
+          </SFSelect>
         )}
 
       </div>

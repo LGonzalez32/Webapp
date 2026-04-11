@@ -27,6 +27,7 @@ import { callAI } from '../lib/chatService'
 import AnalysisDrawer from '../components/ui/AnalysisDrawer'
 import type { SaleRecord, MetaRecord, ForecastData } from '../types'
 import { DIM_META } from '../config/metaConfig'
+import { SFSelect } from '../components/ui/SFSelect'
 
 const DIM_TOGGLES: { key: DimKey; label: string; icon: string; requiresDim?: string }[] = [
   { key: 'canal',    label: 'Canal',    icon: '🏪', requiresDim: 'canal' },
@@ -61,9 +62,9 @@ function formatUnits(n: number): string {
   return n.toLocaleString()
 }
 function formatCurrency(n: number, moneda: string): string {
-  if (n >= 1_000_000) return `${moneda} ${(n / 1_000_000).toFixed(2)}M`
-  if (n >= 1_000) return `${moneda} ${(n / 1_000).toFixed(1)}k`
-  return `${moneda} ${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+  if (n >= 1_000_000) return `${moneda}${(n / 1_000_000).toFixed(2)}M`
+  if (n >= 1_000) return `${moneda}${(n / 1_000).toFixed(1)}k`
+  return `${moneda}${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
 }
 
 // ─── PIVOT TABLE HELPERS ──────────────────────────────────────────────────────
@@ -384,12 +385,19 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
       }
     }
     
-    // Fallback to local calculation
+    // Fallback to local calculation (same-day-range para mes parcial)
     const chartPrev = selectedYear - 1
+    const maxSaleDate = filteredForChart.reduce((max, s) => { const d = new Date(s.fecha); return d > max ? d : max }, new Date(0))
+    const isPartialMonth = isCurrentYear && currentMonth === maxSaleDate.getMonth() && selectedYear === maxSaleDate.getFullYear()
+    const maxDay = maxSaleDate.getDate()
     let ytdCurr = 0, ytdPrev = 0
     for (let m = 0; m <= currentMonth; m++) {
       const cs = salesInPeriod(filteredForChart, selectedYear, m)
-      const ps = salesInPeriod(filteredForChart, chartPrev, m)
+      let ps = salesInPeriod(filteredForChart, chartPrev, m)
+      // Para el mes parcial, limitar año anterior al mismo día
+      if (isPartialMonth && m === currentMonth) {
+        ps = ps.filter(s => new Date(s.fecha).getDate() <= maxDay)
+      }
       ytdCurr += useVentaNeta ? cs.reduce((a, s) => a + (s.venta_neta ?? 0), 0) : cs.reduce((a, s) => a + s.unidades, 0)
       ytdPrev += useVentaNeta ? ps.reduce((a, s) => a + (s.venta_neta ?? 0), 0) : ps.reduce((a, s) => a + s.unidades, 0)
     }
@@ -402,10 +410,8 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
     }
     let projected = ytdCurr
     if (isCurrentYear) {
-      const ytdPrevSum = Array.from({ length: currentMonth + 1 }, (_, i) => {
-        const s = salesInPeriod(filteredForChart, chartPrev, i)
-        return useVentaNeta ? s.reduce((a, v) => a + (v.venta_neta ?? 0), 0) : s.reduce((a, v) => a + v.unidades, 0)
-      }).reduce((a, b) => a + b, 0)
+      // ytdPrevSum con same-day-range para consistencia
+      const ytdPrevSum = ytdPrev
       const gf = ytdPrevSum > 0 ? ytdCurr / ytdPrevSum : 1
       for (let m = currentMonth + 1; m < 12; m++) {
         const ps = salesInPeriod(filteredForChart, chartPrev, m)
@@ -571,13 +577,13 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
         <div className="flex flex-wrap gap-3 items-center justify-between">
           <div className="flex flex-wrap gap-2">
             {/* Año */}
-            <select value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '8px', color: 'var(--sf-t1)', fontSize: '13px', height: '36px', padding: '0 12px', outline: 'none' }}>
+            <SFSelect value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))}>
               {años.map((a) => <option key={a} value={a}>{a}</option>)}
-            </select>
+            </SFSelect>
             {/* Vendedor */}
-            <select value={selectedVendor} onChange={(e) => setSelectedVendor(e.target.value)} style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '8px', color: 'var(--sf-t1)', fontSize: '13px', height: '36px', padding: '0 12px', outline: 'none' }}>
+            <SFSelect value={selectedVendor} onChange={(e) => setSelectedVendor(e.target.value)}>
               {vendors.map((v) => <option key={v} value={v}>{v === 'todos' ? 'Todos los vendedores' : v}</option>)}
-            </select>
+            </SFSelect>
           </div>
           <div className="flex items-center gap-2">
             {dataAvailability.has_metas && (
@@ -611,22 +617,22 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
               {showExtraFilters && (
                 <div className="flex flex-wrap gap-2 mt-2">
                   {dataAvailability.has_cliente && (
-                    <select value={selectedCliente} onChange={(e) => setSelectedCliente(e.target.value)} style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '8px', color: 'var(--sf-t1)', fontSize: '13px', height: '36px', padding: '0 12px', outline: 'none' }}>
+                    <SFSelect value={selectedCliente} onChange={(e) => setSelectedCliente(e.target.value)}>
                       <option value="all">Todos los clientes</option>
                       {clientes.map((c) => <option key={c} value={c}>{c}</option>)}
-                    </select>
+                    </SFSelect>
                   )}
                   {dataAvailability.has_canal && (
-                    <select value={selectedCanal} onChange={(e) => setSelectedCanal(e.target.value)} style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '8px', color: 'var(--sf-t1)', fontSize: '13px', height: '36px', padding: '0 12px', outline: 'none' }}>
+                    <SFSelect value={selectedCanal} onChange={(e) => setSelectedCanal(e.target.value)}>
                       <option value="all">Todos los canales</option>
                       {canales.map((c) => <option key={c} value={c}>{c}</option>)}
-                    </select>
+                    </SFSelect>
                   )}
                   {dataAvailability.has_producto && (
-                    <select value={selectedProducto} onChange={(e) => setSelectedProducto(e.target.value)} style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '8px', color: 'var(--sf-t1)', fontSize: '13px', height: '36px', padding: '0 12px', outline: 'none' }}>
+                    <SFSelect value={selectedProducto} onChange={(e) => setSelectedProducto(e.target.value)}>
                       <option value="all">Todos los productos</option>
                       {productos.map((p) => <option key={p} value={p}>{p}</option>)}
-                    </select>
+                    </SFSelect>
                   )}
                 </div>
               )}
@@ -659,7 +665,7 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
               ) : (
                 <div className="flex items-center gap-2"><Minus className="w-5 h-5" style={{ color: 'var(--sf-t5)' }} /><p style={{ fontFamily: "'DM Mono', monospace", fontSize: '28px', fontWeight: 500, color: 'var(--sf-t5)' }}>—</p></div>
               )}
-              <p style={{ fontSize: '12px', color: 'var(--sf-t5)', marginTop: '4px' }}>{useVentaNeta ? formatCurrency(ytdStats.ytdPrev, configuracion.moneda) : formatUnits(ytdStats.ytdPrev)} año ant.</p>
+              <p style={{ fontSize: '12px', color: 'var(--sf-t5)', marginTop: '4px' }}>{useVentaNeta ? formatCurrency(ytdStats.ytdPrev, configuracion.moneda) : formatUnits(ytdStats.ytdPrev)} mismo período {selectedYear - 1}</p>
             </div>
             <div style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderTop: '3px solid var(--sf-border)', borderRadius: '12px', padding: '20px' }}>
               <p style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--sf-t5)', marginBottom: '4px' }}>Mejor Mes</p>

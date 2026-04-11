@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { X } from 'lucide-react'
 
 interface Badge {
@@ -13,6 +14,7 @@ interface AnalysisDrawerProps {
   subtitle?: string
   badges?: Badge[]
   analysisText: string | null
+  analysisContent?: ReactNode
   onDeepen?: () => void
   deepenLabel?: string
 }
@@ -39,6 +41,7 @@ export default function AnalysisDrawer({
   subtitle,
   badges = [],
   analysisText,
+  analysisContent,
   onDeepen,
   deepenLabel = '+ Profundizar en Chat IA',
 }: AnalysisDrawerProps) {
@@ -63,7 +66,7 @@ export default function AnalysisDrawer({
           transform: isOpen ? 'translateX(0)' : 'translateX(100%)',
         }}
       >
-        {isOpen && analysisText && (
+        {isOpen && (analysisText || analysisContent) && (
           <>
             {/* Header */}
             <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid var(--sf-border)' }}>
@@ -98,12 +101,16 @@ export default function AnalysisDrawer({
             <div className="flex-1 overflow-y-auto px-5 py-4">
               <div className="flex items-center gap-2 mb-3">
                 <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--sf-green)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  ✦ Análisis IA
+                  ✦ {analysisContent ? 'Análisis' : 'Análisis IA'}
                 </span>
               </div>
-              <div style={{ fontSize: 13, lineHeight: 1.7, whiteSpace: 'pre-line' }}>
-                {analysisText.split('\n').filter(Boolean).map(formatLine)}
-              </div>
+              {analysisContent ? (
+                <div>{analysisContent}</div>
+              ) : analysisText ? (
+                <div style={{ fontSize: 13, lineHeight: 1.7, whiteSpace: 'pre-line' }}>
+                  {analysisText.split('\n').filter(Boolean).map(formatLine)}
+                </div>
+              ) : null}
             </div>
 
             {/* Footer */}

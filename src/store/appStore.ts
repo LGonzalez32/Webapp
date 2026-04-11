@@ -1,6 +1,11 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type {
+  ClienteSummary,
+  ProductoSummary,
+  DepartamentoSummary,
+} from '../lib/analysis'
+import type {
   SaleRecord,
   MetaRecord,
   InventoryItem,
@@ -23,7 +28,7 @@ import type {
 
 const DEFAULT_CONFIG: Configuracion = {
   empresa: 'Mi Empresa',
-  moneda: 'USD',
+  moneda: '$',
   dias_dormido_threshold: 30,
   semanas_racha_threshold: 3,
   pct_concentracion_threshold: 50,
@@ -66,6 +71,16 @@ interface AppState {
   categoriaAnalysis:   CategoriaAnalysis[]
   canalAnalysis:       CanalAnalysis[]
   dataAvailability: DataAvailability
+
+  // Resúmenes agregados pre-computados (off-thread). NO se persisten.
+  clienteSummaries: ClienteSummary[]
+  productoSummaries: ProductoSummary[]
+  departamentoSummaries: DepartamentoSummary[]
+  mesesDisponibles: number[]
+  canalesDisponibles: string[]
+  monthlyTotals: Record<string, { uds: number; neta: number }>
+  monthlyTotalsSameDay: Record<string, { uds: number; neta: number }>
+  fechaRefISO: string | null
 
   // Contexto temporal para chat (no persistido)
   chatContextVendedor: VendorAnalysis | null
@@ -110,6 +125,14 @@ interface AppState {
   setCategoriaAnalysis:     (data: CategoriaAnalysis[]) => void
   setCanalAnalysis:         (data: CanalAnalysis[]) => void
   setDataAvailability: (data: DataAvailability) => void
+  setClienteSummaries:      (data: ClienteSummary[]) => void
+  setProductoSummaries:     (data: ProductoSummary[]) => void
+  setDepartamentoSummaries: (data: DepartamentoSummary[]) => void
+  setMesesDisponibles:      (data: number[]) => void
+  setCanalesDisponibles:    (data: string[]) => void
+  setMonthlyTotals:         (data: Record<string, { uds: number; neta: number }>) => void
+  setMonthlyTotalsSameDay:  (data: Record<string, { uds: number; neta: number }>) => void
+  setFechaRefISO:           (data: string | null) => void
 
   // Actions — control
   setIsProcessed: (val: boolean) => void
@@ -153,6 +176,14 @@ export const useAppStore = create<AppState>()(
       categoriaAnalysis:   [],
       canalAnalysis:       [],
       dataAvailability: DEFAULT_AVAILABILITY,
+      clienteSummaries: [],
+      productoSummaries: [],
+      departamentoSummaries: [],
+      mesesDisponibles: [],
+      canalesDisponibles: [],
+      monthlyTotals: {},
+      monthlyTotalsSameDay: {},
+      fechaRefISO: null,
       chatContextVendedor: null,
       chatContextCliente: null,
       chatMessages: [],
@@ -189,6 +220,14 @@ export const useAppStore = create<AppState>()(
       setCategoriaAnalysis:     (categoriaAnalysis)     => set({ categoriaAnalysis }),
       setCanalAnalysis:         (canalAnalysis)         => set({ canalAnalysis }),
       setDataAvailability: (dataAvailability) => set({ dataAvailability }),
+      setClienteSummaries:      (clienteSummaries)      => set({ clienteSummaries }),
+      setProductoSummaries:     (productoSummaries)     => set({ productoSummaries }),
+      setDepartamentoSummaries: (departamentoSummaries) => set({ departamentoSummaries }),
+      setMesesDisponibles:      (mesesDisponibles)      => set({ mesesDisponibles }),
+      setCanalesDisponibles:    (canalesDisponibles)    => set({ canalesDisponibles }),
+      setMonthlyTotals:         (monthlyTotals)         => set({ monthlyTotals }),
+      setMonthlyTotalsSameDay:  (monthlyTotalsSameDay)  => set({ monthlyTotalsSameDay }),
+      setFechaRefISO:           (fechaRefISO)           => set({ fechaRefISO }),
 
       setDataSource: (dataSource) => set({ dataSource }),
       setIsProcessed: (isProcessed) => set({ isProcessed }),
@@ -241,6 +280,14 @@ export const useAppStore = create<AppState>()(
           categoriaAnalysis:   [],
           canalAnalysis:       [],
           dataAvailability: DEFAULT_AVAILABILITY,
+          clienteSummaries: [],
+          productoSummaries: [],
+          departamentoSummaries: [],
+          mesesDisponibles: [],
+          canalesDisponibles: [],
+          monthlyTotals: {},
+          monthlyTotalsSameDay: {},
+          fechaRefISO: null,
           forecastData: null,
           forecastLoading: false,
           forecastChartLoading: false,
@@ -258,10 +305,12 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'salesflow-storage',
-      version: 8,
+      version: 9,
       migrate: (persistedState: any) => {
         // v8: remove deepseek_api_key from persisted config (now handled by backend proxy)
+        // v9: migrate moneda 'USD' → '$' for display consistency
         const { deepseek_api_key: _, ...cleanConfig } = persistedState?.configuracion ?? {}
+        if (cleanConfig.moneda === 'USD') cleanConfig.moneda = '$'
         return {
         selectedPeriod: persistedState?.selectedPeriod ?? {
           year: new Date().getFullYear(),

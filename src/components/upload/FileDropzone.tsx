@@ -1,5 +1,5 @@
 import { useState, useRef, DragEvent, ChangeEvent } from 'react';
-import { Upload, Loader2, CheckCircle2, XCircle, SkipForward } from 'lucide-react';
+import { Upload, CheckCircle2, XCircle, SkipForward } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { UploadStep } from '../../types';
 
@@ -8,9 +8,11 @@ interface FileDropzoneProps {
   onFileSelect: (file: File) => void;
   onSkip?: () => void;
   isProcessing?: boolean;
+  progressPercent?: number;
+  progressDetail?: string;
 }
 
-export default function FileDropzone({ step, onFileSelect, onSkip, isProcessing }: FileDropzoneProps) {
+export default function FileDropzone({ step, onFileSelect, onSkip, isProcessing, progressPercent = 0, progressDetail = '' }: FileDropzoneProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
 
@@ -62,9 +64,19 @@ export default function FileDropzone({ step, onFileSelect, onSkip, isProcessing 
             <p className="text-base font-semibold text-emerald-600">Suelta el archivo aquí</p>
           </div>
         ) : isProcessing ? (
-          <div className="text-center">
-            <Loader2 className="w-10 h-10 text-emerald-500 animate-spin mx-auto mb-3" />
-            <p className="text-sm font-semibold text-[var(--sf-t2)]">Procesando archivo...</p>
+          <div className="flex flex-col items-center gap-4 py-2">
+            <div className="w-full max-w-md">
+              <div className="h-3 rounded-full bg-[var(--sf-card)] border border-[var(--sf-border)] overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-emerald-500 transition-all duration-300 ease-out"
+                  style={{ width: `${Math.max(2, progressPercent)}%` }}
+                />
+              </div>
+            </div>
+            <p className="text-2xl font-bold text-[var(--sf-t1)] tabular-nums">{progressPercent}%</p>
+            <p className="text-sm text-[var(--sf-t3)] min-h-[1.25rem] text-center">
+              {progressDetail || 'Procesando archivo...'}
+            </p>
           </div>
         ) : isLoaded ? (
           <div className="flex items-center gap-4">

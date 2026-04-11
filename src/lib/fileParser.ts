@@ -346,7 +346,7 @@ async function readFileDataWithMeta(file: File): Promise<RawFileResult | ParseEr
   }
 }
 
-function detectMappedColumns(
+export function detectMappedColumns(
   mappedRows: Record<string, unknown>[],
   allTargetKeys: string[]
 ): string[] {
@@ -375,7 +375,7 @@ async function readFileData(file: File): Promise<Record<string, unknown>[]> {
 
 // ─── TRADUCCIÓN DE ERRORES ZOD ───────────────────────────────────────────────
 
-function zodErrorToSpanish(mapped: Record<string, unknown>, issues: z.ZodIssue[]): string {
+export function zodErrorToSpanish(mapped: Record<string, unknown>, issues: z.ZodIssue[]): string {
   const parts: string[] = []
   for (const issue of issues) {
     const field = issue.path[0] as string | undefined
@@ -692,6 +692,96 @@ export async function parseInventoryFile(file: File): Promise<ParseResult<Invent
 
 export async function parseRawFile(file: File): Promise<Record<string, unknown>[]> {
   return readFileData(file)
+}
+
+// ─── PARSERS EN WEB WORKER (no bloquean el hilo principal) ───────────────────
+// Usados por UploadPage para archivos grandes (300K-900K filas).
+// Reportan progreso granular vía onProgress.
+
+type ParseProgress = (percent: number, detail: string) => void
+
+function runParseWorker<T>(
+  type: 'sales' | 'metas' | 'inventory',
+  file: File,
+  onProgress: ParseProgress,
+): Promise<ParseResult<T>> {
+  return new Promise(async (resolve) => {
+    onProgress(0, 'Leyendo archivo...')
+    let buffer: ArrayBuffer
+    try {
+      buffer = await file.arrayBuffer()
+    } catch (err) {
+      resolve({ success: false, error: { code: 'UNKNOWN', message: `No se pudo leer el archivo: ${String((err as Error)?.message ?? err)}` } })
+      return
+    }
+
+    const worker = new Worker(
+      new URL('./fileParseWorker.ts', import.meta.url),
+      { type: 'module' },
+    )
+
+    let settled = false
+    const finish = (r: ParseResult<T>) => {
+      if (settled) return
+      settled = true
+      worker.terminate()
+      resolve(r)
+    }
+
+    worker.onmessage = (event) => {
+      const msg = event.data as
+        | { type: 'progress'; percent: number; detail: string }
+        | { type: 'result'; success: boolean; data?: unknown[]; columns?: string[]; sheetName?: string; discardedRows?: DiscardedRow[]; error?: ParseError; tipoMeta?: string }
+      if (msg.type === 'progress') {
+        onProgress(msg.percent, msg.detail)
+        return
+      }
+      if (msg.type === 'result') {
+        if (msg.success) {
+          finish({
+            success: true,
+            data: msg.data as T[],
+            columns: msg.columns,
+            sheetName: msg.sheetName,
+            discardedRows: msg.discardedRows,
+          })
+        } else {
+          finish({ success: false, error: msg.error as ParseError })
+        }
+      }
+    }
+
+    worker.onerror = (err) => {
+      finish({
+        success: false,
+        error: { code: 'UNKNOWN', message: `Error en el Worker: ${err.message ?? 'desconocido'}` },
+      })
+    }
+
+    // Transferir el buffer (zero-copy, no structured clone)
+    worker.postMessage({ type, buffer, fileName: file.name }, [buffer])
+  })
+}
+
+export function parseSalesFileInWorker(
+  file: File,
+  onProgress: ParseProgress,
+): Promise<ParseResult<SaleRecord>> {
+  return runParseWorker<SaleRecord>('sales', file, onProgress)
+}
+
+export function parseMetasFileInWorker(
+  file: File,
+  onProgress: ParseProgress,
+): Promise<ParseResult<MetaRecord>> {
+  return runParseWorker<MetaRecord>('metas', file, onProgress)
+}
+
+export function parseInventoryFileInWorker(
+  file: File,
+  onProgress: ParseProgress,
+): Promise<ParseResult<InventoryItem>> {
+  return runParseWorker<InventoryItem>('inventory', file, onProgress)
 }
 
 // ─── DETECTAR DISPONIBILIDAD DE DATOS ────────────────────────────────────────

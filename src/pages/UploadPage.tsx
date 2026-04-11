@@ -5,7 +5,7 @@ import * as XLSX from 'xlsx'
 import { useAppStore } from '../store/appStore'
 import { useOrgStore } from '../store/orgStore'
 import { getDemoData, DEMO_EMPRESA } from '../lib/demoData'
-import { parseSalesFile, parseMetasFile, parseInventoryFile } from '../lib/fileParser'
+import { parseSalesFileInWorker, parseMetasFileInWorker, parseInventoryFileInWorker } from '../lib/fileParser'
 import { uploadOrgFile, getOrgStorageFiles, deleteOrgFiles } from '../lib/orgService'
 import { saveDatasets, clearDatasets } from '../lib/dataCache'
 import LoadingOverlay from '../components/ui/LoadingOverlay'
@@ -176,6 +176,8 @@ export default function UploadPage() {
   const [steps, setSteps] = useState<UploadStep[]>(INITIAL_STEPS)
   const [currentStep, setCurrentStep] = useState(0)
   const [processingStep, setProcessingStep] = useState<number | null>(null)
+  const [parseProgress, setParseProgress] = useState(0)
+  const [parseDetail, setParseDetail] = useState('')
   const [loading, setLoading] = useState<{ title: string; subtitle: string; progress: number } | null>(null)
   const [detectedCols, setDetectedCols] = useState<Record<string, string[]>>({})
   const [showExample, setShowExample] = useState(false)
@@ -207,24 +209,31 @@ export default function UploadPage() {
 
   const handleFileSelect = async (idx: number, file: File) => {
     setProcessingStep(idx)
+    setParseProgress(0)
+    setParseDetail('Iniciando...')
     updateStep(idx, { file, status: 'pending', parsedData: undefined, parseError: undefined })
+
+    const onProgress = (percent: number, detail: string) => {
+      setParseProgress(percent)
+      setParseDetail(detail)
+    }
 
     const stepId = steps[idx].id
     try {
       if (stepId === 'ventas') {
-        const r = await parseSalesFile(file)
+        const r = await parseSalesFileInWorker(file, onProgress)
         if (parseErr(r)) { updateStep(idx, { status: 'error', parseError: r.error }); return }
         setDetectedCols(prev => ({ ...prev, [stepId]: r.columns }))
         if (r.discardedRows?.length) setDiscardedRowsMap(prev => ({ ...prev, [stepId]: r.discardedRows! }))
         updateStep(idx, { parsedData: r.data, status: 'loaded', parseError: undefined })
       } else if (stepId === 'metas') {
-        const r = await parseMetasFile(file)
+        const r = await parseMetasFileInWorker(file, onProgress)
         if (parseErr(r)) { updateStep(idx, { status: 'error', parseError: r.error }); return }
         setDetectedCols(prev => ({ ...prev, [stepId]: r.columns }))
         if (r.discardedRows?.length) setDiscardedRowsMap(prev => ({ ...prev, [stepId]: r.discardedRows! }))
         updateStep(idx, { parsedData: r.data, status: 'loaded', parseError: undefined })
       } else {
-        const r = await parseInventoryFile(file)
+        const r = await parseInventoryFileInWorker(file, onProgress)
         if (parseErr(r)) { updateStep(idx, { status: 'error', parseError: r.error }); return }
         setDetectedCols(prev => ({ ...prev, [stepId]: r.columns }))
         if (r.discardedRows?.length) setDiscardedRowsMap(prev => ({ ...prev, [stepId]: r.discardedRows! }))
@@ -237,6 +246,8 @@ export default function UploadPage() {
       })
     } finally {
       setProcessingStep(null)
+      setParseProgress(0)
+      setParseDetail('')
     }
   }
 
@@ -745,6 +756,8 @@ export default function UploadPage() {
           onFileSelect={(file) => handleFileSelect(currentStep, file)}
           onSkip={!step.required ? () => handleSkip(currentStep) : undefined}
           isProcessing={processingStep === currentStep}
+          progressPercent={processingStep === currentStep ? parseProgress : 0}
+          progressDetail={processingStep === currentStep ? parseDetail : ''}
         />
 
         {/* Filas descartadas */}

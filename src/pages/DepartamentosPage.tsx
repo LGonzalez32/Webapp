@@ -1,9 +1,10 @@
-import { useState, useMemo, useCallback, useRef, type CSSProperties } from 'react'
+import React, { useState, useMemo, useCallback, useRef, type CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useDemoPath } from '../lib/useDemoPath'
 import { useAppStore } from '../store/appStore'
-import { callAI } from '../lib/chatService'
+// callAI removed — analysis is now computed locally
 import { DEPTS } from '../lib/deptPaths'
+import { SFSelect } from '../components/ui/SFSelect'
 
 function norm(s: string) {
   return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
@@ -111,6 +112,12 @@ export default function DepartamentosPage() {
   const { year, month } = useAppStore(s => s.selectedPeriod)
   const configuracion = useAppStore(s => s.configuracion)
   const dataAvailability = useAppStore(s => s.dataAvailability)
+  const clientesDormidos = useAppStore(s => s.clientesDormidos)
+  const vendorAnalysis = useAppStore(s => s.vendorAnalysis)
+  const categoriaAnalysis = useAppStore(s => s.categoriaAnalysis)
+  const departamentoSummaries = useAppStore(s => s.departamentoSummaries)
+  const mesesDisponibles = useAppStore(s => s.mesesDisponibles)
+  const canalesDisponibles = useAppStore(s => s.canalesDisponibles)
 
   const [hovered, setHovered] = useState<string | null>(null)
   const [filterMes, setFilterMes] = useState<number | null>(null)
@@ -127,40 +134,91 @@ export default function DepartamentosPage() {
     varPct: number
     loading: boolean
     text: string | null
+    content?: React.ReactNode
   } | null>(null)
   const aiPanelRef = useRef<HTMLDivElement>(null)
 
   // ── YTD acumulado desde enero hasta mes seleccionado ─────────────────────────
+  // Cuando no hay filtros activos, derivamos del summary pre-computado off-thread.
+  // Cuando se aplica filterMes o filterCanal, hacemos un single pass sobre sales
+  // (acción explícita del usuario) — el caso por defecto es instantáneo.
   const deptData = useMemo((): Record<string, DeptData> => {
+    const noFilters = filterMes === null && !filterCanal
+
+    // ── Caso default: derivar de departamentoSummaries pre-computado ──
+    if (noFilters) {
+      if (!departamentoSummaries.length) return {}
+      const res: Record<string, DeptData> = {}
+      for (const s of departamentoSummaries) {
+        const dept = matchDept(s.nombre)
+        if (!dept) continue
+        const a = s.udsCur, b = s.udsPrev
+        const v = b > 0 ? Math.round(((a - b) / b) * 100) : null
+        // Si dept ya existe (varios nombres mapean al mismo), agregar
+        if (res[dept]) {
+          res[dept].ytdActual += a
+          res[dept].ytdAnterior += b
+          res[dept].ytdActualNeto += s.ventaCur
+          res[dept].ytdAnteriorNeto += s.ventaPrev
+          const va = res[dept].ytdActual, vb = res[dept].ytdAnterior
+          const newV = vb > 0 ? Math.round(((va - vb) / vb) * 100) : null
+          res[dept].variacion_pct = newV
+          res[dept].status = va === 0 ? 'sin_datos' : newV === null ? 'sin_base' : newV >= 0 ? 'arriba' : 'abajo'
+        } else {
+          res[dept] = {
+            ytdActual: a,
+            ytdAnterior: b,
+            ytdActualNeto: s.ventaCur,
+            ytdAnteriorNeto: s.ventaPrev,
+            variacion_pct: v,
+            status: a === 0 ? 'sin_datos' : v === null ? 'sin_base' : v >= 0 ? 'arriba' : 'abajo',
+          }
+        }
+      }
+      return res
+    }
+
+    // ── Caso filtrado: single pass sobre sales (acción explícita del usuario) ──
     if (!sales.length) return {}
     const ytdActual: Record<string, number> = {}
     const ytdAnterior: Record<string, number> = {}
     const ytdActualNeto: Record<string, number> = {}
     const ytdAnteriorNeto: Record<string, number> = {}
 
+    let maxSaleDate = new Date(0)
+    for (const s of sales) {
+      const d = s.fecha instanceof Date ? s.fecha : new Date(s.fecha)
+      if (d > maxSaleDate) maxSaleDate = d
+    }
+    const isCurrentMonth = year === maxSaleDate.getFullYear() && month === maxSaleDate.getMonth()
+    const maxDay = maxSaleDate.getDate()
+    const isFilterMesCurrent = filterMes !== null && year === maxSaleDate.getFullYear() && filterMes === maxSaleDate.getMonth()
+    const ytdTopMonth = month
+    const isYtdTopPartial = isCurrentMonth
+
     for (const s of sales) {
       if (!s.departamento) continue
       const dept = matchDept(s.departamento)
       if (!dept) continue
-      const d = new Date(s.fecha)
-      const y = d.getFullYear(), m = d.getMonth()
+      const d = s.fecha instanceof Date ? s.fecha : new Date(s.fecha)
+      const y = d.getFullYear(), m = d.getMonth(), day = d.getDate()
       if (filterCanal && s.canal !== filterCanal) continue
       if (filterMes !== null) {
         if (y === year && m === filterMes) {
-          ytdActual[dept]      = (ytdActual[dept]      ?? 0) + s.unidades
-          ytdActualNeto[dept]  = (ytdActualNeto[dept]  ?? 0) + (s.venta_neta ?? 0)
+          ytdActual[dept] = (ytdActual[dept] ?? 0) + s.unidades
+          ytdActualNeto[dept] = (ytdActualNeto[dept] ?? 0) + (s.venta_neta ?? 0)
         }
-        if (y === year - 1 && m === filterMes) {
-          ytdAnterior[dept]     = (ytdAnterior[dept]     ?? 0) + s.unidades
+        if (y === year - 1 && m === filterMes && (!isFilterMesCurrent || day <= maxDay)) {
+          ytdAnterior[dept] = (ytdAnterior[dept] ?? 0) + s.unidades
           ytdAnteriorNeto[dept] = (ytdAnteriorNeto[dept] ?? 0) + (s.venta_neta ?? 0)
         }
       } else {
-        if (y === year && m <= month) {
-          ytdActual[dept]      = (ytdActual[dept]      ?? 0) + s.unidades
-          ytdActualNeto[dept]  = (ytdActualNeto[dept]  ?? 0) + (s.venta_neta ?? 0)
+        if (y === year && m <= ytdTopMonth) {
+          ytdActual[dept] = (ytdActual[dept] ?? 0) + s.unidades
+          ytdActualNeto[dept] = (ytdActualNeto[dept] ?? 0) + (s.venta_neta ?? 0)
         }
-        if (y === year - 1 && m <= month) {
-          ytdAnterior[dept]     = (ytdAnterior[dept]     ?? 0) + s.unidades
+        if (y === year - 1 && m <= ytdTopMonth && (!isYtdTopPartial || m < ytdTopMonth || day <= maxDay)) {
+          ytdAnterior[dept] = (ytdAnterior[dept] ?? 0) + s.unidades
           ytdAnteriorNeto[dept] = (ytdAnteriorNeto[dept] ?? 0) + (s.venta_neta ?? 0)
         }
       }
@@ -179,7 +237,7 @@ export default function DepartamentosPage() {
       }
     })
     return res
-  }, [sales, year, month, filterMes, filterCanal])
+  }, [departamentoSummaries, sales, year, month, filterMes, filterCanal])
 
   const sorted = useMemo(() =>
     (Object.entries(deptData) as [string, DeptData][])
@@ -194,13 +252,13 @@ export default function DepartamentosPage() {
   const totalAnteriorNeto = sorted.reduce((s, [, d]) => s + d.ytdAnteriorNeto, 0)
 
   const useUSD = metricaDept === 'usd' && dataAvailability.has_venta_neta
-  const fmtVal = (uds: number, neto: number) => useUSD ? `${configuracion.moneda} ${Math.round(neto).toLocaleString()}` : uds.toLocaleString()
+  const fmtVal = (uds: number, neto: number) => useUSD ? `${configuracion.moneda}${Math.round(neto).toLocaleString()}` : uds.toLocaleString()
 
   const sobreAnterior = sorted.filter(([, d]) => d.status === 'arriba').length
   const bajoAnterior = sorted.filter(([, d]) => d.status === 'abajo').length
   const maxV = sorted.length > 0 ? sorted[0].ytdActual : 1
 
-  const hasDeptData = sales.some(s => s.departamento)
+  const hasDeptData = departamentoSummaries.length > 0 || dataAvailability.has_departamento
   const hovData = hovered ? deptData[hovered] : null
 
   const onEnter = useCallback((k: string) => setHovered(k), [])
@@ -208,106 +266,48 @@ export default function DepartamentosPage() {
 
   const mesLabel = new Date(year, month).toLocaleDateString('es', { month: 'long' })
 
-  const mesesDisponibles = useMemo(() =>
-    [...new Set(sales.filter(s => {const d = new Date(s.fecha); return d.getFullYear() === year}).map(s => new Date(s.fecha).getMonth()))].sort((a, b) => a - b),
-  [sales, year])
-
-  const canalesDisponibles = useMemo(() =>
-    [...new Set(sales.filter(s => s.canal).map(s => s.canal!))].sort(),
-  [sales])
-
-  // ── Insight IA ───────────────────────────────────────────────────────────────
-  const generateInsight = useCallback(async (dept: string) => {
+  // ── Insight local — instantáneo ──────────────────────────────────────────────
+  const generateInsight = useCallback((dept: string) => {
     const data = deptData[dept]
     if (!data) return
-
     setInsightDept(dept)
-    setInsightText('')
-    setInsightLoading(true)
+    setInsightLoading(false)
 
-    // Vendedores con comparación YoY
+    const variacionStr = data.variacion_pct !== null ? `${data.variacion_pct > 0 ? '+' : ''}${data.variacion_pct.toFixed(1)}%` : 'sin referencia'
+    const lines: string[] = [`📊 RESUMEN: ${dept} ${data.variacion_pct != null && data.variacion_pct >= 0 ? 'creció' : 'cayó'} ${variacionStr} YoY (${data.ytdActual.toLocaleString()} vs ${data.ytdAnterior.toLocaleString()} uds)`]
+
+    // Top vendor insight (same-day-range para comparación justa)
+    const maxSD = sales.reduce((max, s) => { const dd = new Date(s.fecha); return dd > max ? dd : max }, new Date(0))
+    const isCurrMo = year === maxSD.getFullYear() && month === maxSD.getMonth()
+    const mxDay = maxSD.getDate()
     const vendorMap: Record<string, { curr: number; prev: number }> = {}
     sales.filter(s => s.departamento && matchDept(s.departamento) === dept).forEach(s => {
-      const vy = new Date(s.fecha).getFullYear()
-      const vm = new Date(s.fecha).getMonth()
+      const sd = new Date(s.fecha)
+      const vy = sd.getFullYear(), vm = sd.getMonth(), vday = sd.getDate()
       if (vm > month) return
-      const isCurr = vy === year
-      const isPrev = vy === year - 1
+      const isCurr = vy === year, isPrev = vy === year - 1
       if (!isCurr && !isPrev) return
+      // Para año anterior en el mes tope parcial, limitar al mismo día
+      if (isPrev && isCurrMo && vm === month && vday > mxDay) return
       if (!vendorMap[s.vendedor]) vendorMap[s.vendedor] = { curr: 0, prev: 0 }
       if (isCurr) vendorMap[s.vendedor].curr += s.unidades
       if (isPrev) vendorMap[s.vendedor].prev += s.unidades
     })
-    const topVendors = Object.entries(vendorMap)
-      .sort((a, b) => b[1].curr - a[1].curr)
-      .slice(0, 5)
-      .map(([nombre, v]) => {
-        const vp = v.prev > 0 ? ((v.curr - v.prev) / v.prev * 100).toFixed(1) : 'N/A'
-        return `- ${nombre}: ${v.curr.toLocaleString()} uds (${vp}%)`
-      }).join('\n')
-
-    // Canales con comparación YoY
-    const canalMap: Record<string, { curr: number; prev: number }> = {}
-    sales.filter(s => s.departamento && matchDept(s.departamento) === dept && s.canal).forEach(s => {
-      const vy = new Date(s.fecha).getFullYear()
-      const vm = new Date(s.fecha).getMonth()
-      if (vm > month) return
-      const isCurr = vy === year
-      const isPrev = vy === year - 1
-      if (!isCurr && !isPrev) return
-      if (!canalMap[s.canal!]) canalMap[s.canal!] = { curr: 0, prev: 0 }
-      if (isCurr) canalMap[s.canal!].curr += s.unidades
-      if (isPrev) canalMap[s.canal!].prev += s.unidades
-    })
-    const canalLines = Object.entries(canalMap)
-      .map(([canal, v]) => {
-        const vp = v.prev > 0 ? ((v.curr - v.prev) / v.prev * 100).toFixed(1) : 'N/A'
-        return `- ${canal}: ${v.curr.toLocaleString()} uds (${vp}%)`
-      }).join('\n')
-
-    const variacionStr = data.variacion_pct !== null
-      ? (data.variacion_pct > 0 ? '+' : '') + data.variacion_pct + '%'
-      : 'sin referencia'
-
-    const userPrompt =
-      `Departamento: ${dept}\n` +
-      `Ventas YTD ${year}: ${data.ytdActual.toLocaleString()} uds\n` +
-      `Ventas YTD ${year - 1}: ${data.ytdAnterior.toLocaleString()} uds\n` +
-      `Variación: ${variacionStr}\n\n` +
-      `Top vendedores:\n${topVendors || '- Sin datos'}\n\n` +
-      `Canales:\n${canalLines || '- Sin datos de canal'}`
-
-    const systemPrompt =
-      `Eres un analista comercial.\n` +
-      `Responde SIEMPRE en este formato exacto, sin introducción ni cierre:\n\n` +
-      `📊 RESUMEN: [Una oración de máximo 15 palabras con el hallazgo principal]\n\n` +
-      `🔺 CRECIMIENTO:\n- [Bullet con dato específico: canal, vendedor, o producto que creció y cuánto]\n- [Bullet 2 si aplica — máximo 2 bullets]\n\n` +
-      `🔻 CAÍDA:\n- [Bullet con dato específico: canal, vendedor, o producto que cayó y cuánto]\n- [Bullet 2 si aplica — máximo 2 bullets]\n\n` +
-      `💡 HALLAZGO: [Un dato concreto que encontraste en los números y que el usuario probablemente no ha visto — con números específicos]\n\n` +
-      `Reglas:\n` +
-      `- Máximo 120 palabras en total\n` +
-      `- Cada bullet debe tener un número concreto (%, unidades, o nombre)\n` +
-      `- Si una sección no aplica (ej: todo crece), omítela\n` +
-      `- La sección HALLAZGO debe ser una OBSERVACIÓN basada en los datos, no una pregunta ni una instrucción\n` +
-      `- Debe revelar algo no obvio: una concentración, una dependencia, una anomalía, un patrón\n` +
-      `- NUNCA hagas preguntas al usuario\n` +
-      `- NUNCA des instrucciones operativas (capacitar, implementar, diseñar, visitar, revisar)\n` +
-      `- Responde en español`
-
-    try {
-      const json = await callAI(
-        [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
-        { model: 'deepseek-chat', max_tokens: 300, temperature: 0.3 },
-      )
-      setInsightText(json.choices?.[0]?.message?.content ?? 'Sin respuesta')
-    } catch (err) {
-      const code = err instanceof Error ? err.message : ''
-      const msg = code === 'INVALID_KEY' ? 'API key no configurada. Ve a Configuración → Asistente IA.' : code === 'RATE_LIMIT' ? 'Límite de requests alcanzado. Intenta en unos segundos.' : 'No se pudo conectar con el asistente IA.'
-      setInsightText(msg)
-    } finally {
-      setInsightLoading(false)
+    const vendSorted = Object.entries(vendorMap).sort((a, b) => b[1].curr - a[1].curr)
+    const topV = vendSorted[0]
+    if (topV) {
+      const vp = topV[1].prev > 0 ? Math.round(((topV[1].curr - topV[1].prev) / topV[1].prev) * 100) : 0
+      lines.push(`🔺 CRECIMIENTO:\n- Top vendedor: ${topV[0]} con ${topV[1].curr.toLocaleString()} uds (${vp >= 0 ? '+' : ''}${vp}%)`)
     }
-  }, [deptData, sales, year, month, mesLabel])
+    const worstV = vendSorted.filter(([, v]) => v.prev > 0).sort((a, b) => ((a[1].curr - a[1].prev) / a[1].prev) - ((b[1].curr - b[1].prev) / b[1].prev))[0]
+    if (worstV && worstV[1].prev > 0) {
+      const wp = Math.round(((worstV[1].curr - worstV[1].prev) / worstV[1].prev) * 100)
+      if (wp < 0) lines.push(`🔻 CAÍDA:\n- ${worstV[0]} cayó ${Math.abs(wp)}% (${worstV[1].prev.toLocaleString()} → ${worstV[1].curr.toLocaleString()} uds)`)
+    }
+    const dormidosEnDepto = clientesDormidos.filter(d => sales.some(s => s.cliente === d.cliente && s.departamento && matchDept(s.departamento) === dept))
+    if (dormidosEnDepto.length > 0) lines.push(`💡 HALLAZGO: ${dormidosEnDepto.length} cliente${dormidosEnDepto.length > 1 ? 's' : ''} dormido${dormidosEnDepto.length > 1 ? 's' : ''} operaban en ${dept}: ${dormidosEnDepto.slice(0, 2).map(d => d.cliente).join(', ')}`)
+    setInsightText(lines.join('\n\n'))
+  }, [deptData, sales, year, month, clientesDormidos])
 
   // ── Click en mapa — solo selecciona departamento (sin IA) ────────────────
   const handleDeptoClick = useCallback((deptKey: string, data: DeptData) => {
@@ -316,100 +316,87 @@ export default function DepartamentosPage() {
   }, [])
 
   // ── Analizar con IA — llamado explícitamente desde botón ─────────────────
-  const handleDeptoAnalyze = useCallback(async (deptKey: string, data: DeptData) => {
-    if (!data || data.variacion_pct === null) {
-      setAiExplanation(null)
-      return
-    }
-
-    setAiExplanation({ depto: deptKey, varPct: data.variacion_pct, loading: true, text: null })
+  const handleDeptoAnalyze = useCallback((deptKey: string, data: DeptData) => {
+    if (!data || data.variacion_pct === null) { setAiExplanation(null); return }
     setTimeout(() => aiPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50)
 
-    const ventasDepto = sales.filter(v =>
-      v.departamento && matchDept(v.departamento) === deptKey
-    )
-
-    // Top vendors in this depto
+    const ventasDepto = sales.filter(v => v.departamento && matchDept(v.departamento) === deptKey)
     const vendorMap: Record<string, { curr: number; prev: number }> = {}
+    const canalMap: Record<string, { curr: number; prev: number }> = {}
     ventasDepto.forEach(v => {
-      const vy = new Date(v.fecha).getFullYear()
-      const vm = new Date(v.fecha).getMonth()
+      const vy = new Date(v.fecha).getFullYear(), vm = new Date(v.fecha).getMonth()
       if (vm > month) return
-      const isCurr = vy === year
-      const isPrev = vy === year - 1
+      const isCurr = vy === year, isPrev = vy === year - 1
       if (!isCurr && !isPrev) return
       if (!vendorMap[v.vendedor]) vendorMap[v.vendedor] = { curr: 0, prev: 0 }
       if (isCurr) vendorMap[v.vendedor].curr += v.unidades
       if (isPrev) vendorMap[v.vendedor].prev += v.unidades
+      if (v.canal) {
+        if (!canalMap[v.canal]) canalMap[v.canal] = { curr: 0, prev: 0 }
+        if (isCurr) canalMap[v.canal].curr += v.unidades
+        if (isPrev) canalMap[v.canal].prev += v.unidades
+      }
     })
-    const topVendors = Object.entries(vendorMap)
-      .sort((a, b) => b[1].curr - a[1].curr)
-      .slice(0, 5)
-      .map(([nombre, vals]) => ({
-        nombre,
-        curr: vals.curr,
-        prev: vals.prev,
-        varPct: vals.prev > 0 ? ((vals.curr - vals.prev) / vals.prev * 100).toFixed(1) : 'N/A',
-      }))
+    const topVend = Object.entries(vendorMap).sort((a, b) => b[1].curr - a[1].curr).slice(0, 5)
+      .map(([n, v]) => ({ nombre: n, curr: v.curr, prev: v.prev, varPct: v.prev > 0 ? Math.round(((v.curr - v.prev) / v.prev) * 100) : null, riesgo: vendorAnalysis.find(va => va.vendedor === n)?.riesgo ?? 'ok' }))
+    const canales = Object.entries(canalMap).map(([c, v]) => ({ canal: c, curr: v.curr, prev: v.prev, varPct: v.prev > 0 ? Math.round(((v.curr - v.prev) / v.prev) * 100) : null })).sort((a, b) => b.curr - a.curr)
 
-    // Canal breakdown
-    const canalMap: Record<string, { curr: number; prev: number }> = {}
-    ventasDepto.forEach(v => {
-      if (!v.canal) return
-      const vy = new Date(v.fecha).getFullYear()
-      const vm = new Date(v.fecha).getMonth()
-      if (vm > month) return
-      const isCurr = vy === year
-      const isPrev = vy === year - 1
-      if (!isCurr && !isPrev) return
-      if (!canalMap[v.canal]) canalMap[v.canal] = { curr: 0, prev: 0 }
-      if (isCurr) canalMap[v.canal].curr += v.unidades
-      if (isPrev) canalMap[v.canal].prev += v.unidades
-    })
+    // Dormant clients in this dept
+    const clientesDepto = [...new Set(ventasDepto.map(s => s.cliente).filter(Boolean))]
+    const dormidosEnDepto = clientesDormidos.filter(d => clientesDepto.includes(d.cliente)).slice(0, 3)
 
-    const canalLines = Object.entries(canalMap).map(([canal, vals]) => {
-      const vp = vals.prev > 0 ? ((vals.curr - vals.prev) / vals.prev * 100).toFixed(1) : 'N/A'
-      return `- ${canal}: ${vals.curr.toLocaleString()} uds (antes: ${vals.prev.toLocaleString()}, var: ${vp}%)`
-    }).join('\n')
+    const señales: string[] = []
+    const vendCriticos = topVend.filter(v => v.riesgo === 'critico' || v.riesgo === 'riesgo')
+    if (vendCriticos.length > 0) señales.push(`${vendCriticos.map(v => v.nombre).join(', ')} en estado ${vendCriticos[0].riesgo}`)
+    if (dormidosEnDepto.length > 0) señales.push(`${dormidosEnDepto.length} cliente${dormidosEnDepto.length > 1 ? 's' : ''} dormido${dormidosEnDepto.length > 1 ? 's' : ''} en este depto: ${dormidosEnDepto.map(d => d.cliente).join(', ')}`)
+    // Top client concentration
+    const cliDepto: Record<string, number> = {}
+    ventasDepto.filter(s => new Date(s.fecha).getFullYear() === year && s.cliente).forEach(s => { cliDepto[s.cliente!] = (cliDepto[s.cliente!] ?? 0) + s.unidades })
+    const totalDepto = Object.values(cliDepto).reduce((a, b) => a + b, 0)
+    const topCli = Object.entries(cliDepto).sort((a, b) => b[1] - a[1])[0]
+    if (topCli && totalDepto > 0 && (topCli[1] / totalDepto) > 0.25) señales.push(`${topCli[0]} concentra ${Math.round((topCli[1] / totalDepto) * 100)}% de las ventas del depto`)
 
-    const sysPrompt =
-      `Eres un analista comercial.\n` +
-      `Responde SIEMPRE en este formato exacto, sin introducción ni cierre:\n\n` +
-      `📊 RESUMEN: [Una oración de máximo 15 palabras con el hallazgo principal]\n\n` +
-      `🔺 CRECIMIENTO:\n- [Bullet con dato específico: canal, vendedor, o producto que creció y cuánto]\n- [Bullet 2 si aplica — máximo 2 bullets]\n\n` +
-      `🔻 CAÍDA:\n- [Bullet con dato específico: canal, vendedor, o producto que cayó y cuánto]\n- [Bullet 2 si aplica — máximo 2 bullets]\n\n` +
-      `💡 HALLAZGO: [Un dato concreto que encontraste en los números y que el usuario probablemente no ha visto — con números específicos]\n\n` +
-      `Reglas:\n` +
-      `- Máximo 120 palabras en total\n` +
-      `- Cada bullet debe tener un número concreto (%, unidades, o nombre)\n` +
-      `- Si una sección no aplica (ej: todo crece), omítela\n` +
-      `- La sección HALLAZGO debe ser una OBSERVACIÓN basada en los datos, no una pregunta ni una instrucción\n` +
-      `- Debe revelar algo no obvio: una concentración, una dependencia, una anomalía, un patrón\n` +
-      `- NUNCA hagas preguntas al usuario\n` +
-      `- NUNCA des instrucciones operativas (capacitar, implementar, diseñar, visitar, revisar)\n` +
-      `- Responde en español`
-
-    const userPrompt =
-      `Departamento: ${deptKey}\n` +
-      `Ventas YTD ${year}: ${data.ytdActual.toLocaleString()} uds\n` +
-      `Ventas YTD ${year - 1}: ${data.ytdAnterior.toLocaleString()} uds\n` +
-      `Variación: ${data.variacion_pct.toFixed(1)}%\n\n` +
-      `Vendedores:\n${topVendors.map(v => `- ${v.nombre}: ${v.curr.toLocaleString()} uds (antes: ${v.prev.toLocaleString()}, var: ${v.varPct}%)`).join('\n') || '- Sin datos'}\n\n` +
-      `Canales:\n${canalLines || '- Sin datos de canal'}`
-
-    try {
-      const json = await callAI(
-        [{ role: 'system', content: sysPrompt }, { role: 'user', content: userPrompt }],
-        { model: 'deepseek-chat', max_tokens: 300, temperature: 0.3 },
-      )
-      const text = json.choices?.[0]?.message?.content ?? 'No se pudo generar el análisis.'
-      setAiExplanation({ depto: deptKey, varPct: data.variacion_pct, loading: false, text })
-    } catch (err) {
-      const code = err instanceof Error ? err.message : ''
-      const msg = code === 'INVALID_KEY' ? 'API key no configurada. Ve a Configuración → Asistente IA.' : code === 'RATE_LIMIT' ? 'Límite de requests alcanzado. Intenta en unos segundos.' : 'No se pudo conectar con el asistente IA.'
-      setAiExplanation({ depto: deptKey, varPct: data.variacion_pct, loading: false, text: msg })
-    }
-  }, [sales, year, month])
+    const borderColor = data.variacion_pct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)'
+    const content = (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ padding: '10px 14px', borderLeft: `3px solid ${borderColor}`, background: data.variacion_pct >= 0 ? 'rgba(16,185,129,0.06)' : 'rgba(239,68,68,0.06)', borderRadius: '0 8px 8px 0', fontSize: 13, lineHeight: 1.6, color: 'var(--sf-t2)' }}>
+          <strong>{deptKey}</strong> {data.variacion_pct >= 0 ? 'creció' : 'cayó'} {Math.abs(data.variacion_pct).toFixed(1)}% YoY ({data.ytdActual.toLocaleString()} vs {data.ytdAnterior.toLocaleString()} uds).
+        </div>
+        {topVend.length > 0 && (
+          <div style={{ borderRadius: 8, border: '1px solid var(--sf-border)', overflow: 'hidden' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 70px 70px', padding: '6px 12px', background: 'var(--sf-inset)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', color: 'var(--sf-t5)' }}>
+              <span>Vendedor</span><span style={{ textAlign: 'right' }}>YTD</span><span style={{ textAlign: 'right' }}>Var%</span>
+            </div>
+            {topVend.map((v, i) => (
+              <div key={v.nombre} style={{ display: 'grid', gridTemplateColumns: '1fr 70px 70px', padding: '6px 12px', fontSize: 12, borderTop: i ? '1px solid var(--sf-border)' : undefined }}>
+                <span style={{ color: 'var(--sf-t1)' }}>{v.nombre}</span>
+                <span style={{ textAlign: 'right', color: 'var(--sf-t3)', fontFamily: "'DM Mono', monospace" }}>{v.curr.toLocaleString()}</span>
+                <span style={{ textAlign: 'right', fontWeight: 500, color: v.varPct != null ? (v.varPct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)') : 'var(--sf-t4)', fontFamily: "'DM Mono', monospace" }}>{v.varPct != null ? `${v.varPct > 0 ? '+' : ''}${v.varPct}%` : '—'}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {canales.length > 0 && (
+          <div style={{ borderRadius: 8, border: '1px solid var(--sf-border)', overflow: 'hidden' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 70px 70px', padding: '6px 12px', background: 'var(--sf-inset)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', color: 'var(--sf-t5)' }}>
+              <span>Canal</span><span style={{ textAlign: 'right' }}>YTD</span><span style={{ textAlign: 'right' }}>Var%</span>
+            </div>
+            {canales.map((c, i) => (
+              <div key={c.canal} style={{ display: 'grid', gridTemplateColumns: '1fr 70px 70px', padding: '6px 12px', fontSize: 12, borderTop: i ? '1px solid var(--sf-border)' : undefined }}>
+                <span style={{ color: 'var(--sf-t1)' }}>{c.canal}</span>
+                <span style={{ textAlign: 'right', color: 'var(--sf-t3)', fontFamily: "'DM Mono', monospace" }}>{c.curr.toLocaleString()}</span>
+                <span style={{ textAlign: 'right', fontWeight: 500, color: c.varPct != null ? (c.varPct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)') : 'var(--sf-t4)', fontFamily: "'DM Mono', monospace" }}>{c.varPct != null ? `${c.varPct > 0 ? '+' : ''}${c.varPct}%` : '—'}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {señales.length > 0 && señales.map((s, i) => (
+          <div key={i} style={{ padding: '8px 12px', background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: 6, fontSize: 12, color: 'var(--sf-t2)' }}>{s}</div>
+        ))}
+      </div>
+    )
+    setAiExplanation({ depto: deptKey, varPct: data.variacion_pct, loading: false, text: 'computed', content })
+  }, [sales, year, month, vendorAnalysis, clientesDormidos])
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto">
@@ -424,30 +411,26 @@ export default function DepartamentosPage() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {/* Filtro por mes */}
-          <select
+          <SFSelect
             value={filterMes ?? ''}
             onChange={e => setFilterMes(e.target.value === '' ? null : Number(e.target.value))}
-            className="focus:outline-none cursor-pointer"
-            style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderRadius: 8, color: 'var(--sf-t3)', fontSize: 12, padding: '5px 10px' }}
           >
             <option value="">YTD (acumulado)</option>
             {mesesDisponibles.map(m => (
               <option key={m} value={m}>{['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'][m]}</option>
             ))}
-          </select>
+          </SFSelect>
           {/* Filtro por canal */}
           {canalesDisponibles.length > 0 && (
-            <select
+            <SFSelect
               value={filterCanal ?? ''}
               onChange={e => setFilterCanal(e.target.value === '' ? null : e.target.value)}
-              className="focus:outline-none cursor-pointer"
-              style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderRadius: 8, color: 'var(--sf-t3)', fontSize: 12, padding: '5px 10px' }}
             >
               <option value="">Todos los canales</option>
               {canalesDisponibles.map(c => (
                 <option key={c} value={c}>{c}</option>
               ))}
-            </select>
+            </SFSelect>
           )}
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
@@ -504,7 +487,7 @@ export default function DepartamentosPage() {
                     Analizando datos del departamento...
                   </div>
                 ) : (
-                  <AiStructuredText text={aiExplanation.text ?? ''} />
+                  aiExplanation.content ? <div>{aiExplanation.content}</div> : <AiStructuredText text={aiExplanation.text ?? ''} />
                 )}
               </div>
               <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>

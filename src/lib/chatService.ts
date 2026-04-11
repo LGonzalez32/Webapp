@@ -180,13 +180,50 @@ const MAX_PROMPT_CHARS = 320_000
 
 function buildSystemPrompt(ctx: ChatContext): string {
   const {
-    configuracion, selectedPeriod, vendorAnalysis, teamStats, insights,
-    clientesDormidos, concentracionRiesgo, categoriasInventario,
-    dataAvailability, sales,
+    configuracion: configuracionRaw, selectedPeriod,
+    vendorAnalysis: vendorAnalysisRaw,
+    teamStats,
+    insights: insightsRaw,
+    clientesDormidos: clientesDormidosRaw,
+    concentracionRiesgo: concentracionRiesgoRaw,
+    categoriasInventario: categoriasInventarioRaw,
+    dataAvailability: dataAvailabilityRaw,
+    sales: salesRaw,
   } = ctx
 
+  // Defensive defaults — el chat puede llamarse antes de que el Worker termine
+  // o con datos parciales (justo después de un refresh con auto-load).
+  const safeDataAvailability = dataAvailabilityRaw ?? {
+    has_producto: false,
+    has_cliente: false,
+    has_venta_neta: false,
+    has_categoria: false,
+    has_canal: false,
+    has_supervisor: false,
+    has_departamento: false,
+    has_metas: false,
+    has_inventario: false,
+  }
+  const dataAvailability = safeDataAvailability
+  const sales = salesRaw ?? []
+  const vendorAnalysis = vendorAnalysisRaw ?? []
+  const insights = insightsRaw ?? []
+  const clientesDormidos = clientesDormidosRaw ?? []
+  const concentracionRiesgo = concentracionRiesgoRaw ?? []
+  const categoriasInventario = categoriasInventarioRaw ?? []
+  const configuracion = configuracionRaw ?? {
+    empresa: 'Mi Empresa',
+    moneda: '$',
+    giro: 'Distribución',
+    giro_custom: '',
+    pais: 'MX'
+  }
+
   const fechaReferencia = sales.length > 0
-    ? new Date(Math.max(...sales.map(s => toDate(s.fecha).getTime())))
+    ? new Date(sales.reduce((max, s) => {
+        const t = toDate(s.fecha).getTime()
+        return t > max ? t : max
+      }, 0))
     : new Date()
 
   const mes = MONTHS_ES[selectedPeriod.month] ?? String(selectedPeriod.month + 1)
@@ -664,7 +701,7 @@ export function parseChartBlock(content: string): {
 
 // ─── Backend AI proxy ─────────────────────────────────────────────────────────
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? 'https://webapp-0yx8.onrender.com'
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'https://webapp-0yx8.onrender.com'
 
 export async function callAI(
   messages: { role: string; content: string }[],

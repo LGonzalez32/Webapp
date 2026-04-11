@@ -285,7 +285,7 @@ export default function ClientePanel({
           <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--sf-border)' }}>
             <div className="grid grid-cols-2 gap-2">
               {hasVenta && metrics.ticketPromedio !== null && metrics.ticketPromedio > 0 && (
-                <KpiCard label="TICKET PROMEDIO" value={`${moneda} ${metrics.ticketPromedio.toFixed(0)}`} />
+                <KpiCard label="TICKET PROMEDIO" value={`${moneda}${metrics.ticketPromedio.toFixed(0)}`} />
               )}
               {metrics.canalPrincipal && (
                 <KpiCard label="CANAL" value={metrics.canalPrincipal} />
@@ -300,14 +300,14 @@ export default function ClientePanel({
                 danger={metrics.diasInactivo > (configuracion.dias_dormido_threshold ?? 60)}
               />
               {hasVenta && (
-                <KpiCard label="VALOR HISTÓRICO" value={`${moneda} ${fmtK(metrics.valorHistorico)}`} />
+                <KpiCard label="VALOR HISTÓRICO" value={`${moneda}${fmtK(metrics.valorHistorico)}`} />
               )}
               <KpiCard label="COMPRAS TOTAL" value={metrics.comprasTotal.toLocaleString()} unit="uds" />
               {metrics.ytdUnidadesPrev > 0 && (
                 <KpiCard label={`YTD ${selectedPeriod.year - 1}`} value={metrics.ytdUnidadesPrev.toLocaleString()} unit="uds" muted />
               )}
               {hasVenta && metrics.ytdNeto > 0 && (
-                <KpiCard label={`NETO YTD ${selectedPeriod.year}`} value={`${moneda} ${fmtK(metrics.ytdNeto)}`} />
+                <KpiCard label={`NETO YTD ${selectedPeriod.year}`} value={`${moneda}${fmtK(metrics.ytdNeto)}`} />
               )}
             </div>
           </div>
@@ -408,7 +408,7 @@ export default function ClientePanel({
                           {p.unidades.toLocaleString()} uds
                           {hasVenta && p.venta > 0 && (
                             <span className="ml-1.5 text-[11px]" style={{ color: 'var(--sf-t4)' }}>
-                              ({moneda} {fmtK(p.venta)})
+                              ({moneda}{fmtK(p.venta)})
                             </span>
                           )}
                         </span>
@@ -473,7 +473,7 @@ export default function ClientePanel({
                 `Analizar cliente: ${clienteName}`,
                 `Vendedor: ${metrics.vendedorPrincipal}`,
                 `Compras ${mesLabel}: ${metrics.ventasPeriodo} uds`,
-                hasVenta ? `Venta neta: ${moneda} ${metrics.ventaNetaPeriodo.toLocaleString()}` : '',
+                hasVenta ? `Venta neta: ${moneda}${metrics.ventaNetaPeriodo.toLocaleString()}` : '',
                 `YTD ${selectedPeriod.year}: ${metrics.ytdUnidades.toLocaleString()} uds`,
                 metrics.ytdVarPct !== null ? `Var YTD: ${metrics.ytdVarPct.toFixed(1)}%` : '',
                 dormido ? `Estado: DORMIDO (${dormido.dias_sin_actividad} días, recovery ${dormido.recovery_score}/100)` : `Estado: ${status}`,

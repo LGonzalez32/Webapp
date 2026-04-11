@@ -259,17 +259,22 @@ export function computePulsoCards(input: PulsoInput): { visible: PulsoCard[]; to
     const topProds = [...prodVol.entries()]
       .sort((a, b) => b[1].total6m - a[1].total6m)
       .slice(0, 5)
+    // Adjust for partial month
+    const pDiasTotales = new Date(year, month + 1, 0).getDate()
+    const pDiasTransc = estadoMes.diasTranscurridos || pDiasTotales
+    const dayRatio = pDiasTransc / pDiasTotales
     for (const [prod, vol] of topProds) {
       const avg3m = vol.prev3m / 3
-      if (avg3m > 0 && vol.thisMonth < avg3m * 0.6) {
-        const dropPct = Math.round(((vol.thisMonth - avg3m) / avg3m) * 100)
+      const avg3mAdj = avg3m * dayRatio  // prorate to current day range
+      if (avg3mAdj > 0 && vol.thisMonth < avg3mAdj * 0.6) {
+        const dropPct = Math.round(((vol.thisMonth - avg3mAdj) / avg3mAdj) * 100)
         candidates.push({
           type: 'producto_declive',
           priority: 78,
           title: `${prod} cayó ${Math.abs(dropPct)}%`,
           metric: `${Math.abs(dropPct)}%`,
-          metricLabel: 'vs promedio 3M',
-          detail: `${fmtK(vol.thisMonth)} uds este mes vs ${fmtK(avg3m)} promedio`,
+          metricLabel: `vs PM3 (día ${pDiasTransc}/${pDiasTotales})`,
+          detail: `${fmtK(vol.thisMonth)} uds (día ${pDiasTransc}) vs ${fmtK(Math.round(avg3mAdj))} esperado`,
           severity: 'critical',
           tag: null,
           action: {
@@ -278,7 +283,7 @@ export function computePulsoCards(input: PulsoInput): { visible: PulsoCard[]; to
               panelType: 'producto_declive', producto: prod,
               stock: categoriasInventario.find(c => c.producto === prod)?.unidades_actuales,
               diasInventario: categoriasInventario.find(c => c.producto === prod)?.dias_inventario,
-              promedioMensual: Math.round(avg3m),
+              promedioMensual: Math.round(avg3mAdj),
               caida_pct: Math.abs(dropPct), ventas_mes_actual: vol.thisMonth,
               categoria: categoriasInventario.find(c => c.producto === prod)?.categoria,
               diasTranscurridos: estadoMes.diasTranscurridos, diasTotales: estadoMes.diasTotales,

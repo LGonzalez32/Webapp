@@ -3,11 +3,13 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useDemoPath } from '../lib/useDemoPath'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
-import { Users, ChevronUp, ChevronDown, Search } from 'lucide-react'
+import { Users, ChevronUp, ChevronDown } from 'lucide-react'
 import type { ClienteDormido } from '../types'
-import { callAI } from '../lib/chatService'
+// callAI removed — analysis is now computed locally
 import AnalysisDrawer from '../components/ui/AnalysisDrawer'
 import ClientePanel from '../components/cliente/ClientePanel'
+import { SFSelect } from '../components/ui/SFSelect'
+import { SFSearch } from '../components/ui/SFSearch'
 
 
 function formatDays(d: number): string {
@@ -47,6 +49,10 @@ export default function ClientesPage() {
     configuracion,
     isProcessed,
     insights,
+    categoriasInventario,
+    vendorAnalysis,
+    categoriaAnalysis,
+    clienteSummaries,
   } = useAppStore()
 
   const [highlightActive, setHighlightActive] = useState<string | null>(highlightCliente)
@@ -57,6 +63,8 @@ export default function ClientesPage() {
     }
   }, [highlightActive])
 
+  const PAGE_SIZE = 50
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
   const [sortKey, setSortKey] = useState<SortKey>('prioridad')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [tab, setTab] = useState<'dormidos' | 'pareto' | 'riesgo'>('dormidos')
@@ -64,193 +72,305 @@ export default function ClientesPage() {
   const [searchCliente, setSearchCliente] = useState('')
   const metrica: 'unidades' | 'dolares' = (configuracion.metricaGlobal ?? 'usd') === 'usd' ? 'dolares' : 'unidades'
   const [expandedClienteId, setExpandedClienteId] = useState<string | null>(null)
-  const [analysisMap, setAnalysisMap] = useState<Record<string, { loading: boolean; text: string | null }>>({})
+  const [analysisMap, setAnalysisMap] = useState<Record<string, { loading: boolean; text: string | null; content?: React.ReactNode }>>({})
 
   const [expandedParetoId, setExpandedParetoId] = useState<string | null>(null)
-  const [paretoAnalysisMap, setParetoAnalysisMap] = useState<Record<string, { loading: boolean; text: string | null }>>({})
+  const [paretoAnalysisMap, setParetoAnalysisMap] = useState<Record<string, { loading: boolean; text: string | null; content?: React.ReactNode }>>({})
   const [panelCliente, setPanelCliente] = useState<string | null>(null)
 
-  const handleAnalyzeTopCliente = useCallback(async (c: ParetoCliente) => {
+  const handleAnalyzeTopCliente = useCallback((c: ParetoCliente) => {
     const id = `pareto-${c.nombre}`
-    setParetoAnalysisMap(prev => ({ ...prev, [id]: { loading: true, text: null } }))
     setExpandedParetoId(id)
 
-    const systemPrompt =
-      `Eres un analista comercial.\n` +
-      `Responde SIEMPRE en este formato exacto, sin introducción ni cierre:\n\n` +
-      `📊 RESUMEN: [Una oración de máximo 15 palabras con el hallazgo principal]\n\n` +
-      `🔺 CRECIMIENTO:\n- [Dato positivo sobre este cliente — máximo 2 bullets]\n\n` +
-      `🔻 RIESGO:\n- [Dato sobre concentración, dependencia o caída potencial — máximo 2 bullets]\n\n` +
-      `💡 HALLAZGO: [Un dato concreto no obvio — con números específicos. NUNCA preguntas ni instrucciones operativas.]\n\n` +
-      `Reglas:\n` +
-      `- Máximo 120 palabras en total\n` +
-      `- Cada bullet debe tener un número concreto (%, unidades, días, USD)\n` +
-      `- Si una sección no aplica, omítela\n` +
-      `- NUNCA hagas preguntas al usuario\n` +
-      `- NUNCA des instrucciones operativas\n` +
-      `- Responde en español`
+    // Cross-table local analysis
+    const { year, month } = selectedPeriod
+    const clienteSales = sales.filter(s => s.cliente === c.nombre)
+    const periodSales = clienteSales.filter(s => { const d = new Date(s.fecha); return d.getFullYear() === year && d.getMonth() <= month })
 
-    const userPrompt =
-      `Cliente top: ${c.nombre}\n` +
-      `Vendedor: ${c.vendedor}\n` +
-      `Unidades YTD: ${c.totalUnidades.toLocaleString()}\n` +
-      (dataAvailability.has_venta_neta ? `Venta neta YTD: ${configuracion.moneda} ${c.totalVenta.toLocaleString()}\n` : '') +
-      `Variación YoY: ${c.varPct != null ? `${c.varPct.toFixed(1)}%` : 'N/A'}\n` +
-      `Peso acumulado: ${c.cumulativePct.toFixed(1)}%\n` +
-      `Peso individual: ${c.peso.toFixed(1)}% del total`
+    // Categories breakdown
+    const catMap: Record<string, number> = {}
+    periodSales.forEach(s => { if (s.categoria) catMap[s.categoria] = (catMap[s.categoria] ?? 0) + s.unidades })
+    const totalCli = Object.values(catMap).reduce((a, b) => a + b, 0)
+    const cats = Object.entries(catMap).map(([cat, uds]) => {
+      const ctx = categoriaAnalysis.find(ca => ca.categoria === cat)
+      return { cat, uds, pct: totalCli > 0 ? Math.round((uds / totalCli) * 100) : 0, tendencia: ctx?.tendencia ?? 'desconocida', varPct: ctx ? Math.round(ctx.variacion_pct) : null }
+    }).sort((a, b) => b.uds - a.uds)
 
-    try {
-      const json = await callAI(
-        [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
-        { model: 'deepseek-chat', max_tokens: 300, temperature: 0.3 },
-      )
-      setParetoAnalysisMap(prev => ({ ...prev, [id]: { loading: false, text: json.choices?.[0]?.message?.content ?? 'Sin respuesta' } }))
-    } catch (err) {
-      const code = err instanceof Error ? err.message : ''
-      const msg = code === 'INVALID_KEY' ? 'API key no configurada. Ve a Configuración → Asistente IA.' : code === 'RATE_LIMIT' ? 'Límite de requests alcanzado. Intenta en unos segundos.' : 'No se pudo conectar con el asistente IA.'
-      setParetoAnalysisMap(prev => ({ ...prev, [id]: { loading: false, text: msg } }))
-    }
-  }, [configuracion, dataAvailability.has_venta_neta])
+    // Products at inventory risk
+    const prods = [...new Set(periodSales.filter(s => s.producto).map(s => s.producto!))]
+    const prodsRiesgo = prods.map(p => categoriasInventario.find(i => i.producto === p)).filter(i => i && (i.clasificacion === 'riesgo_quiebre' || i.clasificacion === 'baja_cobertura'))
 
-  const handleAnalyzeCliente = useCallback(async (c: ClienteDormido) => {
+    // Vendor info
+    const vendInfo = vendorAnalysis.find(v => v.vendedor === c.vendedor)
+
+    // Signals
+    const señales: string[] = []
+    const catsColapso = cats.filter(ct => ct.tendencia === 'colapso' || ct.tendencia === 'caida')
+    if (catsColapso.length > 0) señales.push(`${catsColapso.length} de ${cats.length} categorías que compra están en ${catsColapso[0].tendencia}: ${catsColapso.map(ct => `${ct.cat} (${ct.varPct}%)`).join(', ')}`)
+    if (prodsRiesgo.length > 0) señales.push(`${prodsRiesgo.map(p => p!.producto).join(', ')} tiene${prodsRiesgo.length > 1 ? 'n' : ''} inventario bajo — riesgo de desabasto`)
+    if (c.peso > 15) señales.push(`Concentración: este cliente representa ${c.peso.toFixed(1)}% del total — alta dependencia`)
+    if (vendInfo && (vendInfo.riesgo === 'critico' || vendInfo.riesgo === 'riesgo')) señales.push(`Vendedor ${c.vendedor} está en estado ${vendInfo.riesgo}`)
+
+    const narrativeColor = (c.varPct ?? 0) >= 0 ? 'var(--sf-green)' : 'var(--sf-amber)'
+    const content = (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ padding: '12px 14px', borderLeft: `3px solid ${narrativeColor}`, background: 'rgba(29,158,117,0.06)', borderRadius: '0 8px 8px 0', fontSize: 13, lineHeight: 1.6, color: 'var(--sf-t2)' }}>
+          <strong>{c.nombre}</strong> {c.varPct != null && c.varPct >= 0 ? 'mantiene crecimiento' : 'muestra caída'} ({c.varPct != null ? `${c.varPct >= 0 ? '+' : ''}${c.varPct.toFixed(1)}%` : 'N/A'} YoY) y representa el {c.peso.toFixed(1)}% del volumen.
+          {catsColapso.length > 0 ? ` Sin embargo, compra en categorías que están en declive general.` : ''}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+          {[
+            { label: 'Uds YTD', value: c.totalUnidades.toLocaleString() },
+            { label: 'Var YoY', value: c.varPct != null ? `${c.varPct >= 0 ? '+' : ''}${c.varPct.toFixed(1)}%` : 'N/A' },
+            { label: 'Peso', value: `${c.peso.toFixed(1)}%` },
+            { label: 'Vendedor', value: c.vendedor.split(' ')[0] },
+          ].map((m, i) => (
+            <div key={i} style={{ padding: '8px 10px', background: 'var(--sf-bg)', borderRadius: 8, border: '1px solid var(--sf-border)' }}>
+              <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--sf-t4)' }}>{m.label}</div>
+              <div style={{ fontSize: 16, fontWeight: 700, fontFamily: "'DM Mono', monospace", color: 'var(--sf-t1)', marginTop: 2 }}>{m.value}</div>
+            </div>
+          ))}
+        </div>
+        {cats.length > 0 && (<>
+          <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--sf-t4)', margin: 0 }}>Categorías que compra</p>
+          <div style={{ borderRadius: 8, border: '1px solid var(--sf-border)', overflow: 'hidden' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 70px 50px 90px', padding: '6px 12px', background: 'var(--sf-inset)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', color: 'var(--sf-t5)' }}>
+              <span>Categoría</span><span style={{ textAlign: 'right' }}>Uds</span><span style={{ textAlign: 'right' }}>%</span><span style={{ textAlign: 'right' }}>Tendencia</span>
+            </div>
+            {cats.map((ct, i) => (
+              <div key={ct.cat} style={{ display: 'grid', gridTemplateColumns: '1fr 70px 50px 90px', padding: '6px 12px', fontSize: 12, borderTop: i ? '1px solid var(--sf-border)' : undefined }}>
+                <span style={{ color: 'var(--sf-t1)' }}>{ct.cat}</span>
+                <span style={{ textAlign: 'right', color: 'var(--sf-t3)', fontFamily: "'DM Mono', monospace" }}>{ct.uds.toLocaleString()}</span>
+                <span style={{ textAlign: 'right', color: 'var(--sf-t4)' }}>{ct.pct}%</span>
+                <span style={{ textAlign: 'right', fontSize: 11, fontWeight: 500, color: ct.tendencia === 'colapso' || ct.tendencia === 'caida' ? 'var(--sf-red)' : ct.tendencia === 'crecimiento' ? 'var(--sf-green)' : 'var(--sf-t4)' }}>
+                  {ct.tendencia === 'colapso' ? `⚠️ ${ct.varPct}%` : ct.tendencia === 'caida' ? `↓ ${ct.varPct}%` : ct.tendencia === 'crecimiento' ? `↑ ${ct.varPct}%` : 'estable'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>)}
+        {señales.length > 0 && (<>
+          <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--sf-t4)', margin: 0 }}>Señales cruzadas</p>
+          {señales.map((s, i) => (
+            <div key={i} style={{ padding: '8px 12px', background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: 6, fontSize: 12, color: 'var(--sf-t2)' }}>{s}</div>
+          ))}
+        </>)}
+      </div>
+    )
+
+    setParetoAnalysisMap(prev => ({ ...prev, [id]: { loading: false, text: 'computed', content } }))
+  }, [sales, selectedPeriod, categoriaAnalysis, categoriasInventario, vendorAnalysis])
+
+  const handleAnalyzeCliente = useCallback((c: ClienteDormido) => {
     const id = c.cliente
-    setAnalysisMap(prev => ({ ...prev, [id]: { loading: true, text: null } }))
     setExpandedClienteId(id)
 
-    const systemPrompt =
-      `Eres un analista comercial.\n` +
-      `Responde SIEMPRE en este formato exacto, sin introducción ni cierre:\n\n` +
-      `📊 RESUMEN: [Una oración de máximo 15 palabras con el hallazgo principal]\n\n` +
-      `🔺 CRECIMIENTO:\n- [Dato positivo sobre este cliente si existe — máximo 2 bullets]\n\n` +
-      `🔻 CAÍDA:\n- [Dato sobre la inactividad o pérdida — máximo 2 bullets]\n\n` +
-      `💡 HALLAZGO: [Un dato concreto no obvio — con números específicos]\n\n` +
-      `Reglas:\n` +
-      `- Máximo 120 palabras en total\n` +
-      `- Cada bullet debe tener un número concreto (%, unidades, días, USD)\n` +
-      `- Si una sección no aplica, omítela\n` +
-      `- NUNCA hagas preguntas al usuario\n` +
-      `- NUNCA des instrucciones operativas\n` +
-      `- Responde en español`
+    const clienteSales = sales.filter(s => s.cliente === c.cliente)
+    const mesesSet = new Set(clienteSales.map(s => `${new Date(s.fecha).getFullYear()}-${new Date(s.fecha).getMonth()}`))
+    const promedioMensual = mesesSet.size > 0 ? Math.round(c.valor_historico / mesesSet.size) : 0
 
-    const userPrompt =
-      `Cliente: ${c.cliente}\n` +
-      `Vendedor asignado: ${c.vendedor}\n` +
-      `Días inactivo: ${c.dias_sin_actividad}\n` +
-      `Compras históricas: ${c.compras_historicas} unidades\n` +
-      `Valor histórico: ${configuracion.moneda} ${c.valor_historico.toLocaleString()}\n` +
-      `Estado de recuperación: ${c.recovery_label === 'alta' ? 'Alta probabilidad' : c.recovery_label === 'recuperable' ? 'Recuperable' : c.recovery_label === 'dificil' ? 'Difícil' : 'Perdido'} — ${c.dias_sin_actividad} días inactivo${c.frecuencia_esperada_dias ? `, frecuencia habitual cada ${c.frecuencia_esperada_dias} días` : ''}\n`
+    // Top products
+    const prodMap: Record<string, number> = {}
+    clienteSales.forEach(s => { if (s.producto) prodMap[s.producto] = (prodMap[s.producto] ?? 0) + s.unidades })
+    const topProds = Object.entries(prodMap).sort((a, b) => b[1] - a[1]).slice(0, 5)
+      .map(([p, uds]) => {
+        const inv = categoriasInventario.find(i => i.producto === p)
+        return { producto: p, uds_total: uds, hayStock: inv ? inv.unidades_actuales > 0 : false, stock: inv?.unidades_actuales ?? 0, clasificacion: inv?.clasificacion }
+      })
 
-    try {
-      const json = await callAI(
-        [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
-        { model: 'deepseek-chat', max_tokens: 300, temperature: 0.3 },
-      )
-      setAnalysisMap(prev => ({ ...prev, [id]: { loading: false, text: json.choices?.[0]?.message?.content ?? 'Sin respuesta' } }))
-    } catch (err) {
-      const code = err instanceof Error ? err.message : ''
-      const msg = code === 'INVALID_KEY' ? 'API key no configurada. Ve a Configuración → Asistente IA.' : code === 'RATE_LIMIT' ? 'Límite de requests alcanzado. Intenta en unos segundos.' : 'No se pudo conectar con el asistente IA.'
-      setAnalysisMap(prev => ({ ...prev, [id]: { loading: false, text: msg } }))
-    }
-  }, [configuracion])
+    const vendInfo = vendorAnalysis.find(v => v.vendedor === c.vendedor)
+    const otrosDormidos = clientesDormidos.filter(d => d.vendedor === c.vendedor && d.cliente !== c.cliente)
+    const recLabel = c.recovery_label === 'alta' ? 'Alta probabilidad' : c.recovery_label === 'recuperable' ? 'Recuperable' : c.recovery_label === 'dificil' ? 'Difícil' : 'Perdido'
+
+    // Category context
+    const cats = [...new Set(clienteSales.map(s => s.categoria).filter(Boolean))]
+    const catsEnDeclive = cats.map(cat => {
+      const ctx = categoriaAnalysis.find(ca => ca.categoria === cat)
+      return ctx && (ctx.tendencia === 'colapso' || ctx.tendencia === 'caida') ? { cat, varPct: Math.round(ctx.variacion_pct) } : null
+    }).filter(Boolean) as { cat: string; varPct: number }[]
+
+    const señales: string[] = []
+    const conStock = topProds.filter(p => p.hayStock)
+    if (conStock.length > 0) señales.push(`Tienes stock de ${conStock.map(p => `${p.producto} (${p.stock.toLocaleString()} uds)`).slice(0, 2).join(', ')} que este cliente compraba`)
+    if (otrosDormidos.length > 0) señales.push(`${c.vendedor} tiene ${otrosDormidos.length} cliente${otrosDormidos.length > 1 ? 's' : ''} dormido${otrosDormidos.length > 1 ? 's' : ''} más — posible patrón de desatención`)
+    if (catsEnDeclive.length > 0) señales.push(`${catsEnDeclive.map(ct => `${ct.cat} (${ct.varPct}%)`).join(', ')} en declive — la inactividad puede ser por tendencia del mercado`)
+    if (vendInfo && (vendInfo.riesgo === 'critico' || vendInfo.riesgo === 'riesgo')) señales.push(`Vendedor ${c.vendedor} en estado ${vendInfo.riesgo}`)
+
+    const content = (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ padding: '12px 14px', borderLeft: '3px solid var(--sf-amber)', background: 'rgba(245,158,11,0.06)', borderRadius: '0 8px 8px 0', fontSize: 13, lineHeight: 1.6, color: 'var(--sf-t2)' }}>
+          <strong>{c.cliente}</strong> dejó de comprar hace {c.dias_sin_actividad} días.
+          {c.frecuencia_esperada_dias ? ` Su frecuencia habitual era cada ${c.frecuencia_esperada_dias} días.` : ''}
+          {' '}Estado: {recLabel}.
+          {promedioMensual > 0 ? ` Compraba ~${promedioMensual.toLocaleString()} uds/mes.` : ''}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+          {[
+            { label: 'Inactivo', value: `${c.dias_sin_actividad}d` },
+            { label: 'Historial', value: `${c.valor_historico >= 1000 ? `${(c.valor_historico / 1000).toFixed(1)}k` : c.valor_historico} uds` },
+            { label: 'Vendedor', value: c.vendedor.split(' ')[0] },
+          ].map((m, i) => (
+            <div key={i} style={{ padding: '8px 10px', background: 'var(--sf-bg)', borderRadius: 8, border: '1px solid var(--sf-border)' }}>
+              <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--sf-t4)' }}>{m.label}</div>
+              <div style={{ fontSize: 16, fontWeight: 700, fontFamily: "'DM Mono', monospace", color: 'var(--sf-t1)', marginTop: 2 }}>{m.value}</div>
+            </div>
+          ))}
+        </div>
+        {topProds.length > 0 && (<>
+          <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--sf-t4)', margin: 0 }}>Productos que compraba</p>
+          <div style={{ borderRadius: 8, border: '1px solid var(--sf-border)', overflow: 'hidden' }}>
+            {topProds.map((p, i) => (
+              <div key={p.producto} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 12px', fontSize: 12, borderTop: i ? '1px solid var(--sf-border)' : undefined }}>
+                <span style={{ color: 'var(--sf-t1)' }}>{p.producto}</span>
+                <span style={{ color: p.hayStock ? 'var(--sf-green)' : 'var(--sf-t4)', fontSize: 11, fontFamily: "'DM Mono', monospace" }}>
+                  {p.hayStock ? `${p.stock.toLocaleString()} en stock` : 'sin stock'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>)}
+        {señales.length > 0 && (<>
+          <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--sf-t4)', margin: 0 }}>Señales</p>
+          {señales.map((s, i) => (
+            <div key={i} style={{ padding: '8px 12px', background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: 6, fontSize: 12, color: 'var(--sf-t2)' }}>{s}</div>
+          ))}
+        </>)}
+      </div>
+    )
+
+    setAnalysisMap(prev => ({ ...prev, [id]: { loading: false, text: 'computed', content } }))
+  }, [sales, categoriasInventario, vendorAnalysis, clientesDormidos, categoriaAnalysis])
 
   const vendedores = useMemo(
-    () => [...new Set([...clientesDormidos.map(c => c.vendedor), ...sales.map(s => s.vendedor)])].sort(),
-    [clientesDormidos, sales],
+    () => {
+      const set = new Set<string>()
+      for (const c of clientesDormidos) if (c.vendedor) set.add(c.vendedor)
+      for (const c of clienteSummaries) if (c.vendedor) set.add(c.vendedor)
+      return [...set].sort()
+    },
+    [clientesDormidos, clienteSummaries],
   )
 
-  const paretoClientes = useMemo(() => {
-    if (!sales.length) return []
-    const { year, month } = selectedPeriod
-    const hasVenta = dataAvailability.has_venta_neta
-
-    const ytdCur = sales.filter(r => r.cliente && r.fecha.getFullYear() === year && r.fecha.getMonth() + 1 <= month)
-    const ytdPrev = sales.filter(r => r.cliente && r.fecha.getFullYear() === year - 1 && r.fecha.getMonth() + 1 <= month)
-
-    const map = new Map<string, { totalUnidades: number; totalVenta: number; vendedor: string }>()
-    for (const r of ytdCur) {
-      const k = r.cliente!
-      const e = map.get(k) ?? { totalUnidades: 0, totalVenta: 0, vendedor: r.vendedor }
-      map.set(k, { totalUnidades: e.totalUnidades + r.unidades, totalVenta: e.totalVenta + (r.venta_neta ?? 0), vendedor: e.vendedor })
-    }
-
-    const prevMap = new Map<string, number>()
-    for (const r of ytdPrev) {
-      const k = r.cliente!
-      prevMap.set(k, (prevMap.get(k) ?? 0) + (hasVenta ? (r.venta_neta ?? 0) : r.unidades))
-    }
-
-    const metric = (v: { totalVenta: number; totalUnidades: number }) => hasVenta ? v.totalVenta : v.totalUnidades
-    const sorted = [...map.entries()].sort((a, b) => metric(b[1]) - metric(a[1])).slice(0, 20)
-    const grandTotal = sorted.reduce((s, [, v]) => s + metric(v), 0)
-
-    let cumSum = 0
-    return sorted.map(([nombre, v]) => {
-      const cur = metric(v)
-      const prev = prevMap.get(nombre) ?? 0
-      const varPct = prev > 0 ? ((cur - prev) / prev) * 100 : null
-      cumSum += cur
-      const cumulativePct = grandTotal > 0 ? (cumSum / grandTotal) * 100 : 0
-      const peso = grandTotal > 0 ? (cur / grandTotal) * 100 : 0
-      return { nombre, totalUnidades: v.totalUnidades, totalVenta: v.totalVenta, vendedor: v.vendedor, varPct, cumulativePct, peso }
-    })
-  }, [sales, selectedPeriod, dataAvailability.has_venta_neta])
-
-  const riesgoTemprano = useMemo(() => {
-    if (!sales.length) return []
-    const withCliente = sales.filter(r => r.cliente)
-    if (!withCliente.length) return []
-
-    const fechaRef = new Date(Math.max(...withCliente.map(r => r.fecha.getTime())))
-    const sixMonthsAgo = new Date(fechaRef)
-    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
-
-    const dormidosSet = new Set(clientesDormidos.map(c => c.cliente))
-
-    const clientMap = new Map<string, { dates: Date[]; vendedor: string; totalValue: number }>()
-    for (const r of withCliente.filter(r => r.fecha >= sixMonthsAgo)) {
-      const k = r.cliente!
-      const e = clientMap.get(k)
-      if (e) { e.dates.push(r.fecha); e.totalValue += r.venta_neta ?? r.unidades }
-      else clientMap.set(k, { dates: [r.fecha], vendedor: r.vendedor, totalValue: r.venta_neta ?? r.unidades })
-    }
-
-    type RiesgoItem = { nombre: string; vendedor: string; lastPurchase: Date; avgDays: number; daysSince: number; atraso: number; signal: 'en riesgo' | 'desacelerando'; valorHistorico: number }
-    const results: RiesgoItem[] = []
-
-    for (const [nombre, data] of clientMap) {
-      if (dormidosSet.has(nombre)) continue
-      const sortedDates = [...data.dates].sort((a, b) => a.getTime() - b.getTime())
-      if (sortedDates.length < 2) continue
-      const gaps: number[] = []
-      for (let i = 1; i < sortedDates.length; i++) {
-        gaps.push((sortedDates[i].getTime() - sortedDates[i - 1].getTime()) / 86400000)
+  // Top-20 clientes derived from pre-computed clienteSummaries (off-thread)
+  const paretoClientes = useMemo<ParetoCliente[]>(() => {
+    if (!clienteSummaries.length) return []
+    const top = clienteSummaries.slice(0, 20)
+    const totalTop = top.reduce(
+      (s, c) => s + (dataAvailability.has_venta_neta ? c.ventaCur : c.udsCur),
+      0,
+    )
+    let cum = 0
+    return top.map((c) => {
+      const cur = dataAvailability.has_venta_neta ? c.ventaCur : c.udsCur
+      cum += cur
+      const cumulativePct = totalTop > 0 ? (cum / totalTop) * 100 : 0
+      const peso = totalTop > 0 ? (cur / totalTop) * 100 : 0
+      return {
+        nombre: c.nombre,
+        totalUnidades: c.udsCur,
+        totalVenta: c.ventaCur,
+        vendedor: c.vendedor,
+        varPct: c.varPct,
+        cumulativePct,
+        peso,
       }
-      const avgDays = gaps.reduce((s, g) => s + g, 0) / gaps.length
-      if (avgDays < 1) continue
-      const lastPurchase = sortedDates[sortedDates.length - 1]
-      const daysSince = (fechaRef.getTime() - lastPurchase.getTime()) / 86400000
-      let signal: 'en riesgo' | 'desacelerando' | null = null
-      if (daysSince > avgDays * 2) signal = 'en riesgo'
-      else if (daysSince > avgDays * 1.5) signal = 'desacelerando'
-      if (!signal) continue
-      results.push({ nombre, vendedor: data.vendedor, lastPurchase, avgDays, daysSince: Math.round(daysSince), atraso: Math.round(daysSince - avgDays), signal, valorHistorico: data.totalValue })
-    }
+    })
+  }, [clienteSummaries, dataAvailability.has_venta_neta])
 
-    return results.sort((a, b) => {
+  // Riesgo temprano derived from pre-computed clienteSummaries
+  const riesgoTemprano = useMemo(() => {
+    if (!clienteSummaries.length) return []
+    const items = clienteSummaries
+      .filter((c) => c.riesgoSignal !== null)
+      .map((c) => {
+        const lastPurchase = new Date(c.lastDate)
+        return {
+          nombre: c.nombre,
+          vendedor: c.vendedor,
+          lastPurchase,
+          avgDays: c.riesgoAvgDays,
+          daysSince: c.riesgoDaysSince,
+          atraso: c.riesgoAtraso,
+          signal: c.riesgoSignal as 'en riesgo' | 'desacelerando',
+          valorHistorico: c.riesgoValorHistorico,
+        }
+      })
+    items.sort((a, b) => {
       if (a.signal !== b.signal) return a.signal === 'en riesgo' ? -1 : 1
       return b.valorHistorico - a.valorHistorico
     })
-  }, [sales, clientesDormidos])
+    return items
+  }, [clienteSummaries])
 
   useEffect(() => {
     if (initialPanelCliente) setPanelCliente(initialPanelCliente)
   }, [initialPanelCliente])
 
+  // Reset pagination when tab/filter/sort changes
+  useEffect(() => { setVisibleCount(PAGE_SIZE) }, [tab, filterVendedor, searchCliente, sortKey, sortDir])
+
   useEffect(() => {
     if (isProcessed && !dataAvailability.has_cliente) navigate(dp('/dashboard'))
   }, [isProcessed, dataAvailability.has_cliente, navigate])
 
+  // ── Hooks derivados — DEBEN ejecutarse en CADA render (Rules of Hooks).
+  // No puede haber hooks después del early return.
+  const searchQ = searchCliente.toLowerCase()
+
+  const filtered = useMemo(() => {
+    return clientesDormidos.filter(c => {
+      if (filterVendedor !== 'all' && c.vendedor !== filterVendedor) return false
+      if (searchQ && !c.cliente.toLowerCase().includes(searchQ)) return false
+      return true
+    })
+  }, [clientesDormidos, filterVendedor, searchQ])
+
+  const sortedFull = useMemo(() => {
+    return filtered.slice().sort((a, b) => {
+      const mul = sortDir === 'desc' ? -1 : 1
+      if (sortKey === 'prioridad') return mul * (a.recovery_score - b.recovery_score)
+      if (sortKey === 'dias_sin_actividad') return mul * (a.dias_sin_actividad - b.dias_sin_actividad)
+      if (sortKey === 'valor_historico') return mul * (a.valor_historico - b.valor_historico)
+      if (sortKey === 'compras_historicas') return mul * (a.compras_historicas - b.compras_historicas)
+      if (sortKey === 'vendedor') return mul * a.vendedor.localeCompare(b.vendedor)
+      return mul * a.cliente.localeCompare(b.cliente)
+    })
+  }, [filtered, sortKey, sortDir])
+
+  const sorted = useMemo(() => sortedFull.slice(0, visibleCount), [sortedFull, visibleCount])
+
+  const totalValorEnRiesgo = useMemo(
+    () => clientesDormidos.reduce((a, c) => a + c.valor_historico, 0),
+    [clientesDormidos],
+  )
+
+  // Filtered versions for pareto and riesgo (base memos stay unfiltered for badges)
+  const filteredPareto = useMemo(() => {
+    return paretoClientes.filter(c => {
+      if (filterVendedor !== 'all' && c.vendedor !== filterVendedor) return false
+      if (searchQ && !c.nombre.toLowerCase().includes(searchQ)) return false
+      return true
+    })
+  }, [paretoClientes, filterVendedor, searchQ])
+
+  const filteredRiesgoFull = useMemo(() => {
+    return riesgoTemprano.filter(c => {
+      if (filterVendedor !== 'all' && c.vendedor !== filterVendedor) return false
+      if (searchQ && !c.nombre.toLowerCase().includes(searchQ)) return false
+      return true
+    })
+  }, [riesgoTemprano, filterVendedor, searchQ])
+
+  const filteredRiesgo = useMemo(
+    () => filteredRiesgoFull.slice(0, visibleCount),
+    [filteredRiesgoFull, visibleCount],
+  )
+
+  // ── Early return DESPUÉS de todos los hooks ─────────────────────────────
   if (!dataAvailability.has_cliente) return null
+
+  const moneda = configuracion.moneda
+  const usaDolares = metrica === 'dolares' && dataAvailability.has_venta_neta
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -268,39 +388,6 @@ export default function ClientesPage() {
       : <ChevronUp className="w-3 h-3 text-[#00B894]" />
   }
 
-  const searchQ = searchCliente.toLowerCase()
-  const filtered = clientesDormidos.filter(c => {
-    if (filterVendedor !== 'all' && c.vendedor !== filterVendedor) return false
-    if (searchQ && !c.cliente.toLowerCase().includes(searchQ)) return false
-    return true
-  })
-
-  const sorted = [...filtered].sort((a, b) => {
-    const mul = sortDir === 'desc' ? -1 : 1
-    if (sortKey === 'prioridad') return mul * (a.recovery_score - b.recovery_score)
-    if (sortKey === 'dias_sin_actividad') return mul * (a.dias_sin_actividad - b.dias_sin_actividad)
-    if (sortKey === 'valor_historico') return mul * (a.valor_historico - b.valor_historico)
-    if (sortKey === 'compras_historicas') return mul * (a.compras_historicas - b.compras_historicas)
-    if (sortKey === 'vendedor') return mul * a.vendedor.localeCompare(b.vendedor)
-    return mul * a.cliente.localeCompare(b.cliente)
-  })
-
-  const totalValorEnRiesgo = clientesDormidos.reduce((a, c) => a + c.valor_historico, 0)
-  const moneda = configuracion.moneda
-  const usaDolares = metrica === 'dolares' && dataAvailability.has_venta_neta
-
-  // Filtered versions for pareto and riesgo (base memos stay unfiltered for badges)
-  const filteredPareto = paretoClientes.filter(c => {
-    if (filterVendedor !== 'all' && c.vendedor !== filterVendedor) return false
-    if (searchQ && !c.nombre.toLowerCase().includes(searchQ)) return false
-    return true
-  })
-  const filteredRiesgo = riesgoTemprano.filter(c => {
-    if (filterVendedor !== 'all' && c.vendedor !== filterVendedor) return false
-    if (searchQ && !c.nombre.toLowerCase().includes(searchQ)) return false
-    return true
-  })
-
   return (
     <div className="max-w-5xl mx-auto space-y-6 pb-20 animate-in fade-in duration-700">
       {/* Header + inline badges */}
@@ -314,7 +401,7 @@ export default function ClientesPage() {
             {clientesDormidos.length} inactivos
           </span>
           <span style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'rgba(239,159,39,0.15)', color: '#EF9F27', border: '1px solid rgba(239,159,39,0.25)' }}>
-            {moneda} {totalValorEnRiesgo >= 1000 ? `${(totalValorEnRiesgo / 1000).toFixed(1)}k` : totalValorEnRiesgo.toLocaleString(undefined, { maximumFractionDigits: 0 })} en riesgo
+            {moneda}{totalValorEnRiesgo >= 1000 ? `${(totalValorEnRiesgo / 1000).toFixed(1)}k` : totalValorEnRiesgo.toLocaleString(undefined, { maximumFractionDigits: 0 })} en riesgo
           </span>
           <span style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'rgba(239,159,39,0.15)', color: '#EF9F27', border: '1px solid rgba(239,159,39,0.25)' }}>
             {riesgoTemprano.length} riesgo temprano
@@ -336,48 +423,20 @@ export default function ClientesPage() {
 
       {/* Filter bar */}
       <div className="flex flex-wrap items-center gap-2 mb-3">
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none" style={{ color: 'var(--sf-t5)' }} />
-          <input
-            type="text"
-            placeholder="Buscar cliente..."
-            value={searchCliente}
-            onChange={e => setSearchCliente(e.target.value)}
-            className="focus:outline-none"
-            style={{
-              background: 'var(--sf-inset)',
-              border: '1px solid var(--sf-border)',
-              borderRadius: 8,
-              color: 'var(--sf-t1)',
-              fontSize: 13,
-              height: 36,
-              paddingLeft: 32,
-              paddingRight: 12,
-              width: 180,
-              transition: 'border-color 150ms ease',
-            }}
-            onMouseEnter={e => (e.currentTarget.style.borderColor = '#1D9E7540')}
-            onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--sf-border)')}
-          />
-        </div>
+        <SFSearch
+          placeholder="Buscar cliente..."
+          value={searchCliente}
+          onChange={e => setSearchCliente(e.target.value)}
+          style={{ width: 180 }}
+        />
         {vendedores.length > 1 && (
-          <select
+          <SFSelect
             value={filterVendedor}
             onChange={e => setFilterVendedor(e.target.value)}
-            style={{
-              background: 'var(--sf-inset)',
-              border: '1px solid var(--sf-border)',
-              borderRadius: 8,
-              color: 'var(--sf-t1)',
-              fontSize: 13,
-              height: 36,
-              padding: '0 12px',
-            }}
-            className="focus:outline-none"
           >
             <option value="all">Todos los vendedores</option>
             {vendedores.map(v => <option key={v} value={v}>{v}</option>)}
-          </select>
+          </SFSelect>
         )}
       </div>
 
@@ -424,8 +483,8 @@ export default function ClientesPage() {
               </p>
               {totalValorEnRiesgo > 0 && usaDolares && (
                 <p className="text-xs mt-0.5" style={{ color: 'var(--sf-t3)' }}>
-                  {moneda} {totalValorEnRiesgo >= 1000 ? `${(totalValorEnRiesgo / 1000).toFixed(1)}k` : totalValorEnRiesgo.toLocaleString()} en ventas históricas
-                  {sorted.length > 0 ? ` · ~${moneda} ${Math.round(totalValorEnRiesgo / sorted.length / 1000 * 10) / 10}k promedio por cliente` : ''}
+                  {moneda}{totalValorEnRiesgo >= 1000 ? `${(totalValorEnRiesgo / 1000).toFixed(1)}k` : totalValorEnRiesgo.toLocaleString()} en ventas históricas
+                  {sorted.length > 0 ? ` · ~${moneda}${Math.round(totalValorEnRiesgo / sorted.length / 1000 * 10) / 10}k promedio por cliente` : ''}
                 </p>
               )}
             </div>
@@ -519,7 +578,7 @@ export default function ClientesPage() {
                         </td>
                         <td style={{ padding: '10px 12px', color: 'var(--sf-t3)', fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace", textAlign: 'right' }}>{c.compras_historicas}</td>
                         <td style={{ padding: '10px 12px', color: 'var(--sf-t1)', fontWeight: 500, fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace", textAlign: 'right' }}>
-                          {moneda} {c.valor_historico >= 1000
+                          {moneda}{c.valor_historico >= 1000
                             ? `${(c.valor_historico / 1000).toFixed(1)}k`
                             : c.valor_historico.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                         </td>
@@ -535,7 +594,7 @@ export default function ClientesPage() {
                             <span style={{ fontSize: '11px', color: 'var(--sf-t4)', lineHeight: 1.3 }}>
                               {c.recovery_label === 'alta' ? `Comprador frecuente, lleva ${c.dias_sin_actividad} días sin actividad`
                                 : c.recovery_label === 'recuperable' ? `Buen historial, se fue hace ${c.dias_sin_actividad} días`
-                                : c.recovery_label === 'dificil' ? (c.valor_historico > 20000 ? `Cliente de ${moneda} ${(c.valor_historico / 1000).toFixed(0)}k, vale el intento` : 'Historial irregular, respuesta incierta')
+                                : c.recovery_label === 'dificil' ? (c.valor_historico > 20000 ? `Cliente de ${moneda}${(c.valor_historico / 1000).toFixed(0)}k, vale el intento` : 'Historial irregular, respuesta incierta')
                                 : `Sin señales de retorno en ${c.dias_sin_actividad} días`}
                             </span>
                             <span style={{
@@ -622,9 +681,13 @@ export default function ClientesPage() {
                                 </div>
                               ) : analysis.text ? (
                                 <>
-                                  <div className="text-[13px] leading-relaxed whitespace-pre-line" style={{ color: 'var(--sf-t3)' }}>
-                                    {analysis.text}
-                                  </div>
+                                  {analysis.content ? (
+                                    <div>{analysis.content}</div>
+                                  ) : (
+                                    <div className="text-[13px] leading-relaxed whitespace-pre-line" style={{ color: 'var(--sf-t3)' }}>
+                                      {analysis.text}
+                                    </div>
+                                  )}
                                   <button
                                     onClick={() => {
                                       const displayMessage = `Profundizar: cliente ${c.cliente} (${c.dias_sin_actividad} días inactivo)`
@@ -632,7 +695,7 @@ export default function ClientesPage() {
                                         `Profundizar sobre cliente dormido: ${c.cliente}`,
                                         `Vendedor: ${c.vendedor}`,
                                         `Días inactivo: ${c.dias_sin_actividad}`,
-                                        `Valor histórico: ${moneda} ${c.valor_historico.toLocaleString()}`,
+                                        `Valor histórico: ${moneda}${c.valor_historico.toLocaleString()}`,
                                         `Estado: ${c.recovery_label === 'alta' ? 'Alta probabilidad de recuperación' : c.recovery_label === 'recuperable' ? 'Recuperable' : c.recovery_label === 'dificil' ? 'Difícil de recuperar' : 'Perdido'}`,
                                         analysis.text ? `\nAnálisis previo:\n${analysis.text}` : '',
                                         ``,
@@ -671,11 +734,29 @@ export default function ClientesPage() {
                   })}
                 </tbody>
               </table>
-              {filtered.length !== clientesDormidos.length && (
-                <p className="px-5 py-2 text-[10px] text-[var(--sf-t4)] border-t border-[var(--sf-border)]">
-                  Mostrando {filtered.length} de {clientesDormidos.length} clientes inactivos
-                </p>
+              {sortedFull.length > visibleCount && (
+                <div className="flex justify-center py-3 border-t border-[var(--sf-border)]">
+                  <button
+                    onClick={() => setVisibleCount((v) => v + PAGE_SIZE)}
+                    style={{
+                      padding: '6px 14px',
+                      borderRadius: 8,
+                      border: '1px solid rgba(29,158,117,0.35)',
+                      background: 'rgba(29,158,117,0.08)',
+                      color: '#1D9E75',
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Cargar más ({Math.min(PAGE_SIZE, sortedFull.length - visibleCount)} de {sortedFull.length - visibleCount} restantes)
+                  </button>
+                </div>
               )}
+              <p className="px-5 py-2 text-[10px] text-[var(--sf-t4)] border-t border-[var(--sf-border)]">
+                Mostrando {sorted.length} de {sortedFull.length} clientes inactivos
+                {filtered.length !== clientesDormidos.length ? ` (filtrados de ${clientesDormidos.length})` : ''}
+              </p>
             </div>
           )}
         </div>
@@ -794,7 +875,7 @@ export default function ClientesPage() {
                           </td>
                           <td style={{ padding: '9px 12px', textAlign: 'right', color: 'var(--sf-t1)', fontWeight: 500, fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace" }}>
                             {dataAvailability.has_venta_neta
-                              ? `${moneda} ${c.totalVenta >= 1000 ? `${(c.totalVenta / 1000).toFixed(1)}k` : c.totalVenta.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+                              ? `${moneda}${c.totalVenta >= 1000 ? `${(c.totalVenta / 1000).toFixed(1)}k` : c.totalVenta.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
                               : '—'}
                           </td>
                           <td style={{ padding: '9px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace", fontWeight: 600,
@@ -978,7 +1059,7 @@ export default function ClientesPage() {
                         </span>
                       </td>
                       <td style={{ padding: '9px 12px', textAlign: 'right', color: 'var(--sf-t1)', fontWeight: 500, fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace" }}>
-                        {moneda} {c.valorHistorico >= 1000
+                        {moneda}{c.valorHistorico >= 1000
                           ? `${(c.valorHistorico / 1000).toFixed(1)}k`
                           : c.valorHistorico.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                       </td>
@@ -986,6 +1067,28 @@ export default function ClientesPage() {
                   ))}
                 </tbody>
               </table>
+              {filteredRiesgoFull.length > visibleCount && (
+                <div className="flex justify-center py-3 border-t border-[var(--sf-border)]">
+                  <button
+                    onClick={() => setVisibleCount((v) => v + PAGE_SIZE)}
+                    style={{
+                      padding: '6px 14px',
+                      borderRadius: 8,
+                      border: '1px solid rgba(29,158,117,0.35)',
+                      background: 'rgba(29,158,117,0.08)',
+                      color: '#1D9E75',
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Cargar más ({Math.min(PAGE_SIZE, filteredRiesgoFull.length - visibleCount)} de {filteredRiesgoFull.length - visibleCount} restantes)
+                  </button>
+                </div>
+              )}
+              <p className="px-5 py-2 text-[10px] text-[var(--sf-t4)] border-t border-[var(--sf-border)]">
+                Mostrando {filteredRiesgo.length} de {filteredRiesgoFull.length} clientes en riesgo
+              </p>
             </div>
           )}
         </div>
@@ -1009,14 +1112,15 @@ export default function ClientesPage() {
             badges={drawerCliente ? [
               { label: `${drawerCliente.peso.toFixed(1)}% del total`, color: '#1D9E75', bg: 'rgba(29,158,117,0.12)' },
             ] : []}
-            analysisText={analysis?.text ?? null}
-            onDeepen={drawerCliente && analysis?.text ? () => {
+            analysisText={analysis?.content ? null : (analysis?.text ?? null)}
+            analysisContent={analysis?.content}
+            onDeepen={drawerCliente && (analysis?.text || analysis?.content) ? () => {
               const displayMessage = `Profundizar: cliente ${drawerCliente.nombre} (${drawerCliente.peso.toFixed(1)}% del total)`
               const fullContext = [
                 `Profundizar sobre cliente top: ${drawerCliente.nombre}`,
                 `Vendedor: ${drawerCliente.vendedor}`,
                 `Unidades YTD: ${drawerCliente.totalUnidades.toLocaleString()}`,
-                dataAvailability.has_venta_neta ? `Venta neta YTD: ${moneda} ${drawerCliente.totalVenta.toLocaleString()}` : '',
+                dataAvailability.has_venta_neta ? `Venta neta YTD: ${moneda}${drawerCliente.totalVenta.toLocaleString()}` : '',
                 `Variación YoY: ${drawerCliente.varPct != null ? `${drawerCliente.varPct.toFixed(1)}%` : 'N/A'}`,
                 `Peso: ${drawerCliente.peso.toFixed(1)}% del total`,
                 analysis.text ? `\nAnálisis previo:\n${analysis.text}` : '',

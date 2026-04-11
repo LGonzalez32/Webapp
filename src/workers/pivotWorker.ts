@@ -16,9 +16,19 @@ self.onmessage = (e: MessageEvent<PivotWorkerInput>) => {
   const prevSales = filteredSales.filter((s) => new Date(s.fecha).getFullYear() === chartPrev)
 
   // Restrict prev-year to the same months present in curr-year (YTD comparison)
-  const currMonths = currSales.map(s => new Date(s.fecha).getMonth())
-  const lastMonth = currMonths.length > 0 ? Math.max(...currMonths) : 11
-  const ytdPrevSales = prevSales.filter(s => new Date(s.fecha).getMonth() <= lastMonth)
+  // Same-day-range: en el último mes con datos, limitar al mismo día
+  const currDates = currSales.map(s => new Date(s.fecha))
+  const lastMonth = currDates.length > 0 ? Math.max(...currDates.map(d => d.getMonth())) : 11
+  const maxDay = currDates.length > 0 ? Math.max(...currDates.filter(d => d.getMonth() === lastMonth).map(d => d.getDate())) : 31
+  const lastDayOfMonth = new Date(selectedYear, lastMonth + 1, 0).getDate()
+  const isPartialMonth = maxDay < lastDayOfMonth
+  const ytdPrevSales = prevSales.filter(s => {
+    const d = new Date(s.fecha)
+    const m = d.getMonth()
+    if (m < lastMonth) return true
+    if (m === lastMonth) return !isPartialMonth || d.getDate() <= maxDay
+    return false
+  })
 
   const result: PivotNode[] = buildPivotTree(currSales, ytdPrevSales, metas, pivotDims, selectedYear, 'root', 0, null, null)
   self.postMessage(result)

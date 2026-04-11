@@ -149,6 +149,16 @@ export interface Insight {
   }
   detector?: string
   trend?: 'improving' | 'worsening' | 'stable'
+  // ── v1.1 (insightStandard.ts) — campos opcionales nuevos ──
+  conclusion?: string
+  accion?: { texto: string; entidades: string[]; respaldo: string; ejecutableEn: string }
+  contrastePortafolio?: string
+  cruces?: string[]
+  metaContext?: { metaMes: number; cumplimiento: number; gap: number; proyeccion: number; tipoMeta: string }
+  inventarioContext?: { stock: number; mesesCobertura: number; alerta: string }
+  esPositivo?: boolean
+  esAccionable?: boolean
+  señalesConvergentes?: number
 }
 
 // ─── CLIENTES DORMIDOS ────────────────────────────────────────────────────────

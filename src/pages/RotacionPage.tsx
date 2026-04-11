@@ -4,9 +4,11 @@ import { useDemoPath } from '../lib/useDemoPath'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
 import type { ClasificacionInventario, CategoriaInventario } from '../types'
-import { ChevronDown, ChevronUp, Upload, Search } from 'lucide-react'
-import { callAI } from '../lib/chatService'
+import { ChevronDown, ChevronUp, Upload } from 'lucide-react'
+// callAI removed — analysis is now computed locally
 import ProductoPanel from '../components/producto/ProductoPanel'
+import { SFSelect } from '../components/ui/SFSelect'
+import { SFSearch } from '../components/ui/SFSearch'
 
 // ─── Orden y configuración de clasificaciones ────────────────────────────────
 
@@ -195,19 +197,23 @@ const CategorySection: FC<CategorySectionProps> = ({ clasificacion, items, total
                         colSpan={6 + (hasCategoria ? 1 : 0) + (showIA ? 1 : 0)}
                         style={{ padding: '16px 20px', background: 'var(--sf-inset)', borderBottom: '1px solid var(--sf-border)' }}
                       >
-                        <div style={{ fontSize: '13px', lineHeight: 1.7, whiteSpace: 'pre-line' }}>
-                          {analysisMap[item.producto].text!.split('\n').filter(Boolean).map((line, i) => (
-                            <p key={i} style={{
-                              margin: '2px 0',
-                              fontWeight: line.startsWith('📊') || line.startsWith('💡') ? 600 : line.startsWith('📦') || line.startsWith('📉') ? 600 : 400,
-                              color: line.startsWith('📊') || line.startsWith('💡') ? 'var(--sf-t1)' : line.startsWith('📦') || line.startsWith('📉') ? 'var(--sf-t2)' : 'var(--sf-t3)',
-                              marginTop: line.startsWith('📦') || line.startsWith('📉') ? '8px' : '2px',
-                              paddingLeft: line.startsWith('-') ? '8px' : 0,
-                            }}>
-                              {line}
-                            </p>
-                          ))}
-                        </div>
+                        {analysisMap[item.producto].content ? (
+                          <div>{analysisMap[item.producto].content}</div>
+                        ) : (
+                          <div style={{ fontSize: '13px', lineHeight: 1.7, whiteSpace: 'pre-line' }}>
+                            {analysisMap[item.producto].text!.split('\n').filter(Boolean).map((line, i) => (
+                              <p key={i} style={{
+                                margin: '2px 0',
+                                fontWeight: line.startsWith('📊') || line.startsWith('💡') ? 600 : line.startsWith('📦') || line.startsWith('📉') ? 600 : 400,
+                                color: line.startsWith('📊') || line.startsWith('💡') ? 'var(--sf-t1)' : line.startsWith('📦') || line.startsWith('📉') ? 'var(--sf-t2)' : 'var(--sf-t3)',
+                                marginTop: line.startsWith('📦') || line.startsWith('📉') ? '8px' : '2px',
+                                paddingLeft: line.startsWith('-') ? '8px' : 0,
+                              }}>
+                                {line}
+                              </p>
+                            ))}
+                          </div>
+                        )}
                         <button
                           onClick={() => onProfundizar?.(item, analysisMap[item.producto].text!)}
                           style={{
@@ -245,14 +251,14 @@ export default function RotacionPage() {
   const highlightCategory = (location.state as { highlight?: string } | null)?.highlight ?? null
   const alertCategoria = useMemo(() => new URLSearchParams(location.search).get('categoria'), [location.search])
   const initialFilter = alertCategoria ?? highlightCategory
-  const { categoriasInventario, dataAvailability, configuracion, sales, selectedPeriod, insights } = useAppStore()
+  const { categoriasInventario, dataAvailability, configuracion, sales, selectedPeriod, insights, clientesDormidos, vendorAnalysis, categoriaAnalysis } = useAppStore()
 
   const [panelProducto, setPanelProducto] = useState<CategoriaInventario | null>(null)
   const [searchText, setSearchText] = useState(alertCategoria ?? '')
   const [filterCategory, setFilterCategory] = useState<string | null>(initialFilter)
   const [alertFilter, setAlertFilter] = useState<string | null>(alertCategoria)
   const [expandedProducto, setExpandedProducto] = useState<string | null>(null)
-  const [analysisMap, setAnalysisMap] = useState<Record<string, { loading: boolean; text: string | null }>>({})
+  const [analysisMap, setAnalysisMap] = useState<Record<string, { loading: boolean; text: string | null; content?: React.ReactNode }>>({})
 
   // Clear navigation state / scroll to top when arriving from alert
   useEffect(() => {
@@ -264,53 +270,88 @@ export default function RotacionPage() {
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleAnalyzeProducto = useCallback(async (item: CategoriaInventario) => {
+  const handleAnalyzeProducto = useCallback((item: CategoriaInventario) => {
     const key = item.producto
     setExpandedProducto(key)
-    setAnalysisMap(prev => ({ ...prev, [key]: { loading: true, text: null } }))
 
+    const { year, month } = selectedPeriod
     const clasi = CLASI_CONFIG[item.clasificacion]?.label ?? item.clasificacion
-    const userPrompt =
-      `Producto: ${item.producto}\n` +
-      `Categoría: ${item.categoria}\n` +
-      `Unidades actuales: ${item.unidades_actuales.toLocaleString()}\n` +
-      `Promedio mensual (PM3): ${item.pm3.toFixed(0)}\n` +
-      `Días de inventario: ${item.dias_inventario >= 9999 ? 'Sin movimiento' : item.dias_inventario}\n` +
-      `Estado: ${clasi}\n` +
-      (item.ultimo_movimiento ? `Último movimiento: ${new Date(item.ultimo_movimiento).toLocaleDateString('es-MX')}` : '')
+    const catCtx = categoriaAnalysis.find(c => c.categoria === item.categoria)
 
-    const systemPrompt = `Eres un analista de inventario.
-Responde SIEMPRE en este formato exacto, sin introducción ni cierre:
+    // Vendors selling this product
+    const periodSales = sales.filter(s => s.producto === item.producto && new Date(s.fecha).getFullYear() === year && new Date(s.fecha).getMonth() === month)
+    const vendMap: Record<string, number> = {}
+    periodSales.forEach(s => { vendMap[s.vendedor] = (vendMap[s.vendedor] ?? 0) + s.unidades })
+    const vendedores = Object.entries(vendMap).sort((a, b) => b[1] - a[1]).slice(0, 5)
+      .map(([v, uds]) => ({ vendedor: v, uds, riesgo: vendorAnalysis.find(va => va.vendedor === v)?.riesgo ?? 'ok' }))
 
-📊 RESUMEN: [Una oración de máximo 15 palabras con el hallazgo principal]
+    // Clients buying this product
+    const cliMap: Record<string, number> = {}
+    periodSales.forEach(s => { if (s.cliente) cliMap[s.cliente] = (cliMap[s.cliente] ?? 0) + s.unidades })
+    const topClientes = Object.entries(cliMap).sort((a, b) => b[1] - a[1]).slice(0, 3)
 
-📦 INVENTARIO:
-- [Dato sobre stock actual, días de inventario, o tendencia — máximo 2 bullets]
+    // Dormant clients who bought it
+    const allCliProd = [...new Set(sales.filter(s => s.producto === item.producto && s.cliente).map(s => s.cliente!))]
+    const dormidosConProd = clientesDormidos.filter(d => allCliProd.includes(d.cliente)).slice(0, 3)
 
-📉 RIESGO:
-- [Dato sobre el riesgo específico de este producto — máximo 2 bullets]
-
-💡 HALLAZGO: [Un dato concreto no obvio — con números. NUNCA preguntas ni instrucciones operativas.]
-
-Reglas:
-- Máximo 120 palabras en total
-- Cada bullet debe tener un número concreto
-- Si una sección no aplica, omítela
-- NUNCA des instrucciones operativas
-- Responde en español`
-
-    try {
-      const json = await callAI(
-        [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
-        { model: 'deepseek-chat', max_tokens: 300, temperature: 0.3 },
-      )
-      setAnalysisMap(prev => ({ ...prev, [key]: { loading: false, text: json.choices?.[0]?.message?.content ?? 'Sin respuesta' } }))
-    } catch (err) {
-      const code = err instanceof Error ? err.message : ''
-      const msg = code === 'INVALID_KEY' ? 'API key no configurada. Ve a Configuración → Asistente IA.' : code === 'RATE_LIMIT' ? 'Límite de requests alcanzado. Intenta en unos segundos.' : 'No se pudo conectar con el asistente IA.'
-      setAnalysisMap(prev => ({ ...prev, [key]: { loading: false, text: msg } }))
+    // Narrative
+    const narratives: Record<string, string> = {
+      riesgo_quiebre: `tiene solo ${item.unidades_actuales.toLocaleString()} uds — al ritmo actual (${Math.round(item.pm3).toLocaleString()} uds/mes) se agota en ${item.dias_inventario} días`,
+      baja_cobertura: `tiene cobertura para ${item.dias_inventario} días, por debajo del umbral`,
+      sin_movimiento: `no se ha movido${item.ultimo_movimiento ? ` desde ${new Date(item.ultimo_movimiento).toLocaleDateString('es-MX')}` : ''} — ${item.unidades_actuales.toLocaleString()} uds paradas en bodega`,
+      lento_movimiento: `se mueve muy lento — ${item.dias_inventario} días de inventario`,
+      normal: `tiene inventario saludable — ${item.dias_inventario} días de cobertura`,
     }
-  }, [configuracion])
+
+    const señales: string[] = []
+    if (catCtx && (catCtx.tendencia === 'colapso' || catCtx.tendencia === 'caida'))
+      señales.push(`Categoría ${item.categoria} en ${catCtx.tendencia}: ${Math.abs(Math.round(catCtx.variacion_pct))}% caída`)
+    if (dormidosConProd.length > 0)
+      señales.push(`${dormidosConProd.map(d => `${d.cliente} (${d.dias_sin_actividad}d)`).join(', ')} — clientes dormidos que compraban este producto`)
+    if (item.clasificacion === 'sin_movimiento' || item.clasificacion === 'lento_movimiento')
+      señales.push(`${item.unidades_actuales.toLocaleString()} uds paradas en bodega — oportunidad de liquidación o empuje`)
+
+    const borderColor = item.clasificacion === 'riesgo_quiebre' ? 'var(--sf-red)' : item.clasificacion === 'normal' ? 'var(--sf-green)' : 'var(--sf-amber)'
+    const content = (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ padding: '12px 14px', borderLeft: `3px solid ${borderColor}`, background: 'rgba(245,158,11,0.06)', borderRadius: '0 8px 8px 0', fontSize: 13, lineHeight: 1.6, color: 'var(--sf-t2)' }}>
+          <strong>{item.producto}</strong> ({clasi}) — {narratives[item.clasificacion] ?? `${item.dias_inventario} días de inventario`}.
+          {catCtx ? ` Categoría ${item.categoria}: ${catCtx.tendencia}.` : ''}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+          {[
+            { label: 'Stock', value: item.unidades_actuales.toLocaleString() },
+            { label: 'PM3', value: `${Math.round(item.pm3).toLocaleString()}/mes` },
+            { label: 'Cobertura', value: item.dias_inventario >= 9999 ? 'Sin mov.' : `${item.dias_inventario}d` },
+          ].map((m, i) => (
+            <div key={i} style={{ padding: '8px 10px', background: 'var(--sf-bg)', borderRadius: 8, border: '1px solid var(--sf-border)' }}>
+              <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--sf-t4)' }}>{m.label}</div>
+              <div style={{ fontSize: 16, fontWeight: 700, fontFamily: "'DM Mono', monospace", color: 'var(--sf-t1)', marginTop: 2 }}>{m.value}</div>
+            </div>
+          ))}
+        </div>
+        {vendedores.length > 0 && (<>
+          <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--sf-t4)', margin: 0 }}>Quién lo vende</p>
+          <div style={{ borderRadius: 8, border: '1px solid var(--sf-border)', overflow: 'hidden' }}>
+            {vendedores.map((v, i) => (
+              <div key={v.vendedor} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 12px', fontSize: 12, borderTop: i ? '1px solid var(--sf-border)' : undefined }}>
+                <span style={{ color: 'var(--sf-t1)' }}>{v.vendedor}</span>
+                <span style={{ color: 'var(--sf-t3)', fontFamily: "'DM Mono', monospace" }}>{v.uds.toLocaleString()} uds</span>
+              </div>
+            ))}
+          </div>
+        </>)}
+        {señales.length > 0 && (<>
+          <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--sf-t4)', margin: 0 }}>Señales</p>
+          {señales.map((s, i) => (
+            <div key={i} style={{ padding: '8px 12px', background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: 6, fontSize: 12, color: 'var(--sf-t2)' }}>{s}</div>
+          ))}
+        </>)}
+      </div>
+    )
+
+    setAnalysisMap(prev => ({ ...prev, [key]: { loading: false, text: 'computed', content } }))
+  }, [sales, selectedPeriod, categoriaAnalysis, vendorAnalysis, clientesDormidos])
 
   const handleToggleExpand = useCallback((key: string) => {
     setExpandedProducto(prev => prev === key ? null : key)
@@ -439,30 +480,24 @@ Reglas:
 
       {/* Filter bar */}
       <div className="flex items-center gap-3 mb-3">
-        <div className="relative flex-1" style={{ minWidth: 200 }}>
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: 'var(--sf-t5)' }} />
-          <input
-            type="text"
-            value={searchText}
-            onChange={e => setSearchText(e.target.value)}
-            placeholder="Buscar producto o código..."
-            autoComplete="off"
-            className="w-full rounded-lg text-sm outline-none transition-colors"
-            style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', color: 'var(--sf-t1)', padding: '8px 12px 8px 36px' }}
-          />
-        </div>
+        <SFSearch
+          value={searchText}
+          onChange={e => setSearchText(e.target.value)}
+          placeholder="Buscar producto o código..."
+          autoComplete="off"
+          className="flex-1"
+          style={{ minWidth: 200, width: '100%' }}
+        />
         {uniqueCategories.length > 1 && (
-          <select
+          <SFSelect
             value={filterCategory ?? ''}
             onChange={e => setFilterCategory(e.target.value || null)}
-            className="rounded-lg text-sm outline-none cursor-pointer"
-            style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', color: 'var(--sf-t1)', padding: '8px 12px', minWidth: 180 }}
           >
             <option value="">Todas las categorías</option>
             {uniqueCategories.map(cat => (
               <option key={cat} value={cat}>{cat}</option>
             ))}
-          </select>
+          </SFSelect>
         )}
       </div>
 

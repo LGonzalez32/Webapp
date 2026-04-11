@@ -475,7 +475,7 @@ export default function VendedorPanel({
               <div className="rounded-lg p-3" style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)' }}>
                 <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t5)' }}>VENTAS {mesLabel}</p>
                 <p style={{ ...mono, fontSize: 24, color: 'var(--sf-t1)', lineHeight: 1 }}>
-                  {showUSD && ventaNetaPeriodo !== null ? `${moneda} ${ventaNetaPeriodo.toLocaleString()}` : v.ventas_periodo.toLocaleString()}
+                  {showUSD && ventaNetaPeriodo !== null ? `${moneda}${ventaNetaPeriodo.toLocaleString()}` : v.ventas_periodo.toLocaleString()}
                 </p>
                 {v.ventas_mes_anterior > 0 && (
                   <p className="text-[10px] mt-1" style={{ color: varColor }}>{varSign}{v.variacion_pct !== null ? `${v.variacion_pct.toFixed(1)}%` : varDiff.toLocaleString()} vs mes anterior</p>

@@ -144,11 +144,11 @@ function CategoriasContent({ categorias, moneda }: { categorias: Array<{ nombre:
           <div key={c.nombre} className="grid text-xs" style={{ gridTemplateColumns: hasUSD ? '1fr 80px 90px' : '1fr 80px', padding: '10px 12px', background: i % 2 === 0 ? 'transparent' : 'var(--sf-overlay-subtle)', borderTop: '1px solid var(--sf-border)' }}>
             <span className="font-medium" style={{ color: 'var(--sf-t1)' }}>{c.nombre}</span>
             <span className="text-right font-semibold" style={{ color: 'var(--sf-red)', fontFamily: "'DM Mono', monospace" }}>-{c.caida.toFixed(1)}%</span>
-            {hasUSD && <span className="text-right" style={{ color: 'var(--sf-t3)', fontFamily: "'DM Mono', monospace" }}>{moneda} {fmtK(c.perdidaUSD)}</span>}
+            {hasUSD && <span className="text-right" style={{ color: 'var(--sf-t3)', fontFamily: "'DM Mono', monospace" }}>{moneda}{fmtK(c.perdidaUSD)}</span>}
           </div>
         ))}
       </div>
-      {hasUSD && <div className="flex justify-end"><span className="text-sm font-bold" style={{ color: 'var(--sf-t1)' }}>Total en riesgo: {moneda} {fmtK(total)}</span></div>}
+      {hasUSD && <div className="flex justify-end"><span className="text-sm font-bold" style={{ color: 'var(--sf-t1)' }}>Total en riesgo: {moneda}{fmtK(total)}</span></div>}
     </div>
   )
 }
@@ -489,20 +489,128 @@ function ZonaSupervisorContent({ data }: { data: PulsoPanelData }) {
 }
 
 function OportunidadContent({ data }: { data: PulsoPanelData }) {
+  const { sales, clientesDormidos, categoriaAnalysis, categoriasInventario, vendorAnalysis } = useAppStore()
+
+  const cross = useMemo(() => {
+    if (!data.cliente || !data.producto) return null
+
+    const comprasProducto = sales.filter(s => s.cliente === data.cliente && s.producto === data.producto)
+    const mesesSet = new Set(comprasProducto.map(s => `${new Date(s.fecha).getFullYear()}-${new Date(s.fecha).getMonth()}`))
+    const totalUdsHist = comprasProducto.reduce((sum, s) => sum + (s.unidades || 0), 0)
+    const promedioMensual = mesesSet.size > 0 ? Math.round(totalUdsHist / mesesSet.size) : 0
+
+    const ultimaCompra = comprasProducto.length > 0
+      ? comprasProducto.sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime())[0]
+      : null
+    const diasDesdeUltimaCompra = ultimaCompra ? Math.floor((Date.now() - new Date(ultimaCompra.fecha).getTime()) / 86400000) : null
+
+    const invItem = categoriasInventario.find(i => i.producto === data.producto)
+    const categoria = invItem?.categoria
+    const clasificacion = invItem?.clasificacion
+    const catInfo = categoria ? categoriaAnalysis.find(c => c.categoria === categoria) : null
+
+    const vendInfo = data.vendedorAsignado ? vendorAnalysis.find(v => v.vendedor === data.vendedorAsignado) : null
+    const metaPct = vendInfo?.cumplimiento_pct != null ? Math.round(vendInfo.cumplimiento_pct) : null
+    const gapMeta = vendInfo?.meta_uds ? Math.round((vendInfo.meta_uds) - (vendInfo.unidades_periodo || 0)) : null
+
+    const dormidoInfo = clientesDormidos.find(c => c.cliente === data.cliente)
+
+    const clientesProducto = new Set(sales.filter(s => s.producto === data.producto && s.cliente).map(s => s.cliente!))
+    const otrosDormidos = clientesDormidos.filter(c => c.cliente !== data.cliente && clientesProducto.has(c.cliente))
+
+    const totalHistCliente = sales.filter(s => s.cliente === data.cliente).reduce((sum, s) => sum + (s.unidades || 0), 0)
+    const pctProducto = totalHistCliente > 0 ? Math.round((totalUdsHist / totalHistCliente) * 100) : 0
+
+    return { promedioMensual, mesesActivos: mesesSet.size, diasDesdeUltimaCompra, categoria, clasificacion, catInfo, vendInfo, metaPct, gapMeta, dormidoInfo, otrosDormidos, pctProducto }
+  }, [sales, clientesDormidos, categoriaAnalysis, categoriasInventario, vendorAnalysis, data.cliente, data.producto])
+
+  const señales: string[] = []
+  if (cross) {
+    if (cross.dormidoInfo) {
+      const label = cross.dormidoInfo.recovery_label === 'alta' ? 'Alta probabilidad' : cross.dormidoInfo.recovery_label === 'recuperable' ? 'Recuperable' : cross.dormidoInfo.recovery_label === 'dificil' ? 'Difícil' : 'Perdido'
+      señales.push(`${data.cliente} lleva ${cross.dormidoInfo.dias_sin_actividad} días sin comprar — Estado: ${label}`)
+    }
+    if ((data.stock ?? 0) > 0 && cross.clasificacion) señales.push(`${data.producto} tiene ${(data.stock ?? 0).toLocaleString()} uds en bodega (${cross.clasificacion.replace(/_/g, ' ')})`)
+    if (cross.pctProducto > 0) señales.push(`Este producto representaba el ${cross.pctProducto}% del volumen histórico de ${data.cliente}`)
+    if (cross.catInfo && cross.catInfo.variacion_pct < -10) señales.push(`Categoría ${cross.categoria} cayó ${Math.abs(Math.round(cross.catInfo.variacion_pct))}%`)
+  }
+
   return (
-    <div className="space-y-5">
-      <div className="rounded-lg p-4" style={{ background: 'var(--sf-green-bg)', border: '1px solid var(--sf-green-border)' }}>
-        <p className="text-sm leading-relaxed" style={{ color: 'var(--sf-t1)' }}>
-          <strong>{data.cliente}</strong> compraba <strong>{data.producto}</strong>. Tienes <strong>{data.stock?.toLocaleString()} uds</strong> en stock con movimiento lento. Oportunidad de reactivación.
+    <div className="space-y-4">
+      {/* Narrative context */}
+      <div style={{ background: 'color-mix(in srgb, var(--sf-green) 8%, transparent)', borderLeft: '3px solid var(--sf-green)', padding: '12px 16px', borderRadius: '0 8px 8px 0' }}>
+        <p style={{ color: 'var(--sf-t2)', fontSize: '13px', lineHeight: 1.5, margin: 0 }}>
+          <strong>{data.cliente}</strong> compraba <strong>{data.producto}</strong>
+          {cross?.promedioMensual ? ` — promedio ${cross.promedioMensual.toLocaleString()} uds/mes durante ${cross.mesesActivos} meses` : ''}.
+          {cross?.diasDesdeUltimaCompra != null ? ` Última compra: hace ${cross.diasDesdeUltimaCompra} días.` : ''}
+          {' '}Tienes {(data.stock ?? 0).toLocaleString()} uds en stock{cross?.clasificacion ? ` (${cross.clasificacion.replace(/_/g, ' ')})` : ''}.
         </p>
       </div>
+
+      {/* Metrics grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        <div className="rounded-lg p-3" style={{ border: '1px solid var(--sf-border)' }}>
+          <div className="text-[10px] uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t4)' }}>Stock disponible</div>
+          <div className="text-xl font-bold" style={{ color: 'var(--sf-t1)', fontFamily: "'DM Mono', monospace" }}>{(data.stock ?? 0).toLocaleString()} <span className="text-xs font-normal" style={{ color: 'var(--sf-t4)' }}>uds</span></div>
+        </div>
+        <div className="rounded-lg p-3" style={{ border: '1px solid var(--sf-border)' }}>
+          <div className="text-[10px] uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t4)' }}>Historial cliente</div>
+          <div className="text-xl font-bold" style={{ color: 'var(--sf-t1)', fontFamily: "'DM Mono', monospace" }}>{(cross?.promedioMensual ?? 0).toLocaleString()} <span className="text-xs font-normal" style={{ color: 'var(--sf-t4)' }}>uds/mes</span></div>
+        </div>
+      </div>
+
+      {/* Why this opportunity */}
+      {señales.length > 0 && (
+        <div>
+          <h3 className="text-[13px] font-semibold uppercase mb-2" style={{ color: 'var(--sf-t3)' }}>¿Por qué esta oportunidad?</h3>
+          {señales.map((s, i) => (
+            <div key={i} className="text-[12px] rounded-md mb-1.5 p-2.5" style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', color: 'var(--sf-t2)' }}>
+              {s}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Vendor info */}
       <div className="rounded-lg p-3" style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)' }}>
         <p className="text-xs" style={{ color: 'var(--sf-t3)' }}>Vendedor asignado: <strong style={{ color: 'var(--sf-t1)' }}>{data.vendedorAsignado}</strong></p>
+        {cross?.vendInfo && cross.metaPct != null && (
+          <p className="text-xs mt-1" style={{ color: 'var(--sf-t4)' }}>
+            {data.vendedorAsignado} está al {cross.metaPct}% de meta
+            {cross.gapMeta != null && cross.gapMeta > 0 ? ` — le faltan ${cross.gapMeta.toLocaleString()} uds` : ''}
+            {cross.promedioMensual > 0 && cross.gapMeta != null && cross.gapMeta > 0 ? `. Reactivar ${data.cliente} cubriría ${Math.min(100, Math.round(cross.promedioMensual / cross.gapMeta * 100))}% de su brecha.` : ''}
+          </p>
+        )}
       </div>
-      <div className="rounded-lg p-3" style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)' }}>
+
+      {/* Action */}
+      <div className="rounded-lg p-3" style={{ background: 'color-mix(in srgb, var(--sf-amber) 8%, transparent)', border: '1px solid var(--sf-amber-border)' }}>
         <p className="text-xs font-semibold" style={{ color: 'var(--sf-t1)' }}>Acción concreta:</p>
-        <p className="text-xs mt-1" style={{ color: 'var(--sf-t3)' }}>Decirle a {data.vendedorAsignado} que llame a {data.cliente} y ofrezca {data.producto}. El producto ya está en bodega.</p>
+        <p className="text-xs mt-1" style={{ color: 'var(--sf-t3)' }}>
+          Decirle a {data.vendedorAsignado} que llame a {data.cliente} y ofrezca {data.producto}. El producto ya está en bodega.
+          {cross?.promedioMensual ? ` Historial del cliente: ${cross.promedioMensual.toLocaleString()} uds/mes.` : ''}
+        </p>
       </div>
+
+      {/* Other dormant clients who bought this product */}
+      {cross && cross.otrosDormidos.length > 0 && (
+        <div>
+          <h3 className="text-[11px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--sf-t5)' }}>Otras oportunidades con este producto</h3>
+          <div className="rounded-lg overflow-hidden" style={{ border: '1px solid var(--sf-border)' }}>
+            {cross.otrosDormidos.slice(0, 3).map((d, i) => (
+              <div key={d.cliente} className="flex items-center justify-between text-xs" style={{ padding: '6px 12px', borderTop: i ? '1px solid var(--sf-border)' : undefined }}>
+                <span style={{ color: 'var(--sf-t1)' }}>{d.cliente}</span>
+                <span style={{ color: 'var(--sf-t4)' }}>{d.dias_sin_actividad} días inactivo</span>
+              </div>
+            ))}
+            {cross.otrosDormidos.length > 3 && (
+              <div className="text-[11px] px-3 py-1.5" style={{ color: 'var(--sf-t5)', borderTop: '1px solid var(--sf-border)' }}>
+                y {cross.otrosDormidos.length - 3} más
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

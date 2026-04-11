@@ -131,7 +131,7 @@ export function computeRadarCards(input: RadarInput): RadarCard[] {
       priority: 90 + Math.min(caida / 5, 10),
       title: `${worst.vendedor} está cayendo`,
       metric: showUSD && valorEnRiesgo > 0
-        ? `${moneda} ${fmtK(valorEnRiesgo)}`
+        ? `${moneda}${fmtK(valorEnRiesgo)}`
         : `${Math.round(caida)}%`,
       metricLabel: showUSD && valorEnRiesgo > 0
         ? 'en riesgo de perderse'
@@ -158,7 +158,7 @@ export function computeRadarCards(input: RadarInput): RadarCard[] {
         type: 'dinero_yendose',
         priority: 85 + Math.min(noCubiertos.length, 10),
         title: `${noCubiertos.length} cliente${noCubiertos.length > 1 ? 's' : ''} dejaron de comprar`,
-        metric: showUSD && totalValor > 0 ? `${moneda} ${fmtK(totalValor)}` : `${noCubiertos.length}`,
+        metric: showUSD && totalValor > 0 ? `${moneda}${fmtK(totalValor)}` : `${noCubiertos.length}`,
         metricLabel: showUSD && totalValor > 0 ? 'en ventas históricas' : 'clientes inactivos',
         detail: `${top.cliente}: ${top.dias_sin_actividad} días sin actividad`,
         severity: 'critical',

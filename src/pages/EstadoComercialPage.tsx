@@ -8,9 +8,10 @@ import type { Insight, InsightTipo, InsightPrioridad, VendorAnalysis } from '../
 import { salesInPeriod } from '../lib/analysis'
 import { callAI } from '../lib/chatService'
 import VendedorPanel from '../components/vendedor/VendedorPanel'
-import { computePulsoCards, type PulsoCard, type PulsoPanelData } from '../lib/pulso-engine'
 import { useDemoPath } from '../lib/useDemoPath'
-import PulsoPanel from '../components/pulso/PulsoPanel'
+import { buildDiagnostic, type DiagnosticBlock } from '../lib/diagnostic-engine'
+import DiagnosticBlockView from '../components/diagnostic/DiagnosticBlock'
+import InsightCardNew from '../components/InsightCardNew'
 import { Calendar, CheckCircle, RotateCcw, ChevronDown, Users, Building2, Star, TrendingUp, TrendingDown, Bell } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAlertStatusStore } from '../store/alertStatusStore'
@@ -140,7 +141,7 @@ function formatAlertaContent(
         : impacto_economico.valor >= 1000
         ? `${(impacto_economico.valor / 1000).toFixed(1)}k`
         : Math.round(impacto_economico.valor).toLocaleString('es-SV')
-      keyData = `${moneda} ${fmt}`
+      keyData = `${moneda}${fmt}`
     } else {
       keyData = impacto_economico.descripcion || `${Math.round(impacto_economico.valor).toLocaleString('es-SV')}`
     }
@@ -246,16 +247,10 @@ export default function EstadoComercialPage() {
     insights, vendorAnalysis, teamStats, dataAvailability,
     configuracion, selectedPeriod, setSelectedPeriod, sales, loadingMessage,
     clientesDormidos, concentracionRiesgo, categoriasInventario, supervisorAnalysis,
-    canalAnalysis, categoriaAnalysis, dataSource,
+    canalAnalysis, categoriaAnalysis, dataSource, tipoMetaActivo,
   } = useAppStore()
 
   const [vendedorPanel, setVendedorPanel] = useState<VendorAnalysis | null>(null)
-  const [pulsoPanel, setPulsoPanel] = useState<PulsoPanelData | null>(null)
-  const [feedFilter, setFeedFilter] = useState<FeedFilterKey>('all')
-  const [statusFilter, setStatusFilter] = useState<StatusFilterKey>('notResolved')
-  const [feedExpanded, setFeedExpanded] = useState(false)
-  const [expandedInsightId, setExpandedInsightId] = useState<string | null>(null)
-  const [analysisMap, setAnalysisMap] = useState<Record<string, { loading: boolean; text: string | null }>>({})
   const [mounted, setMounted] = useState(false)
   const [analysisStep, setAnalysisStep] = useState(0)
 
@@ -338,34 +333,29 @@ export default function EstadoComercialPage() {
 
 
   // â"€â"€ Chips de mes â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-  const maxDate = useMemo(() =>
-    sales.reduce((max, s) => { const d = new Date(s.fecha); return d > max ? d : max }, new Date(0)),
-  [sales])
+  // maxDate y meses disponibles derivados del Worker (off-thread)
+  const fechaRefISO = useAppStore(s => s.fechaRefISO)
+  const monthlyTotals = useAppStore(s => s.monthlyTotals)
+  const monthlyTotalsSameDay = useAppStore(s => s.monthlyTotalsSameDay)
+
+  const maxDate = useMemo(
+    () => fechaRefISO ? new Date(fechaRefISO) : new Date(0),
+    [fechaRefISO],
+  )
   const maxChipMonth = maxDate.getFullYear() === selectedPeriod.year ? maxDate.getMonth() : selectedPeriod.month
 
-  // ── Meses disponibles para el filtro de periodo ──────────────────────────
+  // ── Meses disponibles (derivados del map de totales mensuales) ──────────
   const availableMonths = useMemo(() => {
-    const months = new Set<string>()
-    for (const s of sales) {
-      const y = s.fecha.getFullYear()
-      const m = s.fecha.getMonth()
-      months.add(`${y}-${m}`)
-    }
-    const all = [...months]
+    const all = Object.keys(monthlyTotals)
       .map(k => { const [y, m] = k.split('-').map(Number); return { year: y, month: m } })
       .sort((a, b) => b.year - a.year || b.month - a.month)
-    // Solo mostrar meses del año del dato más reciente
     const latestYear = all[0]?.year ?? new Date().getFullYear()
     return all.filter(am => am.year === latestYear)
-  }, [sales])
+  }, [monthlyTotals])
 
   // â"€â"€ Slices de ventas cacheados (evitar llamadas repetidas a salesInPeriod) â"€
   const salesActual = useMemo(() =>
     salesInPeriod(sales, selectedPeriod.year, selectedPeriod.month),
-  [sales, selectedPeriod.year, selectedPeriod.month])
-
-  const salesAnterior = useMemo(() =>
-    salesInPeriod(sales, selectedPeriod.year - 1, selectedPeriod.month),
   [sales, selectedPeriod.year, selectedPeriod.month])
 
   // â"€â"€ Datos diferidos para secciones secundarias (evita freeze UI) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
@@ -384,16 +374,16 @@ export default function EstadoComercialPage() {
     const diasTranscurridos = teamStats?.dias_transcurridos ?? 1
     const diasTotales       = teamStats?.dias_totales ?? 30
 
-    // Usar slices cacheados — evita 3 pasadas completas sobre sales[]
-    const actual         = salesActual.reduce((a, s) => a + s.unidades, 0)
-    const ingreso_actual = salesActual.reduce((a, s) => a + (s.venta_neta ?? 0), 0)
-    const historico_mes  = salesAnterior.length > 0
-      ? salesAnterior.reduce((a, s) => a + s.unidades, 0)
-      : 0
-    const historico_neto = salesAnterior.length > 0
-      ? salesAnterior.reduce((a, s) => a + (s.venta_neta ?? 0), 0)
-      : 0
-    const anos_base = salesAnterior.length > 0 ? 1 : 0
+    // Derivar de mapas pre-computados off-thread
+    const curKey = `${selectedPeriod.year}-${selectedPeriod.month}`
+    const prevKey = `${selectedPeriod.year - 1}-${selectedPeriod.month}`
+    const curTot = monthlyTotals[curKey]
+    const prevTot = monthlyTotals[prevKey]
+    const actual         = curTot?.uds ?? 0
+    const ingreso_actual = curTot?.neta ?? 0
+    const historico_mes  = prevTot?.uds ?? 0
+    const historico_neto = prevTot?.neta ?? 0
+    const anos_base = prevTot ? 1 : 0
 
     const esperado_a_fecha = diasTotales > 0 && historico_mes > 0
       ? Math.round(historico_mes * (diasTranscurridos / diasTotales))
@@ -437,7 +427,7 @@ export default function EstadoComercialPage() {
       anos_base,
       diasTranscurridos, diasTotales,
     }
-  }, [salesActual, salesAnterior, teamStats])
+  }, [monthlyTotals, selectedPeriod.year, selectedPeriod.month, teamStats])
 
   // â"€â"€ Causas del atraso â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const causasAtraso = useMemo(() => {
@@ -504,23 +494,17 @@ export default function EstadoComercialPage() {
     const fmtK = (n: number) => n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : n.toLocaleString()
     const { year, month } = selectedPeriod // month 0-based
 
-    // Helper para calcular total de unidades en un mes/año
-    const totalMes = (y: number, m: number) => sales
-      .filter(s => { const d = new Date(s.fecha); return d.getFullYear() === y && d.getMonth() === m })
-      .reduce((sum, s) => sum + s.unidades, 0)
-
-    // Helper para calcular venta_neta en un mes/año
-    const totalMesNeto = (y: number, m: number) => sales
-      .filter(s => { const d = new Date(s.fecha); return d.getFullYear() === y && d.getMonth() === m })
-      .reduce((sum, s) => sum + (s.venta_neta ?? 0), 0)
-
-    // Helper para calcular total de unidades en un mes/año hasta un día máximo
-    const totalMesHastaDia = (y: number, m: number, maxDia: number) => sales
-      .filter(s => { const d = new Date(s.fecha); return d.getFullYear() === y && d.getMonth() === m && d.getDate() <= maxDia })
-      .reduce((sum, s) => sum + s.unidades, 0)
+    // Helpers basados en mapas pre-computados off-thread (ya no se itera sales)
+    const totalMes = (y: number, m: number) => monthlyTotals[`${y}-${m}`]?.uds ?? 0
+    const totalMesNeto = (y: number, m: number) => monthlyTotals[`${y}-${m}`]?.neta ?? 0
+    // totalMesHastaDia: el worker pre-computa una versión "same-day-range" capeada
+    // a refDay (la fecha más reciente del dataset). Solo se usa para comparar año
+    // anterior contra el mes en curso, así que el cap coincide con maxDay.
+    const totalMesHastaDia = (y: number, m: number, _maxDia: number) =>
+      monthlyTotalsSameDay[`${y}-${m}`]?.uds ?? 0
 
     // Determinar si el mes seleccionado está incompleto (es el mes "en curso" de los datos)
-    const maxSaleDate = sales.reduce((max, s) => { const d = new Date(s.fecha); return d > max ? d : max }, new Date(0))
+    const maxSaleDate = maxDate
     const isCurrentMonth = year === maxSaleDate.getFullYear() && month === maxSaleDate.getMonth()
     const maxDay = maxSaleDate.getDate()
 
@@ -592,7 +576,7 @@ export default function EstadoComercialPage() {
       varVsAnioAnterior,
       year,
     }
-  }, [sales, selectedPeriod])
+  }, [monthlyTotals, monthlyTotalsSameDay, maxDate, selectedPeriod])
 
   const focosRiesgo = useMemo(() =>
     insights.filter(i => i.prioridad === 'CRITICA' && i.impacto_economico).slice(0, 3),
@@ -1401,151 +1385,25 @@ export default function EstadoComercialPage() {
     return result
   }, [causasAtraso, vendorAnalysis, supervisorAnalysis, clientesDormidos, canalAnalysis, categoriaAnalysis, categoriasInventario, insights, teamStats, dataAvailability, configuracion, deferredSales, selectedPeriod])
 
-  // ── Feed unificado ────────────────────────────────────────────────────────
-  const feedInsights = useMemo(() =>
-    [...insights].sort((a, b) => (PRIORIDAD_ORDER[b.prioridad] || 0) - (PRIORIDAD_ORDER[a.prioridad] || 0)),
-    [insights]
+  // ── Diagnóstico del mes — agrupa los insights en bloques narrativos ─────
+  // (Legacy: se mantiene calculado pero ya no se renderiza en la sección Diagnóstico)
+  const diagnosticBlocks: DiagnosticBlock[] = useMemo(() => {
+    if (!insights?.length) return []
+    return buildDiagnostic(insights, vendorAnalysis)
+  }, [insights, vendorAnalysis])
+
+  const urgentPendingCount = useMemo(
+    () => diagnosticBlocks.filter((b: DiagnosticBlock) => b.severity === 'critical' || b.severity === 'warning').length,
+    [diagnosticBlocks],
   )
 
-  // Helper: obtiene el estado de un insight desde el store
-  const getStatus = useCallback((insight: Insight): AlertStatus => {
-    return alertStatuses[getAlertKey(insight)]?.status ?? 'pending'
-  }, [alertStatuses])
-
-  // Helper: indica si un insight fue reabierto automáticamente
-  const isReopened = useCallback((insight: Insight): boolean => {
-    const key = getAlertKey(insight)
-    return !!alertStatuses[key]?.reopenedAt && alertStatuses[key]?.status === 'pending'
-  }, [alertStatuses])
-
-  const feedFiltered = useMemo(() => {
-    const filterDef = FEED_FILTERS.find(f => f.key === feedFilter) ?? FEED_FILTERS[0]
-    const byType = feedInsights.filter(i => filterDef.match(i))
-
-    // Filtrar por estado
-    const byStatus = byType.filter(i => {
-      const s = alertStatuses[getAlertKey(i)]?.status ?? 'pending'
-      if (statusFilter === 'notResolved') return s !== 'resolved'
-      if (statusFilter === 'following')   return s === 'following'
-      if (statusFilter === 'resolved')    return s === 'resolved'
-      return true
-    })
-
-    // Las resueltas van al final cuando se ven en modo notResolved (no aplica porque las filtramos)
-    // Al ver "todas" sin filtro de estado: resueltas al final
-    let result: Insight[]
-    if (statusFilter === 'notResolved') {
-      result = [
-        ...byStatus.filter(i => getStatus(i) === 'pending'),
-        ...byStatus.filter(i => getStatus(i) === 'following'),
-      ]
-    } else {
-      result = byStatus
-    }
-    // Sort by impact level within each status group
-    result.sort((a, b) => IMPACT_ORDER[getImpactLevel(b)] - IMPACT_ORDER[getImpactLevel(a)])
-    return result
-  }, [feedInsights, feedFilter, alertStatuses, statusFilter, getStatus])
-
-  const feedFilterCounts = useMemo(() => {
-    const counts: Record<FeedFilterKey, number> = { all: feedInsights.length, urgentes: 0, vendedores: 0, productos: 0, clientes: 0, hallazgo: 0 }
-    feedInsights.forEach(i => {
-      if (i.prioridad === 'CRITICA' || i.prioridad === 'ALTA') counts.urgentes++
-      if (i.tipo === 'riesgo_vendedor' || i.tipo === 'riesgo_equipo') counts.vendedores++
-      else if (i.tipo === 'riesgo_producto') counts.productos++
-      else if (i.tipo === 'riesgo_cliente') counts.clientes++
-      else if (i.tipo === 'hallazgo' || i.tipo === 'cruzado' || i.tipo === 'riesgo_meta') counts.hallazgo++
-    })
-    return counts
-  }, [feedInsights])
-
-  const statusCounts = useMemo(() => {
-    const counts = { notResolved: 0, following: 0, resolved: 0 }
-    feedInsights.forEach(i => {
-      const filterDef = FEED_FILTERS.find(f => f.key === feedFilter) ?? FEED_FILTERS[0]
-      if (!filterDef.match(i)) return
-      const s = alertStatuses[getAlertKey(i)]?.status ?? 'pending'
-      if (s === 'resolved') counts.resolved++
-      else if (s === 'following') { counts.following++; counts.notResolved++ }
-      else counts.notResolved++
-    })
-    return counts
-  }, [feedInsights, alertStatuses, feedFilter])
-
-  const pendingCount = useMemo(() =>
-    feedInsights.filter(i => {
-      const s = alertStatuses[getAlertKey(i)]?.status ?? 'pending'
-      return s === 'pending'
-    }).length,
-  [feedInsights, alertStatuses])
-
-  const urgentPendingCount = useMemo(() =>
-    feedInsights.filter(i => {
-      const s = alertStatuses[getAlertKey(i)]?.status ?? 'pending'
-      return s === 'pending' && (i.prioridad === 'CRITICA' || i.prioridad === 'ALTA')
-    }).length,
-  [feedInsights, alertStatuses])
-
-  const handleStatusChange = useCallback(async (
-    insight: Insight,
-    newStatus: AlertStatus,
-    note?: string,
-  ) => {
-    const key = getAlertKey(insight)
-    await setAlertStatus(key, newStatus, note)
-    const labels: Record<AlertStatus, string> = {
-      pending:   '📋 Alerta marcada como pendiente',
-      following: '🔧 Alerta en trabajo',
-      resolved:  '✅ Alerta resuelta',
-    }
-    toast(labels[newStatus])
-    setOpenDropdownKey(null)
-  }, [setAlertStatus])
-
-  const handleAnalyzeInsight = useCallback(async (insight: Insight) => {
-    setAnalysisMap(prev => ({ ...prev, [insight.id]: { loading: true, text: null } }))
-
-    const userPrompt =
-      `Insight: ${insight.titulo}\n` +
-      `Descripción: ${insight.descripcion}\n` +
-      `Tipo: ${insight.tipo} · Prioridad: ${insight.prioridad}\n` +
-      (insight.vendedor ? `Vendedor: ${insight.vendedor}\n` : '') +
-      (insight.cliente ? `Cliente: ${insight.cliente}\n` : '') +
-      (insight.producto ? `Producto: ${insight.producto}\n` : '') +
-      (insight.impacto_economico ? `Impacto: ${configuracion.moneda} ${insight.impacto_economico.valor.toLocaleString()} — ${insight.impacto_economico.descripcion}\n` : '') +
-      (insight.accion_sugerida ? `Acción sugerida: ${insight.accion_sugerida}\n` : '')
-
-    const systemPrompt =
-      `Eres un analista comercial.\n` +
-      `Responde SIEMPRE en este formato exacto, sin introducción ni cierre:\n\n` +
-      `📊 RESUMEN: [Una oración de máximo 15 palabras con el hallazgo principal]\n\n` +
-      `🔺 CRECIMIENTO:\n- [Bullet con dato específico si aplica]\n\n` +
-      `🔻 CAÍDA:\n- [Bullet con dato específico si aplica]\n\n` +
-      `💡 HALLAZGO: [Un dato concreto no obvio — con números específicos]\n\n` +
-      `Reglas:\n` +
-      `- Máximo 120 palabras en total\n` +
-      `- Cada bullet debe tener un número concreto\n` +
-      `- Si una sección no aplica, omítela\n` +
-      `- NUNCA hagas preguntas al usuario\n` +
-      `- NUNCA des instrucciones operativas\n` +
-      `- Responde en español`
-
-    try {
-      const json = await callAI(
-        [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
-        { model: 'deepseek-chat', max_tokens: 300, temperature: 0.3 },
-      )
-      setAnalysisMap(prev => ({ ...prev, [insight.id]: { loading: false, text: json.choices?.[0]?.message?.content ?? 'Sin respuesta' } }))
-    } catch (err) {
-      const code = err instanceof Error ? err.message : ''
-      const msg = code === 'INVALID_KEY'
-        ? 'API key no configurada. Ve a Configuración → Asistente IA.'
-        : code === 'RATE_LIMIT'
-          ? 'Límite de requests alcanzado. Intenta en unos segundos.'
-          : 'No se pudo conectar con el asistente IA.'
-      setAnalysisMap(prev => ({ ...prev, [insight.id]: { loading: false, text: msg } }))
-    }
-  }, [configuracion])
+  // ── Diagnóstico v2: tarjetas individuales basadas en el motor de insights ──
+  const diagInsights: Insight[] = insights ?? []
+  const diagUrgentes = diagInsights.filter(i => i.prioridad === 'CRITICA' || i.prioridad === 'ALTA')
+  const diagAdicionales = diagInsights.filter(i => i.prioridad === 'MEDIA')
+  // BAJA se omite del diagnóstico
+  const diagCriticaCount = diagInsights.filter(i => i.prioridad === 'CRITICA').length
+  const [mostrarAdicionales, setMostrarAdicionales] = useState(false)
 
   // ── YTD chart data (mensual individual: año actual vs anterior) ──
   // Must be before early return to respect Rules of Hooks
@@ -1566,19 +1424,11 @@ export default function EstadoComercialPage() {
       const isPartialMonth = m === latestMonth
       const daysInMonth = new Date(currentYear, m + 1, 0).getDate()
 
-      const ventasActual = sales
-        .filter(s => { const d = new Date(s.fecha); return d.getFullYear() === currentYear && d.getMonth() === m })
-        .reduce((sum, s) => sum + s.unidades, 0)
-
-      // Filtro de día solo para el mes en curso (parcial); meses cerrados se comparan completos
-      const ventasAnterior = sales
-        .filter(s => {
-          const d = new Date(s.fecha)
-          if (d.getFullYear() !== previousYear || d.getMonth() !== m) return false
-          if (isPartialMonth && d.getDate() > maxDay) return false
-          return true
-        })
-        .reduce((sum, s) => sum + s.unidades, 0)
+      const ventasActual = monthlyTotals[`${currentYear}-${m}`]?.uds ?? 0
+      // Same-day-range solo para el mes en curso (parcial); cerrados se comparan completos
+      const ventasAnterior = isPartialMonth
+        ? (monthlyTotalsSameDay[`${previousYear}-${m}`]?.uds ?? 0)
+        : (monthlyTotals[`${previousYear}-${m}`]?.uds ?? 0)
 
       totalActual += ventasActual
       totalAnterior += ventasAnterior
@@ -1593,7 +1443,7 @@ export default function EstadoComercialPage() {
       })
     }
     return { data, totalActual, totalAnterior, maxDay }
-  }, [sales, selectedPeriod.year, selectedPeriod.month, maxDate])
+  }, [monthlyTotals, monthlyTotalsSameDay, selectedPeriod.year, selectedPeriod.month, maxDate])
 
   // ── YTD chart en dólares (solo si has_venta_neta) ──
   const ytdChartUSD = useMemo(() => {
@@ -1609,59 +1459,16 @@ export default function EstadoComercialPage() {
     for (let m = 0; m <= selectedMonth; m++) {
       const isPartialMonth = m === latestMonth
       const daysInMonth = new Date(currentYear, m + 1, 0).getDate()
-      const ventasActual = sales
-        .filter(s => { const d = new Date(s.fecha); return d.getFullYear() === currentYear && d.getMonth() === m })
-        .reduce((sum, s) => sum + (s.venta_neta ?? 0), 0)
-      const ventasAnterior = sales
-        .filter(s => {
-          const d = new Date(s.fecha)
-          if (d.getFullYear() !== previousYear || d.getMonth() !== m) return false
-          if (isPartialMonth && d.getDate() > maxDay) return false
-          return true
-        })
-        .reduce((sum, s) => sum + (s.venta_neta ?? 0), 0)
+      const ventasActual = monthlyTotals[`${currentYear}-${m}`]?.neta ?? 0
+      const ventasAnterior = isPartialMonth
+        ? (monthlyTotalsSameDay[`${previousYear}-${m}`]?.neta ?? 0)
+        : (monthlyTotals[`${previousYear}-${m}`]?.neta ?? 0)
       totalActual += ventasActual
       totalAnterior += ventasAnterior
       data.push({ month: MESES_CORTO[m], actual: ventasActual, anterior: ventasAnterior, isPartial: isPartialMonth, daysElapsed: isPartialMonth ? maxDay : daysInMonth, daysTotal: daysInMonth })
     }
     return { data, totalActual, totalAnterior, maxDay }
-  }, [sales, selectedPeriod.year, selectedPeriod.month, maxDate, dataAvailability.has_venta_neta])
-
-  // ── PULSO cards — must be before early return to respect Rules of Hooks ──
-  const pulsoResult = useMemo(() => {
-    if (!teamStats) return { visible: [] as PulsoCard[], total: 0 }
-    const cumpl = teamStats.meta_equipo
-      ? ((teamStats.proyeccion_equipo ?? vendorAnalysis.reduce((s, v) => s + (v.proyeccion_cierre ?? 0), 0)) / teamStats.meta_equipo) * 100
-      : (teamStats.cumplimiento_equipo ?? 0)
-    const em = {
-      estado: 'sin_base' as string,
-      proyeccion_cierre: 0, actual: 0, historico_mes: 0,
-      diasTranscurridos: teamStats.dias_transcurridos, diasTotales: teamStats.dias_totales,
-      gap_pct: null as number | null, ingreso_actual: 0,
-    }
-    const sliceActual = salesInPeriod(sales, selectedPeriod.year, selectedPeriod.month)
-    const slicePrev = salesInPeriod(sales, selectedPeriod.year - 1, selectedPeriod.month)
-    em.actual = sliceActual.reduce((a, s) => a + s.unidades, 0)
-    em.ingreso_actual = sliceActual.reduce((a, s) => a + (s.venta_neta ?? 0), 0)
-    em.historico_mes = slicePrev.reduce((a, s) => a + s.unidades, 0)
-    const ritmo = teamStats.dias_transcurridos > 0 ? em.actual / teamStats.dias_transcurridos : 0
-    em.proyeccion_cierre = Math.round(ritmo * teamStats.dias_totales)
-    const esperado = teamStats.dias_totales > 0 && em.historico_mes > 0
-      ? Math.round(em.historico_mes * (teamStats.dias_transcurridos / teamStats.dias_totales)) : 0
-    em.gap_pct = esperado > 0 ? Math.round(((em.actual - esperado) / esperado) * 100) : null
-    const ratio = esperado > 0 ? em.actual / esperado : null
-    em.estado = ratio === null ? 'sin_base' : ratio >= 1.05 ? 'adelantado' : ratio >= 0.85 ? 'en_linea' : 'atrasado'
-    const sUSD = configuracion.metricaGlobal === 'usd' && dataAvailability.has_venta_neta && !!ytdChartUSD
-    return computePulsoCards({
-      vendorAnalysis, teamStats, clientesDormidos, concentracionRiesgo,
-      categoriasInventario, canalAnalysis, supervisorAnalysis, insights, dataAvailability,
-      moneda: configuracion.moneda, showUSD: sUSD, estadoMes: em, cumplimientoFinal: cumpl,
-      sales, selectedPeriod,
-    })
-  }, [teamStats, vendorAnalysis, clientesDormidos, concentracionRiesgo,
-    categoriasInventario, canalAnalysis, supervisorAnalysis, insights, dataAvailability,
-    configuracion.moneda, configuracion.metricaGlobal, ytdChartUSD,
-    sales, selectedPeriod])
+  }, [monthlyTotals, monthlyTotalsSameDay, selectedPeriod.year, selectedPeriod.month, maxDate, dataAvailability.has_venta_neta])
 
   if (!teamStats) {
     if (sales.length === 0) return null // el useEffect redirige a /cargar
@@ -1763,8 +1570,11 @@ export default function EstadoComercialPage() {
   const fechaComp = new Date(selectedPeriod.year - 1, selectedPeriod.month, maxDate.getDate())
   const fechaCompLabel = `${fechaComp.getDate()} de ${MESES_LARGO[fechaComp.getMonth()]} de ${fechaComp.getFullYear()}`
 
-  const cumplimientoFinal = teamStats?.meta_equipo
-    ? (proyFinal / teamStats.meta_equipo) * 100
+  // Proyección en la unidad activa: USD → proyeccion_neta, Uds → proyFinal (unidades)
+  const proyActiva = tipoMetaActivo === 'usd' && dataAvailability.has_venta_neta ? proyeccion_neta : proyFinal
+  const metaActiva = teamStats?.meta_equipo_total ?? teamStats?.meta_equipo ?? 0
+  const cumplimientoFinal = metaActiva > 0
+    ? (proyActiva / metaActiva) * 100
     : (teamStats?.cumplimiento_equipo ?? 0)
 
 
@@ -1809,22 +1619,7 @@ export default function EstadoComercialPage() {
         </>
       )}
 
-      {/* PulsoPanel — categorías / inventario */}
-      {pulsoPanel && (
-        <>
-          <div className="fixed inset-0 bg-black/60 z-40" onClick={() => setPulsoPanel(null)} />
-          <PulsoPanel
-            data={pulsoPanel}
-            moneda={configuracion.moneda}
-            onClose={() => setPulsoPanel(null)}
-            onChat={(q) => {
-              setPulsoPanel(null)
-              const isDemo = location.pathname.startsWith('/demo')
-              navigate(`${isDemo ? '/demo' : ''}/chat`, { state: { prefill: q, source: 'Pulso' } })
-            }}
-          />
-        </>
-      )}
+
 
       {/* â"€â"€ CONTENIDO PRINCIPAL â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€ */}
       <div style={{ fontFamily: "'Inter', sans-serif" }}>
@@ -1839,7 +1634,7 @@ export default function EstadoComercialPage() {
         </span>
         {urgentPendingCount > 0 ? (
           <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.2)' }}>
-            ⚠ Atención — {urgentPendingCount} alerta{urgentPendingCount > 1 ? 's' : ''} urgente{urgentPendingCount > 1 ? 's' : ''}
+            ⚠ Atención — {urgentPendingCount} {urgentPendingCount === 1 ? 'diagnóstico urgente' : 'diagnósticos urgentes'}
           </span>
         ) : insights.length > 0 ? (
           <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: 'var(--sf-green-bg)', color: 'var(--sf-green)', border: '1px solid var(--sf-green-border)' }}>
@@ -1923,17 +1718,17 @@ export default function EstadoComercialPage() {
         {(() => {
           const mainUds  = ytdChart.totalActual
           const mainNeto = ytd_neto
-          // Usar siempre activeYtdPct para que KPI y gráfica muestren el mismo porcentaje
           const varPct   = activeYtdPct
-          const label = `YTD — vs mismo periodo ${selectedPeriod.year - 1}`
+          const fechaRefAnterior = `${maxDate.getDate()} ${MESES_CORTO[maxDate.getMonth()].toLowerCase()}`
+          const kpiUSD = tipoMetaActivo === 'usd' && dataAvailability.has_venta_neta && mainNeto > 0
           return (
             <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
               <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t5)' }}>
-                Ventas YTD
+                Ventas {selectedPeriod.year} — acumulado al día {teamStats.dias_transcurridos}
               </p>
-              {showUSD && mainNeto > 0 ? (
+              {kpiUSD ? (
                 <p className="text-2xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-t1)' }}>
-                  {configuracion.moneda} {fmtBig(mainNeto)}
+                  {configuracion.moneda}{fmtBig(mainNeto)}
                 </p>
               ) : (
                 <p className="text-2xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-t1)' }}>
@@ -1941,79 +1736,62 @@ export default function EstadoComercialPage() {
                 </p>
               )}
               {varPct != null && (
-                <p className="text-xs font-semibold mt-1.5" style={{ color: varPct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
-                  {varPct >= 0 ? '+' : ''}{varPct.toFixed(1)}% <span style={{ color: 'var(--sf-t5)', fontWeight: 400 }}>{label}</span>
-                </p>
-              )}
-              {comparacionMes && comparacionMes.mesPrevTotal > 0 && (
-                <p className="text-[10px] mt-1" style={{ color: comparacionMes.variacion >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
-                  vs {comparacionMes.mesPrevNombre}: {comparacionMes.variacion >= 0 ? '+' : ''}{comparacionMes.variacion.toFixed(1)}%
+                <p className="text-base font-semibold mt-1.5" style={{ color: varPct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
+                  {varPct >= 0 ? '+' : ''}{varPct.toFixed(1)}% <span className="text-xs" style={{ color: 'var(--sf-t5)', fontWeight: 400 }}>vs 1 ene–{fechaRefAnterior} {selectedPeriod.year - 1}</span>
                 </p>
               )}
             </div>
           )
         })()}
 
-        {/* Card 3 — PROYECCIÓN CIERRE */}
+        {/* Card 2 — PROYECCIÓN CIERRE */}
         {(() => {
           const hasNeta = dataAvailability.has_venta_neta
-          const proyVal = hasNeta ? proyeccion_neta : estadoMes.proyeccion_cierre
-          const hasMeta = !!teamStats?.meta_equipo && teamStats.meta_equipo > 0
-          const metaVal = hasMeta ? teamStats!.meta_equipo! : 0
-          const proyVsMetaPct = hasMeta ? Math.round((proyFinal / metaVal) * 100) : null
-          const metaColor = proyVsMetaPct !== null ? (proyVsMetaPct >= 100 ? 'var(--sf-green)' : 'var(--sf-red)') : 'var(--sf-t1)'
-          const belowMeta = proyVsMetaPct !== null && proyVsMetaPct < 100
-          // Brecha en USD (estimada con ratio promedio ytd)
-          const avgRevPerUnit = ytd_neto > 0 && ytdChart.totalActual > 0 ? ytd_neto / ytdChart.totalActual : 0
-          const metaNeta = avgRevPerUnit > 0 ? Math.round(metaVal * avgRevPerUnit) : 0
-          const brechaNeta = hasNeta && metaNeta > 0 ? proyeccion_neta - metaNeta : null
-          const brechaUnits = proyFinal - metaVal
+          const mesNombre = MESES_CORTO[selectedPeriod.month].toUpperCase()
+          const card2USD = tipoMetaActivo === 'usd' && hasNeta
+          const mtdVal = card2USD ? estadoMes.ingreso_actual : estadoMes.actual
+          const proyVal = card2USD ? proyeccion_neta : estadoMes.proyeccion_cierre
           return (
             <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
-              <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t5)' }}>Proyección cierre</p>
-              <p className="text-2xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: metaColor }}>
-                {showUSD && hasNeta
-                  ? `${configuracion.moneda} ${Math.round(proyeccion_neta).toLocaleString('es-SV')}`
-                  : <>{Math.round(estadoMes.proyeccion_cierre).toLocaleString('es-SV')}<span className="text-sm font-normal ml-1" style={{ color: 'var(--sf-t5)' }}>uds</span></>
+              <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t5)' }}>
+                Proyección de cierre — {mesNombre} {selectedPeriod.year}
+              </p>
+              <p className="text-sm mt-0.5 mb-1" style={{ color: 'var(--sf-t3)' }}>
+                Llevas {card2USD ? `${configuracion.moneda}${fmtBig(mtdVal)}` : `${mtdVal.toLocaleString()} uds`} en {teamStats.dias_transcurridos} días
+              </p>
+              <p className="text-2xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-green)' }}>
+                {card2USD
+                  ? `${configuracion.moneda}${Math.round(proyVal).toLocaleString('es-SV')}`
+                  : <>{Math.round(proyVal).toLocaleString('es-SV')}<span className="text-sm font-normal ml-1" style={{ color: 'var(--sf-t5)' }}>uds</span></>
                 }
               </p>
-              {proyVsMetaPct !== null ? (
-                belowMeta ? (
-                  <p className="text-xs font-semibold mt-1" style={{ color: 'var(--sf-red)' }}>
-                    {showUSD && brechaNeta !== null
-                      ? `${configuracion.moneda} ${Math.abs(Math.round(brechaNeta)).toLocaleString('es-SV')} vs meta`
-                      : `${Math.abs(brechaUnits).toLocaleString('es-SV')} uds vs meta`
-                    }
-                  </p>
-                ) : (
-                  <p className="text-xs font-semibold mt-1" style={{ color: 'var(--sf-green)' }}>
-                    vs meta: {proyVsMetaPct}%
-                  </p>
-                )
-              ) : (
-                <p className="text-xs mt-1" style={{ color: 'var(--sf-t5)' }}>Sin meta configurada</p>
-              )}
+              <p className="text-xs mt-1" style={{ color: 'var(--sf-t4)' }}>
+                proyección al día {teamStats.dias_totales}
+              </p>
             </div>
           )
         })()}
 
-        {/* Card 4 — META DEL MES */}
+        {/* Card 3 — META DEL MES */}
         <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
-          <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t5)' }}>Meta del mes</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t5)' }}>
+            Meta — {MESES_CORTO[selectedPeriod.month].toUpperCase()}
+          </p>
           {teamStats?.meta_equipo ? (
             <>
               <p className="text-2xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: cumplimientoFinal >= 100 ? 'var(--sf-green)' : cumplimientoFinal >= 70 ? 'var(--sf-t1)' : 'var(--sf-red)' }}>
                 {Math.round(cumplimientoFinal)}%
               </p>
-              <p className="text-xs mt-1" style={{ color: 'var(--sf-t4)' }}>
-                {showUSD && estadoMes.ingreso_actual > 0
-                  ? `${configuracion.moneda} ${fmtBig(estadoMes.ingreso_actual)} / ${configuracion.moneda} ${fmtBig(teamStats.meta_equipo)}`
-                  : `${estadoMes.actual.toLocaleString()} / ${teamStats.meta_equipo.toLocaleString()} uds`
+              <p className="text-sm mt-1" style={{ color: 'var(--sf-t2)' }}>
+                {tipoMetaActivo === 'usd' && dataAvailability.has_venta_neta
+                  ? `Meta: ${configuracion.moneda}${fmtBig(metaActiva)}`
+                  : `Meta: ${Math.round(metaActiva).toLocaleString()} uds`
                 }
               </p>
               <div className="mt-2 rounded-full overflow-hidden" style={{ height: 4, background: 'var(--sf-inset)' }}>
                 <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(cumplimientoFinal, 100)}%`, background: cumplimientoFinal >= 100 ? 'var(--sf-green)' : cumplimientoFinal >= 70 ? '#eab308' : 'var(--sf-red)' }} />
               </div>
+              <p className="text-[10px] mt-1.5 italic" style={{ color: 'var(--sf-t4)' }}>Así proyectas cerrar el mes</p>
             </>
           ) : (
             <p className="text-sm mt-1" style={{ color: 'var(--sf-t5)' }}>Sin meta configurada</p>
@@ -2083,7 +1861,7 @@ export default function EstadoComercialPage() {
                       const valActual = Number(actualEntry?.value ?? 0)
                       const pct = valAnterior > 0 ? ((valActual - valAnterior) / valAnterior) * 100 : null
                       const fmtVal = (v: number) => showUSD
-                        ? `${configuracion.moneda} ${v.toLocaleString('es-SV')}`
+                        ? `${configuracion.moneda}${v.toLocaleString('es-SV')}`
                         : `${v.toLocaleString('es-SV')} uds`
                       return (
                         <div style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderRadius: 10, padding: '12px 16px', boxShadow: '0 4px 12px rgba(0,0,0,0.3)', minWidth: 160 }}>
@@ -2147,463 +1925,66 @@ export default function EstadoComercialPage() {
             <p className="text-[12px] italic flex-1 flex items-center" style={{ color: 'var(--sf-t5)' }}>Primer período analizado — sin historial comparable</p>
           )}
 
-          {activeYtdChart.totalActual > 0 && (
-            <div className="flex items-center justify-between mt-2 text-xs">
-              <span style={{ color: 'var(--sf-t3)' }}>
-                {showUSD
-                  ? `${configuracion.moneda} ${activeYtdChart.totalActual.toLocaleString('es-SV')} acumulados`
-                  : `${activeYtdChart.totalActual.toLocaleString('es-SV')} uds acumuladas`
-                }
-              </span>
-              {activeYtdPct !== null && (
-                <span style={{ fontFamily: "'DM Mono', monospace", fontWeight: 600, color: activeYtdUp ? '#10B981' : '#ef4444' }}>
-                  {activeYtdUp ? '+' : ''}{activeYtdPct.toFixed(1)}% vs misma fecha {selectedPeriod.year - 1}
-                </span>
-              )}
-            </div>
-          )}
         </div>
       </div>
 
-      {/* ── PULSO ─────────────────────────────────────────────────────────── */}
-      {pulsoResult.visible.length > 0 && (
-        <div className="intel-fade" style={{ animationDelay: '100ms' }}>
-          <div className="flex items-center gap-2 mb-3">
-            <span className="pulse-danger" style={{ fontSize: 14, color: pulsoResult.visible.filter(c => c.severity === 'critical').length >= 3 ? 'var(--sf-red)' : pulsoResult.visible.some(c => c.severity === 'critical') ? 'var(--sf-amber)' : 'var(--sf-green)' }}>◉</span>
-            <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--sf-t5)' }}>Pulso</p>
-            <span className="text-[9px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'var(--sf-overlay-light)', color: 'var(--sf-t4)' }}>{pulsoResult.total} señales</span>
-            {estadoMes.estado !== 'sin_base' && (
-              <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded" style={{
-                color: estadoMes.estado === 'atrasado' ? 'var(--sf-red)' : estadoMes.estado === 'adelantado' ? 'var(--sf-green)' : 'var(--sf-t4)',
-                background: estadoMes.estado === 'atrasado' ? 'var(--sf-red-bg)' : estadoMes.estado === 'adelantado' ? 'var(--sf-green-bg)' : 'var(--sf-overlay-light)',
-              }}>
-                {estadoMes.estado === 'atrasado' ? '↓ Atraso' : estadoMes.estado === 'adelantado' ? '↑ Adelanto' : '→ En línea'}
+      {/* ── DIAGNÓSTICO DEL MES (v2: tarjetas individuales) ─────────────── */}
+      {diagInsights.length > 0 && (
+        <section className="intel-fade space-y-3" style={{ animationDelay: '100ms' }}>
+          {/* Encabezado */}
+          <div className="flex items-center gap-3 pb-1">
+            <span className="text-[13px] font-semibold uppercase tracking-wider text-[var(--sf-text-muted)]">
+              DIAGNÓSTICO DEL MES
+            </span>
+            <span className="text-[12px] font-medium px-2 py-0.5 rounded-full bg-[var(--sf-bg)] border border-[var(--sf-border)] text-[var(--sf-text-muted)]">
+              {diagUrgentes.length + (mostrarAdicionales ? diagAdicionales.length : 0)} hallazgos
+            </span>
+            {diagCriticaCount > 0 && (
+              <span className="text-[12px] font-semibold px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">
+                {diagCriticaCount} {diagCriticaCount === 1 ? 'urgente' : 'urgentes'}
               </span>
             )}
           </div>
-          {/* ── Pulso Cards Grid ──────────────────────────────────────── */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-1">
-            {pulsoResult.visible.map((card) => {
-              const sevColors: Record<string, { border: string; accent: string; bg: string }> = {
-                critical: { border: 'var(--sf-red-border)', accent: 'var(--sf-red)', bg: 'var(--sf-red-bg)' },
-                warning:  { border: 'var(--sf-amber-border)', accent: 'var(--sf-amber)', bg: 'var(--sf-amber-bg)' },
-                positive: { border: 'var(--sf-green-border)', accent: 'var(--sf-green)', bg: 'var(--sf-green-bg)' },
-                info:     { border: 'var(--sf-border)', accent: 'var(--sf-t4)', bg: 'var(--sf-overlay-light)' },
-              }
-              const sc = sevColors[card.severity]
-              const isDemo = location.pathname.startsWith('/demo')
-              const prefix = isDemo ? '/demo' : ''
-              return (
-                <div
-                  key={card.type}
-                  className="rounded-xl p-4 cursor-pointer transition-all duration-200 group"
-                  style={{
-                    background: 'var(--sf-card)',
-                    borderTop: '1px solid var(--sf-border)',
-                    borderRight: '1px solid var(--sf-border)',
-                    borderBottom: '1px solid var(--sf-border)',
-                    borderLeft: `3px solid ${sc.accent}`,
-                  }}
-                  onClick={() => {
-                    if (card.action.type === 'panel') {
-                      if (card.entityType === 'vendedor' && card.entityId) {
-                        const va = vendorAnalysis.find(v => v.vendedor === card.entityId)
-                        if (va) setVendedorPanel(va)
-                      }
-                    } else if (card.action.type === 'pulso_panel' && card.action.panelData) {
-                      setPulsoPanel(card.action.panelData)
-                    } else if (card.action.type === 'chat') {
-                      navigate(`${prefix}/chat`, { state: { prefill: card.action.target, source: 'Pulso' } })
-                    }
-                  }}
-                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.boxShadow = '0 4px 12px rgba(0,0,0,0.08)' }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.boxShadow = '' }}
-                >
-                  <div className="flex items-start justify-between mb-2">
-                    <p className="text-[12px] font-semibold leading-snug" style={{ color: 'var(--sf-t1)' }}>{card.title}</p>
-                    {card.tag && (
-                      <span className="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded shrink-0 ml-2" style={{ background: sc.bg, color: sc.accent }}>
-                        {card.tag}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-baseline gap-2 mb-1.5">
-                    <span className="text-xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: sc.accent }}>
-                      {card.metric}
-                    </span>
-                    <span className="text-[10px]" style={{ color: 'var(--sf-t5)' }}>{card.metricLabel}</span>
-                  </div>
-                  <p className="text-[11px] leading-relaxed" style={{ color: 'var(--sf-t4)' }}>{card.detail}</p>
-                  <p className="text-[10px] font-medium mt-2 opacity-0 group-hover:opacity-100 transition-opacity" style={{ color: 'var(--sf-green)' }}>
-                    {card.action.label} →
-                  </p>
-                </div>
-              )
-            })}
+
+          {/* Tarjetas urgentes — CRITICA y ALTA */}
+          <div className="space-y-2.5">
+            {diagUrgentes.map((ins, idx) => (
+              <InsightCardNew
+                key={ins.id}
+                insight={ins}
+                defaultOpen={idx === 0 && ins.prioridad === 'CRITICA'}
+              />
+            ))}
           </div>
-          {/* +N señales más */}
-          {pulsoResult.total > pulsoResult.visible.length && (
-            <button
-              onClick={() => {
-                const el = document.getElementById('sf-alertas')
-                if (el) el.scrollIntoView({ behavior: 'smooth' })
-              }}
-              className="w-full text-center py-3 mt-2 text-xs font-medium cursor-pointer transition-colors hover:underline"
-              style={{ color: 'var(--sf-t5)' }}
-            >
-              +{pulsoResult.total - pulsoResult.visible.length} señales más →
-            </button>
+
+          {/* Hallazgos adicionales — MEDIA */}
+          {diagAdicionales.length > 0 && (
+            <>
+              <button
+                onClick={() => setMostrarAdicionales(v => !v)}
+                className="w-full text-left text-[13px] font-medium text-[var(--sf-text-muted)] py-2.5 flex items-center gap-2 hover:text-[var(--sf-text)] transition-colors"
+              >
+                <span className="flex-1">
+                  {mostrarAdicionales ? '▲ Ocultar' : '▼ Ver'} {diagAdicionales.length} hallazgos adicionales
+                </span>
+              </button>
+              {mostrarAdicionales && (
+                <div className="space-y-2.5">
+                  {diagAdicionales.map(ins => (
+                    <InsightCardNew key={ins.id} insight={ins} />
+                  ))}
+                </div>
+              )}
+            </>
           )}
-        </div>
+        </section>
       )}
 
+      {/* DiagnosticBlockView legacy (no renderizado, conservado para no romper imports) */}
+      {false && diagnosticBlocks.length > 0 && (
+        <DiagnosticBlockView block={diagnosticBlocks[0]} defaultExpanded={false} />
+      )}
 
-
-      {/* ── ALERTAS Y OPORTUNIDADES ──────────────────────────────────── */}
-      <div id="sf-alertas" style={{ borderTop: '1px solid var(--sf-border)' }} />
-
-      <div className="intel-fade space-y-3" style={{ animationDelay: '160ms' }}>
-        {/* Header */}
-        <div className="flex items-center gap-2">
-          <Bell className="w-3.5 h-3.5" style={{ color: 'var(--sf-t5)' }} />
-          <p className="text-[11px] font-bold uppercase tracking-[0.15em]" style={{ color: 'var(--sf-t5)' }}>
-            Alertas y Oportunidades
-          </p>
-          <FirstTimeTooltip
-            storageKey="sf_tip_inteligencia"
-            text="Estas son alertas sobre riesgos y oportunidades que detectamos. Marcalas como atendidas cuando tomes accion"
-          />
-        </div>
-
-        {/* Text-underline tabs */}
-        <div className="flex gap-0 border-b" style={{ borderColor: 'var(--sf-border)' }}>
-          {([
-            { key: 'all'        as FeedFilterKey, label: 'Todas',         count: feedFilterCounts.all },
-            { key: 'urgentes'   as FeedFilterKey, label: 'Urgentes',      count: feedFilterCounts.urgentes },
-            { key: 'vendedores' as FeedFilterKey, label: 'Equipo',        count: feedFilterCounts.vendedores },
-            { key: 'hallazgo'   as FeedFilterKey, label: 'Oportunidades', count: feedFilterCounts.hallazgo },
-          ]).filter(t => t.key === 'all' || t.count > 0).map(tab => {
-            const isActive = feedFilter === tab.key
-            return (
-              <button
-                key={tab.key}
-                onClick={() => { setFeedFilter(tab.key); setFeedExpanded(false) }}
-                className="px-3 py-2 text-xs font-medium cursor-pointer transition-colors duration-150 relative"
-                style={{ color: isActive ? 'var(--sf-t1)' : 'var(--sf-t5)', background: 'transparent', border: 'none' }}
-              >
-                {tab.label}
-                {tab.count > 0 && (
-                  <span className="ml-1.5 text-[10px]" style={{ color: isActive ? 'var(--sf-t3)' : 'var(--sf-t6)', fontFamily: "'DM Mono', monospace" }}>
-                    {tab.count}
-                  </span>
-                )}
-                {isActive && (
-                  <span className="absolute bottom-0 left-0 right-0 h-0.5 rounded-t" style={{ background: 'var(--sf-green)' }} />
-                )}
-              </button>
-            )
-          })}
-        </div>
-
-        {/* Feed rows — tiered by impact */}
-        <div className="space-y-2">
-          {(() => {
-            const TOP_COUNT = 3
-            const visibleItems = feedExpanded ? feedFiltered : feedFiltered.slice(0, TOP_COUNT)
-            const remainingCount = feedFiltered.length - TOP_COUNT
-
-            return (
-              <>
-                {visibleItems.map((insight, idx) => {
-                  const accent = getAccentColor(insight.tipo)
-                  const label = getFeedLabel(insight.tipo)
-                  const isExpanded = expandedInsightId === insight.id
-                  const analysis = analysisMap[insight.id]
-                  const isHallazgo = insight.tipo === 'hallazgo'
-                  const insightStatus = getStatus(insight)
-                  const insightReopened = isReopened(insight)
-                  const isResolved = insightStatus === 'resolved'
-                  const isFollowing = insightStatus === 'following'
-                  const accentBar = isResolved ? '#22c55e' : isFollowing ? '#f59e0b' : accent
-                  const impact = getImpactLevel(insight)
-
-                  // Visual tier styles
-                  const barWidth = impact === 'alto' ? 'w-1' : impact === 'medio' ? 'w-[3px]' : 'w-[2px]'
-                  const barColor = isResolved ? '#22c55e' : isFollowing ? '#f59e0b'
-                    : impact === 'alto' ? '#ef4444' : impact === 'medio' ? '#f59e0b' : 'var(--sf-t6)'
-                  const cardPadding = impact === 'alto' ? 'p-5' : impact === 'bajo' ? 'p-3' : 'p-4'
-                  const titleSize = impact === 'alto' ? 'text-base font-bold' : impact === 'bajo' ? 'text-[13px] font-medium' : 'text-sm font-semibold'
-                  const descSize = impact === 'bajo' ? 'text-xs' : 'text-[13px]'
-                  const cardBg = isExpanded ? 'var(--sf-overlay-light)'
-                    : impact === 'alto' && !isResolved ? 'rgba(239,68,68,0.04)' : 'var(--sf-overlay-subtle)'
-                  const cardBorder = isResolved ? 'rgba(34,197,94,0.2)' : isFollowing ? 'rgba(245,158,11,0.2)'
-                    : impact === 'alto' ? 'rgba(239,68,68,0.2)' : 'var(--sf-border-subtle)'
-                  const cardShadow = impact === 'alto' && !isResolved ? '0 1px 4px rgba(239,68,68,0.08)' : 'none'
-
-                  // Group separator headers when expanded
-                  let groupHeader: string | null = null
-                  if (feedExpanded && idx > 0) {
-                    const prevImpact = getImpactLevel(visibleItems[idx - 1])
-                    if (prevImpact !== impact) {
-                      groupHeader = impact === 'medio' ? 'Riesgo medio' : impact === 'bajo' ? 'Informativas' : null
-                    }
-                  }
-                  if (feedExpanded && idx === TOP_COUNT && impact !== 'alto') {
-                    // First item after the fold — always show header if not alto
-                    if (!groupHeader) {
-                      groupHeader = impact === 'medio' ? 'Riesgo medio' : impact === 'bajo' ? 'Informativas' : null
-                    }
-                  }
-
-                  return (
-                    <div key={insight.id}>
-                      {groupHeader && (
-                        <div className="flex items-center gap-3 pt-3 pb-1">
-                          <div className="h-px flex-1" style={{ background: 'var(--sf-border)' }} />
-                          <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: 'var(--sf-t6)' }}>
-                            {groupHeader}
-                          </span>
-                          <div className="h-px flex-1" style={{ background: 'var(--sf-border)' }} />
-                        </div>
-                      )}
-                      <div
-                        className="intel-fade flex items-stretch rounded-xl cursor-pointer transition-all duration-200 relative"
-                        style={{
-                          animationDelay: `${idx * 30}ms`,
-                          border: `1px solid ${cardBorder}`,
-                          background: cardBg,
-                          opacity: isResolved ? 0.6 : 1,
-                          boxShadow: cardShadow,
-                          zIndex: openDropdownKey === getAlertKey(insight) ? 60 : undefined,
-                        }}
-                        onClick={() => setExpandedInsightId(isExpanded ? null : insight.id)}
-                      >
-                        {/* Accent bar — width varies by impact */}
-                        <div className={`${barWidth} shrink-0 rounded-l-xl`} style={{ background: barColor }} />
-
-                        {/* Content */}
-                        <div className={`flex-1 min-w-0 ${cardPadding}`}>
-                          {/* Title + status badges */}
-                          <div className="flex items-start gap-2 mb-1.5 flex-wrap">
-                            <span className={`${titleSize} leading-snug flex-1`} style={{ color: 'var(--sf-t1)' }}>
-                              {getAlertaTitle(insight)}
-                            </span>
-                            {isFollowing && (
-                              <span className="inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded shrink-0"
-                                style={{ color: '#f59e0b', background: 'rgba(245,158,11,0.12)' }}>
-                                🔧 En trabajo
-                              </span>
-                            )}
-                            {isResolved && (
-                              <span className="inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded shrink-0"
-                                style={{ color: '#22c55e', background: 'rgba(34,197,94,0.12)' }}>
-                                ✅ Resuelta
-                              </span>
-                            )}
-                            {insightReopened && (
-                              <span className="inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded shrink-0"
-                                style={{ color: '#f97316', background: 'rgba(249,115,22,0.12)' }}>
-                                <RotateCcw className="w-2.5 h-2.5" /> Reabierta
-                              </span>
-                            )}
-                            {idx < 3 && !isResolved && (() => {
-                              // Urgency badge for top 3 alerts
-                              const isCriticoVendedor = insight.tipo === 'riesgo_vendedor' && insight.prioridad === 'CRITICA'
-                              const isCruzadoCritico = insight.tipo === 'cruzado' && insight.prioridad === 'CRITICA'
-                              const isMetaBaja = insight.tipo === 'riesgo_equipo' || insight.tipo === 'riesgo_meta'
-                              const isProductoColapso = insight.tipo === 'riesgo_producto' && insight.prioridad === 'CRITICA'
-                              if (isCriticoVendedor || isCruzadoCritico) {
-                                return <span className="text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0" style={{ color: '#ef4444', background: 'rgba(239,68,68,0.12)' }}>Actuar hoy</span>
-                              }
-                              if (isMetaBaja || isProductoColapso) {
-                                return <span className="text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0" style={{ color: '#f59e0b', background: 'rgba(245,158,11,0.12)' }}>Esta semana</span>
-                              }
-                              return null
-                            })()}
-                          </div>
-
-                          {/* Summary + key datum */}
-                          {(() => {
-                            const { summary, keyData, keyLabel } = formatAlertaContent(insight, showUSD, configuracion.moneda)
-                            return (
-                              <>
-                                <p className="text-[12px] leading-relaxed mb-1.5" style={{ color: 'var(--sf-t4)' }}>
-                                  {summary}
-                                </p>
-                                {keyData && (
-                                  <div className="flex items-baseline gap-2">
-                                    <p className="text-base font-semibold leading-tight" style={{ color: 'var(--sf-t1)', fontFamily: "'DM Mono', monospace" }}>
-                                      {keyData}
-                                    </p>
-                                    {keyLabel && (
-                                      <span className="text-[10px]" style={{ color: 'var(--sf-t5)' }}>{keyLabel}</span>
-                                    )}
-                                  </div>
-                                )}
-                              </>
-                            )
-                          })()}
-
-                          {/* Action row: nav link + explain with AI */}
-                          <div className="flex items-center mt-2 gap-3">
-                            {(() => {
-                              const entityName = insight.titulo.includes(' — ') ? insight.titulo.split(' — ').pop()!.trim() : null
-                              const navLink = insight.tipo === 'riesgo_vendedor'
-                                ? { label: entityName ? `${entityName} →` : 'Ver vendedores →', path: `/vendedores${entityName ? `?vendedor=${encodeURIComponent(entityName)}` : ''}` }
-                                : insight.tipo === 'riesgo_equipo'
-                                ? { label: 'Ver equipo →', path: '/vendedores' }
-                                : insight.tipo === 'riesgo_producto'
-                                ? { label: entityName ? `${entityName} →` : 'Ver rotación →', path: `/rotacion${entityName ? `?categoria=${encodeURIComponent(entityName)}` : ''}` }
-                                : insight.tipo === 'riesgo_cliente'
-                                ? { label: entityName ? `${entityName} →` : 'Ver clientes →', path: '/clientes', openCliente: entityName }
-                                : insight.tipo === 'cruzado'
-                                ? { label: entityName ? `${entityName} →` : 'Ver vendedores →', path: `/vendedores${entityName ? `?vendedor=${encodeURIComponent(entityName)}` : ''}` }
-                                : insight.tipo === 'riesgo_meta'
-                                ? { label: entityName ? `${entityName} →` : 'Ver metas →', path: '/metas' }
-                                : insight.tipo === 'hallazgo'
-                                ? (insight.vendedor
-                                  ? { label: `${insight.vendedor} →`, path: `/vendedores?vendedor=${encodeURIComponent(insight.vendedor)}` }
-                                  : insight.producto
-                                  ? { label: `${insight.producto} →`, path: `/rotacion?categoria=${encodeURIComponent(insight.producto)}` }
-                                  : null)
-                                : null
-                              return navLink ? (
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); navigate(dp(navLink.path), { state: 'openCliente' in navLink && navLink.openCliente ? { openCliente: navLink.openCliente, source: 'alert' } : undefined }) }}
-                                  className="text-[11px] font-medium cursor-pointer hover:underline transition-colors"
-                                  style={{ color: 'var(--sf-green)' }}
-                                >
-                                  {navLink.label}
-                                </button>
-                              ) : null
-                            })()}
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                const { summary } = formatAlertaContent(insight, showUSD, configuracion.moneda)
-                                navigate(dp('/chat'), { state: { prefill: `Explica la alerta: ${insight.titulo}. ${summary}`, displayPrefill: `Explicar: ${insight.titulo}`, source: 'Alertas' } })
-                              }}
-                              className="text-[11px] font-medium cursor-pointer hover:underline transition-colors"
-                              style={{ color: 'var(--sf-t3)' }}
-                              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--sf-t1)' }}
-                              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--sf-t3)' }}
-                            >
-                              ✦ Explicar con IA
-                            </button>
-                          </div>{/* /Action row */}
-
-                          {/* Loading spinner — replaces button while analyzing */}
-                          {analysis?.loading && (
-                            <div className="flex justify-end mt-2">
-                              <span className="inline-flex items-center gap-1.5 text-xs" style={{ color: 'var(--sf-t4)' }}>
-                                <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
-                                </svg>
-                                Analizando...
-                              </span>
-                            </div>
-                          )}
-
-                          {/* Analysis result — appears once generated */}
-                          {analysis?.text && !analysis.loading && (
-                            <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--sf-border-subtle)' }}>
-                              <div className="text-[13px] leading-relaxed whitespace-pre-line" style={{ color: 'var(--sf-t3)' }}>
-                                {analysis.text}
-                              </div>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  const analysisText = analysis?.text || ''
-                                  const displayMessage = `Profundizar: ${insight.titulo}`
-                                  const fullContext = [
-                                    `Profundizar sobre: ${insight.titulo}`,
-                                    ``,
-                                    `Contexto del insight: ${insight.descripcion}`,
-                                    insight.impacto_economico ? `Impacto económico: ${insight.impacto_economico.descripcion} (${configuracion.moneda} ${insight.impacto_economico.valor?.toLocaleString()})` : '',
-                                    insight.vendedor ? `Vendedor: ${insight.vendedor}` : '',
-                                    insight.cliente ? `Cliente: ${insight.cliente}` : '',
-                                    insight.producto ? `Producto: ${insight.producto}` : '',
-                                    analysisText ? `\nAnálisis previo:\n${analysisText}` : '',
-                                    ``,
-                                    `Con base en este análisis, profundiza: ¿qué está causando esto específicamente, qué datos adicionales lo confirman, y qué patrón hay detrás?`
-                                  ].filter(Boolean).join('\n')
-                                  navigate(dp('/chat'), { state: { prefill: fullContext, displayPrefill: displayMessage, source: 'Estado Comercial' } })
-                                }}
-                                className="mt-3 px-4 py-2 rounded-lg text-xs font-medium cursor-pointer"
-                                style={{ border: '1px solid var(--sf-green-border)', background: 'var(--sf-green-bg)', color: 'var(--sf-green)' }}
-                                onMouseEnter={e => (e.currentTarget.style.opacity = '0.8')}
-                                onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
-                              >
-                                + Profundizar
-                              </button>
-                            </div>
-                          )}
-
-                          {/* Hallazgo expanded content — only on click */}
-                          {isHallazgo && isExpanded && (
-                            <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--sf-border-subtle)' }}>
-                              {insight.impacto_economico ? (
-                                <div className="flex items-center gap-1.5">
-                                  <span className="text-xs" style={{ color: 'var(--sf-t4)' }}>Impacto estimado: </span>
-                                  <span className="text-xs font-semibold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-t2)' }}>
-                                    {configuracion.moneda} {insight.impacto_economico.valor.toLocaleString()}
-                                  </span>
-                                </div>
-                              ) : insight.valor_numerico ? (
-                                <div className="flex items-center gap-1.5">
-                                  <span className="text-xs" style={{ color: 'var(--sf-t4)' }}>Valor: </span>
-                                  <span className="text-xs font-semibold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-t2)' }}>
-                                    {insight.valor_numerico.toLocaleString()}
-                                  </span>
-                                </div>
-                              ) : (
-                                <p className="text-xs" style={{ color: 'var(--sf-t4)' }}>Sin datos adicionales.</p>
-                              )}
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Critical dot */}
-                        {insight.prioridad === 'CRITICA' && (
-                          <span
-                            className="w-2 h-2 rounded-full shrink-0 mt-5 mr-4"
-                            style={{ background: '#ef4444', boxShadow: '0 0 8px rgba(239,68,68,0.4)' }}
-                          />
-                        )}
-                      </div>
-                    </div>
-                  )
-                })}
-
-                {/* Show more / collapse — subtle text link */}
-                {!feedExpanded && remainingCount > 0 && (
-                  <button
-                    onClick={() => setFeedExpanded(true)}
-                    className="w-full py-2 text-[12px] font-medium transition-colors duration-150 cursor-pointer"
-                    style={{ color: 'var(--sf-t5)', background: 'transparent', border: 'none' }}
-                    onMouseEnter={e => { e.currentTarget.style.color = 'var(--sf-green)' }}
-                    onMouseLeave={e => { e.currentTarget.style.color = 'var(--sf-t5)' }}
-                  >
-                    Ver {remainingCount} alertas más →
-                  </button>
-                )}
-                {feedExpanded && feedFiltered.length > TOP_COUNT && (
-                  <button
-                    onClick={() => setFeedExpanded(false)}
-                    className="w-full py-2 text-[12px] font-medium transition-colors duration-150 cursor-pointer"
-                    style={{ color: 'var(--sf-t5)', background: 'transparent', border: 'none' }}
-                    onMouseEnter={e => { e.currentTarget.style.color = 'var(--sf-t3)' }}
-                    onMouseLeave={e => { e.currentTarget.style.color = 'var(--sf-t5)' }}
-                  >
-                    ↑ Mostrar menos
-                  </button>
-                )}
-              </>
-            )
-          })()}
-        </div>
-      </div>
 
       {/* Explorar Dimensiones removed — replaced by Pulso above */}
       {false && <div className="intel-fade" style={{ animationDelay: '400ms' }}>
@@ -2675,7 +2056,7 @@ export default function EstadoComercialPage() {
                 <div className="text-xs mt-1" style={{ color: 'var(--sf-t3)' }}>inactivos</div>
                 <div className="text-xs mt-2" style={{ color: 'var(--sf-t3)' }}>
                   {showUSD && valorRiesgoClien > 0
-                    ? <><span style={{ color: 'var(--sf-amber)' }}>{configuracion.moneda} {Math.round(valorRiesgoClien).toLocaleString('es-SV')} en riesgo</span> · {activosMes} activos</>
+                    ? <><span style={{ color: 'var(--sf-amber)' }}>{configuracion.moneda}{Math.round(valorRiesgoClien).toLocaleString('es-SV')} en riesgo</span> · {activosMes} activos</>
                     : <>{activosMes} activos este mes</>
                   }
                 </div>

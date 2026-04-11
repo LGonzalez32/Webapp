@@ -113,7 +113,7 @@ export function buildShareText({
     }
 
     if (teamStats.proyeccion_equipo != null) {
-      kpis.push(`Proyección cierre: ${moneda} ${fmt(teamStats.proyeccion_equipo)}`)
+      kpis.push(`Proyección cierre: ${moneda}${fmt(teamStats.proyeccion_equipo)}`)
     }
 
     if (teamStats.cumplimiento_equipo != null) {

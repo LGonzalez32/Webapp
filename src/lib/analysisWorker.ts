@@ -6,6 +6,7 @@ import {
   analyzeSupervisor,
   analyzeCategoria,
   analyzeCanal,
+  buildAggregatedSummaries,
 } from './analysis'
 import { generateInsights } from './insightEngine'
 import type {
@@ -114,6 +115,12 @@ self.onmessage = (event: MessageEvent<WorkerInput | EnrichInput>) => {
     has_inventario: inventory.length > 0,
   }
 
+  // Compute day range for partial-month comparisons
+  const fechaRef = index.fechaReferencia.getTime() > 0 ? index.fechaReferencia : new Date()
+  const isCurrentMonth = fechaRef.getFullYear() === selectedPeriod.year && fechaRef.getMonth() === selectedPeriod.month
+  const diasTotales = new Date(selectedPeriod.year, selectedPeriod.month + 1, 0).getDate()
+  const diasTranscurridos = isCurrentMonth ? fechaRef.getDate() : diasTotales
+
   post('Calculando vendedores...')
   const { vendorAnalysis, teamStats, clientesDormidos, concentracionRiesgo } =
     computeCommercialAnalysis(sales, metas, inventory, selectedPeriod, configuracion, index, tipoMetaActivo)
@@ -142,14 +149,24 @@ self.onmessage = (event: MessageEvent<WorkerInput | EnrichInput>) => {
   let categoriaAnalysis = null
   if (dataAvailability.has_categoria) {
     post('Analizando categorías...')
-    categoriaAnalysis = analyzeCategoria(metas, selectedPeriod, index)
+    categoriaAnalysis = analyzeCategoria(metas, selectedPeriod, index, diasTranscurridos, diasTotales)
   }
 
   let canalAnalysis = null
   if (dataAvailability.has_canal) {
     post('Analizando canales...')
-    canalAnalysis = analyzeCanal(selectedPeriod, index)
+    canalAnalysis = analyzeCanal(selectedPeriod, index, diasTranscurridos, diasTotales)
   }
+
+  post('Agregando resúmenes para páginas...')
+  const aggregated = buildAggregatedSummaries(
+    sales,
+    selectedPeriod,
+    clientesDormidos,
+    concentracionRiesgo,
+    categoriasInventario ?? [],
+    dataAvailability,
+  )
 
   post('Generando insights...')
   const insights = generateInsights(
@@ -193,5 +210,13 @@ self.onmessage = (event: MessageEvent<WorkerInput | EnrichInput>) => {
     canalAnalysis,
     insights,
     dataAvailability,
+    clienteSummaries: aggregated.clienteSummaries,
+    productoSummaries: aggregated.productoSummaries,
+    departamentoSummaries: aggregated.departamentoSummaries,
+    mesesDisponibles: aggregated.mesesDisponibles,
+    canalesDisponibles: aggregated.canalesDisponibles,
+    monthlyTotals: aggregated.monthlyTotals,
+    monthlyTotalsSameDay: aggregated.monthlyTotalsSameDay,
+    fechaRefISO: aggregated.fechaRefISO,
   })
 }

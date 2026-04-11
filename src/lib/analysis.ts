@@ -113,6 +113,11 @@ export function salesInPeriod(sales: SaleRecord[], year: number, month: number):
   return sales.filter((s) => s.fecha >= start && s.fecha <= end)
 }
 
+/** Filter sales to only include days <= maxDay within the month */
+export function filterSalesByDayRange(sales: SaleRecord[], maxDay: number): SaleRecord[] {
+  return sales.filter(s => s.fecha.getDate() <= maxDay)
+}
+
 /**
  * Promedio de ventas de los últimos N períodos anteriores al dado.
  * Excluye el período actual. Solo cuenta períodos con datos reales.
@@ -331,8 +336,12 @@ function analyzeVendor(
   const variacion_pct = ventas_mes_anterior > 0 ? safePct(unidades_periodo_all, ventas_mes_anterior) : null
 
   const promedioN = promedioUltimosN(vendorSales, year, month, 3)
-  const variacion_vs_promedio_pct = promedioN.promedio > 0
-    ? Math.round(safePct(unidades_periodo_all, promedioN.promedio))
+  // Adjust pm3 to same day-range when comparing against partial month
+  const pm3Adjusted = diasTranscurridos < diasTotales && promedioN.promedio > 0
+    ? promedioN.promedio * diasTranscurridos / diasTotales
+    : promedioN.promedio
+  const variacion_vs_promedio_pct = pm3Adjusted > 0
+    ? Math.round(safePct(unidades_periodo_all, pm3Adjusted))
     : null
 
   // Projection uses the active metric (filtered)
@@ -706,11 +715,14 @@ export function computeCommercialAnalysis(
   const diasTranscurridos = isCurrentMonth ? fechaReferencia.getDate() : diasTotales
   const diasRestantes = Math.max(0, diasTotales - diasTranscurridos)
 
-  const prev = prevPeriod(year, month)
+  // MTD YoY: compare same month previous year, same day range
+  const prevYoY = { year: year - 1, month }
   const periodStart = startOfPeriod(year, month)
-  const periodEnd = endOfPeriod(year, month)
-  const prevStart = startOfPeriod(prev.year, prev.month)
-  const prevEnd = endOfPeriod(prev.year, prev.month)
+  const periodEnd = isCurrentMonth ? new Date(year, month, diasTranscurridos, 23, 59, 59, 999) : endOfPeriod(year, month)
+  const prevStart = startOfPeriod(prevYoY.year, prevYoY.month)
+  const prevEnd = isCurrentMonth
+    ? new Date(prevYoY.year, prevYoY.month, diasTranscurridos, 23, 59, 59, 999)
+    : endOfPeriod(prevYoY.year, prevYoY.month)
 
   const vendedores = Array.from(idx.byVendor.keys())
   const vendorAnalysis = vendedores.map((v) =>
@@ -770,7 +782,8 @@ export function computeCommercialAnalysis(
   }
 
   const periodSales = getSalesByPeriod(idx, year, month)
-  const prevSales = getSalesByPeriod(idx, prev.year, prev.month)
+  const prevSalesAll = getSalesByPeriod(idx, prevYoY.year, prevYoY.month)
+  const prevSales = isCurrentMonth ? filterSalesByDayRange(prevSalesAll, diasTranscurridos) : prevSalesAll
   const total_unidades = periodSales.reduce((a, s) => a + s.unidades, 0)
   const total_ventas = periodSales.reduce((a, s) => a + (s.venta_neta ?? 0), 0)
   const prevTotal = prevSales.reduce((a, s) => a + s.unidades, 0)
@@ -1117,6 +1130,8 @@ export function analyzeCategoria(
   metas: MetaRecord[],
   selectedPeriod: { year: number; month: number },
   index: SaleIndex,
+  diasTranscurridos?: number,
+  diasTotales?: number,
 ): CategoriaAnalysis[] {
   const { year, month } = selectedPeriod
   const periodSales  = getSalesByPeriod(index, year, month)
@@ -1127,7 +1142,9 @@ export function analyzeCategoria(
   periodSales.forEach((s) => { if (s.categoria) cats.add(s.categoria) })
   if (cats.size === 0) return []
 
-  const prevYearSales = getSalesByPeriod(index, year - 1, month)
+  const isPartial = diasTranscurridos != null && diasTotales != null && diasTranscurridos < diasTotales
+  const prevYearSalesAll = getSalesByPeriod(index, year - 1, month)
+  const prevYearSales = isPartial ? filterSalesByDayRange(prevYearSalesAll, diasTranscurridos) : prevYearSalesAll
 
   // Collect PM3 months
   const pm3Months: SaleRecord[][] = []
@@ -1151,9 +1168,10 @@ export function analyzeCategoria(
     const pm3Vals = pm3Months
       .map((ms) => ms.filter((s) => s.categoria === categoria).reduce((a, s) => a + s.unidades, 0))
       .filter((v) => v > 0)
-    const pm3 = pm3Vals.length > 0 ? pm3Vals.reduce((a, b) => a + b, 0) / pm3Vals.length : 0
+    const pm3Raw = pm3Vals.length > 0 ? pm3Vals.reduce((a, b) => a + b, 0) / pm3Vals.length : 0
+    const pm3 = isPartial && pm3Raw > 0 ? pm3Raw * diasTranscurridos! / diasTotales! : pm3Raw
 
-    // Calcular variación vs PM3
+    // Calcular variación vs PM3 (adjusted for partial month)
     let variacion_vs_pm3 = 0
     let tendencia: CategoriaAnalysis['tendencia'] = 'estable'
     if (pm3 === 0) {
@@ -1207,6 +1225,8 @@ export function analyzeCategoria(
 export function analyzeCanal(
   selectedPeriod: { year: number; month: number },
   index: SaleIndex,
+  diasTranscurridos?: number,
+  diasTotales?: number,
 ): CanalAnalysis[] {
   const { year, month } = selectedPeriod
   const periodSales  = getSalesByPeriod(index, year, month)
@@ -1229,7 +1249,9 @@ export function analyzeCanal(
   const allCanales = new Set([...activePeriod, ...activeAnterior])
   if (allCanales.size === 0) return []
 
-  const prevYearSales = getSalesByPeriod(index, year - 1, month)
+  const isPartial = diasTranscurridos != null && diasTotales != null && diasTranscurridos < diasTotales
+  const prevYearSalesAll = getSalesByPeriod(index, year - 1, month)
+  const prevYearSales = isPartial ? filterSalesByDayRange(prevYearSalesAll, diasTranscurridos) : prevYearSalesAll
 
   const result: CanalAnalysis[] = []
 
@@ -1245,7 +1267,8 @@ export function analyzeCanal(
     const pm3Vals = pm3Months
       .map((ms) => ms.filter((s) => s.canal === canal).reduce((a, s) => a + s.unidades, 0))
       .filter((v) => v > 0)
-    const pm3 = pm3Vals.length > 0 ? pm3Vals.reduce((a, b) => a + b, 0) / pm3Vals.length : 0
+    const pm3Raw = pm3Vals.length > 0 ? pm3Vals.reduce((a, b) => a + b, 0) / pm3Vals.length : 0
+    const pm3 = isPartial && pm3Raw > 0 ? pm3Raw * diasTranscurridos! / diasTotales! : pm3Raw
 
     const participacion_pct = total_periodo > 0 ? (ventas_periodo / total_periodo) * 100 : 0
 
@@ -1346,4 +1369,384 @@ export function computeCategoriasInventarioPorCategoria(
   }
 
   return result.sort((a, b) => b.unidades_totales - a.unidades_totales)
+}
+
+// ─── AGGREGATED SUMMARIES (off-thread, page-ready) ────────────────────────────
+// Pre-computa resúmenes por cliente, producto y departamento para que las
+// páginas no necesiten tocar sales[] al renderizar. Single pass over sales.
+
+export interface ClienteSummary {
+  nombre: string
+  vendedor: string
+  canal: string
+  departamento: string
+  ventaCur: number
+  udsCur: number
+  ventaPrev: number
+  udsPrev: number
+  varPct: number | null
+  peso: number
+  paretoCum: number
+  mesesActivo: number
+  productosUnicos: number
+  categorias: string[]
+  transacciones: number
+  lastDate: string
+  isDormido: boolean
+  dormidoInfo: any
+  // riesgo temprano (computed in same pass)
+  riesgoSignal: 'en riesgo' | 'desacelerando' | null
+  riesgoAvgDays: number
+  riesgoDaysSince: number
+  riesgoAtraso: number
+  riesgoValorHistorico: number
+}
+
+export interface ProductoSummary {
+  nombre: string
+  categoria: string
+  ventaCur: number
+  udsCur: number
+  ventaPrev: number
+  udsPrev: number
+  varPct: number | null
+  clientesActivos: number
+  vendedores: number
+}
+
+export interface DepartamentoSummary {
+  nombre: string
+  ventaCur: number
+  udsCur: number
+  ventaPrev: number
+  udsPrev: number
+  varPct: number | null
+  clientesActivos: number
+  vendedores: number
+  productos: number
+}
+
+export function buildAggregatedSummaries(
+  sales: SaleRecord[],
+  selectedPeriod: { year: number; month: number },
+  clientesDormidos: ClienteDormido[],
+  _concentracionRiesgo: ConcentracionRiesgo[],
+  _categoriasInventario: CategoriaInventario[],
+  dataAvailability: { has_venta_neta: boolean }
+): {
+  clienteSummaries: ClienteSummary[]
+  productoSummaries: ProductoSummary[]
+  departamentoSummaries: DepartamentoSummary[]
+  mesesDisponibles: number[]
+  canalesDisponibles: string[]
+  monthlyTotals: Record<string, { uds: number; neta: number }>
+  monthlyTotalsSameDay: Record<string, { uds: number; neta: number }>
+  fechaRefISO: string
+} {
+  const { year, month } = selectedPeriod
+  const hasVenta = dataAvailability.has_venta_neta
+
+  // Compute fechaReferencia (max sale date) for same-day-range YTD logic
+  let fechaRef = new Date(0)
+  for (const s of sales) {
+    if (s.fecha > fechaRef) fechaRef = s.fecha
+  }
+  if (fechaRef.getTime() === 0) fechaRef = new Date()
+  const refMonth = fechaRef.getMonth()
+  const refDay = fechaRef.getDate()
+
+  // YTD range: from Jan 1 to fechaRef of current year (and same range previous year)
+  // For comparison fairness: cap day at refDay when comparing the "current" partial month.
+  const inYTDRange = (fm: number, fd: number): boolean => {
+    if (fm > refMonth) return false
+    if (fm < refMonth) return true
+    // fm === refMonth — cap at refDay symmetrically for both years
+    return fd <= refDay
+  }
+
+  type ClienteAgg = {
+    vendedor: string
+    canal: string
+    departamento: string
+    totalCur: number
+    udsCur: number
+    totalPrev: number
+    udsPrev: number
+    lastDate: Date
+    meses: Set<string>
+    productos: Set<string>
+    categorias: Set<string>
+    transacciones: number
+    valorHistorico: number
+    sixMoDates: Date[]
+  }
+  type ProductoAgg = {
+    categoria: string
+    totalCur: number
+    udsCur: number
+    totalPrev: number
+    udsPrev: number
+    clientes: Set<string>
+    vendedores: Set<string>
+  }
+  type DeptAgg = {
+    totalCur: number
+    udsCur: number
+    totalPrev: number
+    udsPrev: number
+    clientes: Set<string>
+    vendedores: Set<string>
+    productos: Set<string>
+  }
+
+  const clienteMap = new Map<string, ClienteAgg>()
+  const productoMap = new Map<string, ProductoAgg>()
+  const departamentoMap = new Map<string, DeptAgg>()
+  const mesesDisponiblesSet = new Set<number>()
+  const canalesDisponiblesSet = new Set<string>()
+  // Totales mensuales (full-month) y same-day-range (capped at refDay) por (y,m)
+  // Key: `${year}-${month}`
+  const monthlyFull = new Map<string, { uds: number; neta: number }>()
+  const monthlySameDay = new Map<string, { uds: number; neta: number }>()
+
+  // 6mo cutoff for riesgo temprano
+  const sixMonthsAgo = new Date(fechaRef)
+  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
+
+  // SINGLE PASS over all sales
+  for (const r of sales) {
+    const d = r.fecha
+    const fy = d.getFullYear()
+    const fm = d.getMonth()
+    const fd = d.getDate()
+    const cliente = r.cliente
+    const producto = r.producto
+    const dept = r.departamento
+    const isCurYear = fy === year
+    const isPrevYear = fy === year - 1
+    const inRange = (isCurYear || isPrevYear) && inYTDRange(fm, fd)
+
+    const uds = r.unidades || 0
+    const venta = r.venta_neta || 0
+
+    // Filter dropdown options
+    if (fy === year) mesesDisponiblesSet.add(fm)
+    if (r.canal) canalesDisponiblesSet.add(r.canal)
+
+    // Monthly totals (full month + same-day-range capped at refDay)
+    const mk = `${fy}-${fm}`
+    let mFull = monthlyFull.get(mk)
+    if (!mFull) { mFull = { uds: 0, neta: 0 }; monthlyFull.set(mk, mFull) }
+    mFull.uds += uds
+    mFull.neta += venta
+    if (fd <= refDay) {
+      let mSame = monthlySameDay.get(mk)
+      if (!mSame) { mSame = { uds: 0, neta: 0 }; monthlySameDay.set(mk, mSame) }
+      mSame.uds += uds
+      mSame.neta += venta
+    }
+
+    // --- Cliente aggregation ---
+    if (cliente) {
+      let c = clienteMap.get(cliente)
+      if (!c) {
+        c = {
+          vendedor: r.vendedor || '', canal: r.canal || '', departamento: r.departamento || '',
+          totalCur: 0, udsCur: 0, totalPrev: 0, udsPrev: 0, lastDate: d,
+          meses: new Set(), productos: new Set(), categorias: new Set(),
+          transacciones: 0, valorHistorico: 0, sixMoDates: [],
+        }
+        clienteMap.set(cliente, c)
+      }
+      if (isCurYear && inRange) { c.totalCur += venta; c.udsCur += uds }
+      if (isPrevYear && inRange) { c.totalPrev += venta; c.udsPrev += uds }
+      if (d > c.lastDate) {
+        c.lastDate = d
+        if (r.vendedor) c.vendedor = r.vendedor
+        if (r.canal) c.canal = r.canal
+      }
+      c.meses.add(`${fy}-${fm}`)
+      if (producto) c.productos.add(producto)
+      if (r.categoria) c.categorias.add(r.categoria)
+      c.transacciones++
+      c.valorHistorico += hasVenta ? venta : uds
+      if (d >= sixMonthsAgo) c.sixMoDates.push(d)
+    }
+
+    // --- Producto aggregation ---
+    if (producto) {
+      let p = productoMap.get(producto)
+      if (!p) {
+        p = {
+          categoria: r.categoria || '',
+          totalCur: 0, udsCur: 0, totalPrev: 0, udsPrev: 0,
+          clientes: new Set(), vendedores: new Set(),
+        }
+        productoMap.set(producto, p)
+      }
+      if (isCurYear && inRange) { p.totalCur += venta; p.udsCur += uds }
+      if (isPrevYear && inRange) { p.totalPrev += venta; p.udsPrev += uds }
+      if (cliente) p.clientes.add(cliente)
+      if (r.vendedor) p.vendedores.add(r.vendedor)
+    }
+
+    // --- Departamento aggregation ---
+    if (dept) {
+      let dp = departamentoMap.get(dept)
+      if (!dp) {
+        dp = {
+          totalCur: 0, udsCur: 0, totalPrev: 0, udsPrev: 0,
+          clientes: new Set(), vendedores: new Set(), productos: new Set(),
+        }
+        departamentoMap.set(dept, dp)
+      }
+      if (isCurYear && inRange) { dp.totalCur += venta; dp.udsCur += uds }
+      if (isPrevYear && inRange) { dp.totalPrev += venta; dp.udsPrev += uds }
+      if (cliente) dp.clientes.add(cliente)
+      if (r.vendedor) dp.vendedores.add(r.vendedor)
+      if (producto) dp.productos.add(producto)
+    }
+  }
+
+  // --- Build dormidos lookup ---
+  const dormidosSet = new Set(clientesDormidos.map(c => c.cliente))
+  const dormidosMap = new Map(clientesDormidos.map(c => [c.cliente, c]))
+
+  // --- Build cliente summaries ---
+  const clienteSummariesUnsorted: ClienteSummary[] = []
+  let grandTotalCur = 0
+  for (const c of clienteMap.values()) {
+    grandTotalCur += hasVenta ? c.totalCur : c.udsCur
+  }
+
+  for (const [nombre, c] of clienteMap) {
+    const metricCur = hasVenta ? c.totalCur : c.udsCur
+    const metricPrev = hasVenta ? c.totalPrev : c.udsPrev
+    const varPct = metricPrev > 0 ? ((metricCur - metricPrev) / metricPrev) * 100 : null
+    const peso = grandTotalCur > 0 ? (metricCur / grandTotalCur) * 100 : 0
+
+    // --- Riesgo temprano (only for non-dormidos with >=2 transactions in 6mo window) ---
+    let riesgoSignal: 'en riesgo' | 'desacelerando' | null = null
+    let riesgoAvgDays = 0
+    let riesgoDaysSince = 0
+    let riesgoAtraso = 0
+    if (!dormidosSet.has(nombre) && c.sixMoDates.length >= 2) {
+      const sortedDates = [...c.sixMoDates].sort((a, b) => a.getTime() - b.getTime())
+      let totalGap = 0
+      for (let i = 1; i < sortedDates.length; i++) {
+        totalGap += (sortedDates[i].getTime() - sortedDates[i - 1].getTime()) / 86400000
+      }
+      const avgDays = totalGap / (sortedDates.length - 1)
+      if (avgDays >= 1) {
+        const lastPurchase = sortedDates[sortedDates.length - 1]
+        const daysSince = (fechaRef.getTime() - lastPurchase.getTime()) / 86400000
+        if (daysSince > avgDays * 2) riesgoSignal = 'en riesgo'
+        else if (daysSince > avgDays * 1.5) riesgoSignal = 'desacelerando'
+        if (riesgoSignal) {
+          riesgoAvgDays = avgDays
+          riesgoDaysSince = Math.round(daysSince)
+          riesgoAtraso = Math.round(daysSince - avgDays)
+        }
+      }
+    }
+
+    clienteSummariesUnsorted.push({
+      nombre,
+      vendedor: c.vendedor,
+      canal: c.canal,
+      departamento: c.departamento,
+      ventaCur: c.totalCur,
+      udsCur: c.udsCur,
+      ventaPrev: c.totalPrev,
+      udsPrev: c.udsPrev,
+      varPct,
+      peso,
+      paretoCum: 0,
+      mesesActivo: c.meses.size,
+      productosUnicos: c.productos.size,
+      categorias: [...c.categorias],
+      transacciones: c.transacciones,
+      lastDate: c.lastDate.toISOString(),
+      isDormido: dormidosSet.has(nombre),
+      dormidoInfo: dormidosMap.get(nombre) || null,
+      riesgoSignal,
+      riesgoAvgDays,
+      riesgoDaysSince,
+      riesgoAtraso,
+      riesgoValorHistorico: c.valorHistorico,
+    })
+    void year; void month
+  }
+
+  // Sort by metric descending
+  clienteSummariesUnsorted.sort((a, b) =>
+    hasVenta ? b.ventaCur - a.ventaCur : b.udsCur - a.udsCur
+  )
+
+  // Add pareto cumulative %
+  let cumSum = 0
+  for (const c of clienteSummariesUnsorted) {
+    cumSum += c.peso
+    c.paretoCum = cumSum
+  }
+
+  // --- Build producto summaries ---
+  const productoSummaries: ProductoSummary[] = []
+  for (const [nombre, p] of productoMap) {
+    const metricCur = hasVenta ? p.totalCur : p.udsCur
+    const metricPrev = hasVenta ? p.totalPrev : p.udsPrev
+    const varPct = metricPrev > 0 ? ((metricCur - metricPrev) / metricPrev) * 100 : null
+    productoSummaries.push({
+      nombre,
+      categoria: p.categoria,
+      ventaCur: p.totalCur,
+      udsCur: p.udsCur,
+      ventaPrev: p.totalPrev,
+      udsPrev: p.udsPrev,
+      varPct,
+      clientesActivos: p.clientes.size,
+      vendedores: p.vendedores.size,
+    })
+  }
+  productoSummaries.sort((a, b) =>
+    hasVenta ? b.ventaCur - a.ventaCur : b.udsCur - a.udsCur
+  )
+
+  // --- Build departamento summaries ---
+  const departamentoSummaries: DepartamentoSummary[] = []
+  for (const [nombre, dp] of departamentoMap) {
+    const metricCur = hasVenta ? dp.totalCur : dp.udsCur
+    const metricPrev = hasVenta ? dp.totalPrev : dp.udsPrev
+    const varPct = metricPrev > 0 ? ((metricCur - metricPrev) / metricPrev) * 100 : null
+    departamentoSummaries.push({
+      nombre,
+      ventaCur: dp.totalCur,
+      udsCur: dp.udsCur,
+      ventaPrev: dp.totalPrev,
+      udsPrev: dp.udsPrev,
+      varPct,
+      clientesActivos: dp.clientes.size,
+      vendedores: dp.vendedores.size,
+      productos: dp.productos.size,
+    })
+  }
+  departamentoSummaries.sort((a, b) =>
+    hasVenta ? b.ventaCur - a.ventaCur : b.udsCur - a.udsCur
+  )
+
+  const monthlyTotals: Record<string, { uds: number; neta: number }> = {}
+  for (const [k, v] of monthlyFull) monthlyTotals[k] = v
+  const monthlyTotalsSameDay: Record<string, { uds: number; neta: number }> = {}
+  for (const [k, v] of monthlySameDay) monthlyTotalsSameDay[k] = v
+
+  return {
+    clienteSummaries: clienteSummariesUnsorted,
+    productoSummaries,
+    departamentoSummaries,
+    mesesDisponibles: [...mesesDisponiblesSet].sort((a, b) => a - b),
+    canalesDisponibles: [...canalesDisponiblesSet].sort(),
+    monthlyTotals,
+    monthlyTotalsSameDay,
+    fechaRefISO: fechaRef.toISOString(),
+  }
 }

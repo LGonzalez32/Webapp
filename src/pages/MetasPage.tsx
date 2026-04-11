@@ -244,7 +244,7 @@ Reglas: máximo 100 palabras, cada bullet con número concreto, sin instruccione
   const pctProyectado = teamMeta > 0 ? Math.round((teamProyectado / teamMeta) * 100) : 0
   const pctRitmo = maxDayInPeriod > 0 ? Math.round((maxDayInPeriod / daysInMonth) * 100) : 0
 
-  const fmtVal = (v: number) => tipoMetaActivo === 'usd' ? `${moneda} ${v.toLocaleString()}` : `${v.toLocaleString()} uds`
+  const fmtVal = (v: number) => tipoMetaActivo === 'usd' ? `${moneda}${v.toLocaleString()}` : `${v.toLocaleString()} uds`
 
   if (!dataAvailability.has_metas && !sales.length) return null
 
