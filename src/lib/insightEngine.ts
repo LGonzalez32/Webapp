@@ -27,6 +27,22 @@ import {
   sustituirJerga,
   contieneJerga,
   esConclusionValida,
+  validarInsight,
+  calcularPercentiles,
+  calcularChurnBaseline,
+  calcularPareto,
+  validarComparacionTemporal,
+  validarAccionConcreta,
+  evaluarIntegracionInventario,
+  evaluarIntegracionMetas,
+  calcularDiaDelMes,
+  calcularDiasEnMes,
+} from './insightStandard'
+import type {
+  InsightStandardConfig,
+  InsightCandidate,
+  AccionConcreta,
+  PrioridadInsight,
 } from './insightStandard'
 
 // ────────────────────────────────────────────────────────────
@@ -187,6 +203,179 @@ function bottomN<T>(arr: T[], n: number, key: (t: T) => number): T[] {
 
 function pctOf(part: number, total: number): number {
   return total > 0 ? (part / total) * 100 : 0
+}
+
+// ────────────────────────────────────────────────────────────
+// INSIGHT STANDARD INTEGRATION
+// ────────────────────────────────────────────────────────────
+
+function calculatePercentilesByEntityType(candidatos: CandidatoInterno[]): {
+  vendedor: { p5: number; p20: number; p50: number; p80: number; p95: number };
+  cliente: { p5: number; p10: number; p20: number; p50: number; p75: number; p90: number; p95: number };
+  producto: { p5: number; p20: number; p50: number; p80: number; p95: number };
+} {
+  const impactosVendedor: number[] = []
+  const impactosCliente: number[] = []
+  const impactosProducto: number[] = []
+  
+  for (const c of candidatos) {
+    const impacto = c.__impactoAbs
+    if (c.vendedor) impactosVendedor.push(impacto)
+    if (c.cliente) impactosCliente.push(impacto)
+    if (c.producto) impactosProducto.push(impacto)
+  }
+  
+  const calcular = (vals: number[]) => {
+    const sorted = [...vals].filter(v => v > 0).sort((a, b) => a - b)
+    const p = (pct: number) => sorted[Math.floor(sorted.length * pct / 100)] || 0
+    return {
+      p5: p(5),
+      p10: p(10),
+      p20: p(20),
+      p50: p(50),
+      p75: p(75),
+      p80: p(80),
+      p90: p(90),
+      p95: p(95),
+    }
+  }
+  
+  return {
+    vendedor: calcular(impactosVendedor),
+    cliente: calcular(impactosCliente),
+    producto: calcular(impactosProducto),
+  }
+}
+
+function buildInsightStandardConfig(candidatos: CandidatoInterno[], cross: CrossTables): InsightStandardConfig {
+  const percentiles = calculatePercentilesByEntityType(candidatos)
+  
+  // Calcular pareto entities (vendedores80, clientes80, productos80)
+  // Usar datos de cross tables para obtener volumen YTD
+  const vendedores80 = calcularParetoEntities(cross.vendorYTD, cross.totalYTD)
+  const clientes80 = calcularParetoEntities(cross.clientYTD, sumarMap(cross.clientYTD, 'net'))
+  const productos80 = calcularParetoEntities(cross.prodYTD, sumarMap(cross.prodYTD, 'net'))
+  
+  // Helper para calcular Pareto
+  function calcularParetoEntities<T extends { net: number }>(map: Map<string, T>, total: number): string[] {
+    if (total <= 0) return []
+    const entries = Array.from(map.entries())
+      .filter(([_, data]) => data.net > 0)
+      .sort((a, b) => b[1].net - a[1].net)
+    let acum = 0
+    const result: string[] = []
+    for (const [key, data] of entries) {
+      acum += data.net
+      result.push(key)
+      if (acum / total >= 0.8) break
+    }
+    return result
+  }
+  
+  function sumarMap<T extends { net: number }>(map: Map<string, T>, _prop: 'net'): number {
+    let total = 0
+    for (const data of map.values()) total += data.net
+    return total
+  }
+  
+  return {
+    percentiles,
+    churnBaseline: {
+      tasaPromedio: 0,
+      desviacionEstandar: 0,
+    },
+    paretoEntities: {
+      vendedores80,
+      clientes80,
+      productos80,
+    },
+    diaDelMes: cross.diaDelMes,
+    pctMesTipico: cross.diasEnMes > 0 ? (cross.diaDelMes / cross.diasEnMes) * 100 : 0,
+    varianzaPctMes: 0,
+    productFamilies: new Map(),
+  }
+}
+
+function toInsightCandidate(candidato: CandidatoInterno, percentileRank: number, cross: CrossTables): InsightCandidate {
+  // Determinar entityType
+  let entityType: 'vendedor' | 'cliente' | 'producto' | 'departamento' | 'canal' = 'vendedor'
+  let entityId = ''
+  let entityName = ''
+  
+  if (candidato.vendedor) {
+    entityType = 'vendedor'
+    entityId = candidato.vendedor
+    entityName = candidato.vendedor
+  } else if (candidato.cliente) {
+    entityType = 'cliente'
+    entityId = candidato.cliente
+    entityName = candidato.cliente
+  } else if (candidato.producto) {
+    entityType = 'producto'
+    entityId = candidato.producto
+    entityName = candidato.producto
+  } else if (candidato.id.includes('depto')) {
+    entityType = 'departamento'
+    entityId = candidato.descripcion.split(' ')[0] || '' // hack
+    entityName = entityId
+  } else if (candidato.id.includes('canal')) {
+    entityType = 'canal'
+    entityId = candidato.descripcion.split(' ')[0] || ''
+    entityName = entityId
+  }
+  
+  const crossedTables = candidato.cruces ?? []
+  const profundidadCruce = crossedTables.length
+  const causaIdentificada = profundidadCruce >= 2
+  
+  const accion: AccionConcreta = candidato.accion ? {
+    texto: candidato.accion.texto,
+    entidadesInvolucradas: candidato.accion.entidades,
+    respaldoNumerico: candidato.accion.respaldo,
+    ejecutableEn: candidato.accion.ejecutableEn as 'inmediato' | 'esta_semana' | 'este_mes',
+  } : {
+    texto: candidato.accion_sugerida || '',
+    entidadesInvolucradas: [],
+    respaldoNumerico: '',
+    ejecutableEn: 'este_mes',
+  }
+  
+  let comparacionTipo: 'YTD' | 'MTD' | 'historico' = 'YTD'
+  if (candidato.metaContext) comparacionTipo = 'MTD'
+  else if (candidato.id.includes('meta') || candidato.id.includes('mtd')) comparacionTipo = 'MTD'
+  else if (candidato.id.includes('historico') || candidato.id.includes('promedio')) comparacionTipo = 'historico'
+  
+  return {
+    entityType,
+    entityId,
+    entityName,
+    rawValue: candidato.valor_numerico ?? candidato.__impactoAbs,
+    percentileRank,
+    crossedTables,
+    profundidadCruce,
+    causaIdentificada,
+    contrastePortafolio: candidato.contrastePortafolio || null,
+    comparacionTipo,
+    accion,
+    señalesConvergentes: candidato.señalesConvergentes ?? 1,
+    impactoAbsoluto: candidato.__impactoAbs,
+    hasVentaNeta: cross.hasVentaNeta,
+    narrativaCompleta: candidato.descripcion,
+    conclusion: candidato.conclusion || '',
+    esAccionable: candidato.__esAccionable,
+    metaContext: candidato.metaContext ? {
+      metaMes: candidato.metaContext.metaMes,
+      cumplimiento: candidato.metaContext.cumplimiento,
+      gap: candidato.metaContext.gap,
+      proyeccion: candidato.metaContext.proyeccion,
+    } : null,
+    inventarioContext: candidato.inventarioContext ? {
+      stockActual: candidato.inventarioContext.stock,
+      mesesCobertura: candidato.inventarioContext.mesesCobertura,
+      sinStock: candidato.inventarioContext.alerta.includes('sin stock') || false,
+      sobrestock: candidato.inventarioContext.alerta.includes('sobrestock') || false,
+    } : null,
+  }
 }
 
 // ────────────────────────────────────────────────────────────
@@ -2553,51 +2742,64 @@ function pipeline(candidatos: CandidatoInterno[], cross: CrossTables): Insight[]
     dedup.push(c)
   }
 
-  // C1: cruces mínimos — CRITICA ≥ 3, ALTA ≥ 2
+  // ============================================================
+  // INSIGHT STANDARD VALIDATION (replaces C1, C4, C6, L1, L2, L3, F1 v1.1)
+  // ============================================================
+  
+  // Build config for validation
+  const config = buildInsightStandardConfig(dedup, cross)
+  
+  // Group impacts by entity type for percentile rank calculation
+  const impactosPorTipo = new Map<string, number[]>()
   for (const c of dedup) {
-    const n = (c.cruces?.length ?? c.__crucesCount ?? 0)
-    if (c.prioridad === 'CRITICA' && n < 3) c.prioridad = 'ALTA'
-    if (c.prioridad === 'ALTA' && n < 2) c.prioridad = 'MEDIA'
+    let tipo = ''
+    if (c.vendedor) tipo = 'vendedor'
+    else if (c.cliente) tipo = 'cliente'
+    else if (c.producto) tipo = 'producto'
+    else if (c.id.includes('depto')) tipo = 'departamento'
+    else if (c.id.includes('canal')) tipo = 'canal'
+    else continue
+    if (!impactosPorTipo.has(tipo)) impactosPorTipo.set(tipo, [])
+    impactosPorTipo.get(tipo)!.push(c.__impactoAbs)
   }
-
-  // C4: contraste portafolio para CRITICA/ALTA
-  for (const c of dedup) {
-    if ((c.prioridad === 'CRITICA' || c.prioridad === 'ALTA') && !c.contrastePortafolio) {
-      c.prioridad = 'MEDIA'
+  
+  // Calculate percentile rank for each candidate
+  const candidatosConRank = dedup.map(c => {
+    let tipo = ''
+    if (c.vendedor) tipo = 'vendedor'
+    else if (c.cliente) tipo = 'cliente'
+    else if (c.producto) tipo = 'producto'
+    else if (c.id.includes('depto')) tipo = 'departamento'
+    else if (c.id.includes('canal')) tipo = 'canal'
+    
+    let percentileRank = 50 // default
+    if (tipo && impactosPorTipo.has(tipo)) {
+      const impactos = impactosPorTipo.get(tipo)!
+      const sorted = [...impactos].sort((a, b) => a - b)
+      const idx = sorted.findIndex(v => v >= c.__impactoAbs)
+      percentileRank = idx >= 0 ? (idx / sorted.length) * 100 : 100
     }
-  }
-
-  // C6/L4: validar acción concreta
-  let validados = dedup.filter(c => {
-    const a = c.accion
-    if (!a || !a.texto || !a.texto.trim()) return false
-    if (!a.entidades || a.entidades.length === 0) return false
-    if (!a.respaldo || !a.respaldo.trim()) return false
-    return true
+    
+    const candidate = toInsightCandidate(c, percentileRank, cross)
+    const validation = validarInsight(candidate, config)
+    
+    return { candidato: c, validation, candidate }
   })
-
-  // L1: limpiar jerga (sustituir) y verificar
-  validados = validados.filter(c => {
-    c.descripcion = sustituirJerga(c.descripcion)
-    if (c.conclusion) c.conclusion = sustituirJerga(c.conclusion)
-    if (c.accion) c.accion.texto = sustituirJerga(c.accion.texto)
-    if (c.contrastePortafolio) c.contrastePortafolio = sustituirJerga(c.contrastePortafolio)
-    const blob = [c.descripcion, c.conclusion, c.accion?.texto, c.contrastePortafolio].filter(Boolean).join(' ')
-    return !contieneJerga(blob).tieneJerga
-  })
-
-  // L2: conclusion no genérica
-  validados = validados.filter(c => esConclusionValida(c.conclusion ?? ''))
-
-  // L3: narrativa autocontenida
-  validados = validados.filter(c => !!c.descripcion && c.descripcion.trim().length > 30)
-
-  // F1 v1.1: si no es accionable → cap MEDIA
-  for (const c of validados) {
-    if (!c.__esAccionable && (c.prioridad === 'CRITICA' || c.prioridad === 'ALTA')) {
-      c.prioridad = 'MEDIA'
-    }
-  }
+  
+  // Filter approved and update priority
+  let validados = candidatosConRank
+    .filter(({ validation }) => validation.aprobado)
+    .map(({ candidato, validation }) => {
+      // Adjust priority based on validation maxPrioridad (maximum allowed)
+      const currentRank = PRIO_RANK[candidato.prioridad]
+      const maxRank = PRIO_RANK[validation.maxPrioridad]
+      if (currentRank < maxRank) {
+        // current priority is higher (lower number) than allowed, lower it to maxPrioridad
+        candidato.prioridad = validation.maxPrioridad
+      }
+      // If currentRank > maxRank, current priority is lower (more restrictive) than allowed, keep it
+      return candidato
+    })
 
   // Issue 4 fix: limitar a máximo 3 insights de concentración (los más extremos por valor_numerico)
   const concentracion = validados.filter(c => c.id.startsWith('concentracion'))

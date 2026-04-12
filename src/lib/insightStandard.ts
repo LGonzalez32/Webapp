@@ -48,7 +48,7 @@ export interface InsightStandardConfig {
     producto: { p5: number; p20: number; p50: number; p80: number; p95: number };
   };
   churnBaseline: {
-    tasaTrimestral: number;         // clientes perdidos / activos del período anterior
+    tasaPromedio: number;         // clientes perdidos / activos del período anterior (promedio trimestral)
     desviacionEstandar: number;
   };
   paretoEntities: {

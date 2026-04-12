@@ -121,7 +121,20 @@ export default function TopBar() {
             const chatPath = isDemo ? '/demo/chat' : '/chat'
             const targetState = {
               prefill: '¿Qué debo hacer hoy?',
-              systemOverride: 'El usuario quiere saber las 3 acciones prioritarias para hoy. Responde con exactamente 3 acciones concretas en formato numerado. Cada acción debe incluir: el nombre real de la persona o área responsable, la acción específica en máximo 10 palabras, y debajo "Por qué hoy:" con la razón en máximo 10 palabras. Sin introducción ni conclusión, solo los 3 items.',
+              systemOverride: [
+                'El usuario quiere saber las 3 acciones prioritarias para hoy.',
+                'Lee el bloque "INSIGHTS DEL MOTOR" del contexto. Elige EXACTAMENTE 3 insights siguiendo este criterio en orden:',
+                '  1) Todos los CRITICA marcados como accionables (no los de contexto).',
+                '  2) Después los ALTA accionables con ejecutableEn="inmediato" o "esta_semana".',
+                '  3) Si sigues necesitando, ALTA con ejecutableEn="este_mes".',
+                'NO inventes acciones. NO reformules las cifras. NO mezcles datos de distintos insights.',
+                'Para cada uno de los 3 elegidos, usa LITERAL los campos del motor:',
+                '  • Línea 1 (título): "1. [accion.texto]" tal cual viene del motor.',
+                '  • Línea 2: "Responsable: [vendedor o primera entidad de accion.entidades]"',
+                '  • Línea 3: "Por qué: [conclusion del insight] — [respaldo numérico]"',
+                'Sin introducción, sin conclusión, sin disculpas, sólo los 3 items numerados.',
+                'Si el bloque INSIGHTS DEL MOTOR trae menos de 3 insights accionables, di cuántos hay y lista los que haya.',
+              ].join(' '),
             }
             if (location.pathname === '/chat' || location.pathname === '/demo/chat') {
               window.dispatchEvent(new CustomEvent('sf-header-action', { detail: targetState }))
