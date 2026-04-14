@@ -1801,6 +1801,30 @@ export default function EstadoComercialPage() {
 
       <div className="space-y-8">
 
+      {/* ── RESUMEN EJECUTIVO ─────────────────────────────────────────────── */}
+      {resumenEjecutivo.length > 0 && (
+        <div className="intel-fade rounded-2xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', animationDelay: '45ms' }}>
+          <p className="text-[11px] font-bold uppercase tracking-[0.15em] mb-2" style={{ color: 'var(--sf-t5)' }}>ESTADO GENERAL</p>
+          <div className="space-y-2">
+            {resumenEjecutivo.map((bullet, idx) => (
+              <div key={idx}>
+                <p className="text-sm leading-relaxed" style={{ 
+                  color: bullet.tipo === 'alerta' ? 'var(--sf-red)' : 
+                         bullet.tipo === 'positivo' ? 'var(--sf-green)' : 'var(--sf-t2)' 
+                }}>
+                  {bullet.texto}
+                </p>
+                {bullet.sub && (
+                  <p className="text-xs mt-0.5 ml-3" style={{ color: bullet.subColor || 'var(--sf-t4)' }}>
+                    {bullet.sub}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* ── EVOLUCIÓN YTD (ancho completo) ─────────────────────────────────── */}
       <div className="intel-fade" style={{ animationDelay: '60ms' }}>
         <div className="rounded-2xl p-4 flex flex-col" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
