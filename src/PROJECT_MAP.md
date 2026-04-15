@@ -9,7 +9,92 @@
 
 | Archivo | Propósito |
 |---------|-----------|
-| [`src/lib/insightStandard.ts`](./lib/insightStandard.ts) | **INSIGHT ENGINE STANDARD v1.0** — 19 reglas (4 filtros, 6 calidad, 9 estructurales). Fuente de verdad para validación de insights. Todo insight pasa por `validarInsight()` antes de emitirse. |
+| [`src/lib/insightStandard.ts`](./lib/insightStandard.ts) | **INSIGHT ENGINE STANDARD v2.0** — 37 reglas en 9 grupos (32 mejoradas + 5 nuevas A-E). Fuente de verdad para validación de insights. Conectada al pipeline — todo insight pasa por validarInsight(), validarProporcionalidad(), validarBalance(), detectarRedundancia(), validarCoherenciaTemporal() y sanitizarNarrativa() antes de emitirse. |
+
+---
+
+## 📖 Guía de Reglas del Insight Engine (`insightStandard.ts`)
+
+### Grupo 1 — Clasificación y Priorización
+
+| Regla | Qué hace | Por qué existe | Parámetros | Retorna | Estado |
+|-------|----------|----------------|------------|---------|--------|
+| `calcularPercentiles` | Divide una lista de valores en percentiles (p5 a p95) | Todos los umbrales son dinámicos, no hardcodeados | `valores: number[]` | `{ p5, p10, p20, p50, p75, p80, p90, p95 }` | ⏳ Disponible |
+| `determinarMaxPrioridad` | Convierte un percentile rank en prioridad máxima elegible | Evita que insights menores aparezcan como críticos | `percentileRank: number` | `'CRITICA' \| 'ALTA' \| 'MEDIA' \| 'BAJA'` | ⏳ Disponible |
+| `validarProporcionalidad` **(NUEVA C)** | Baja la prioridad si el impacto en $ es muy pequeño relativo al negocio total | Un insight de $50 no puede ser CRÍTICO en un negocio de $5M | `impactoAbsoluto, ventaTotalNegocio, prioridadActual` | `{ proporcional, prioridadSugerida, porcentajeImpacto }` | ⏳ Disponible |
+
+### Grupo 2 — Filtros de Ruido
+
+| Regla | Qué hace | Por qué existe | Parámetros | Retorna | Estado |
+|-------|----------|----------------|------------|---------|--------|
+| `pasaFiltroRuido` | Excluye clientes con poquísimas compras y bajo valor | Sin esto, clientes marginales generan insights falsos | `transacciones, valorAcumulado, percentil10Clientes, medianaTxGlobal` | `boolean` | ⏳ Disponible |
+| `detectarRedundancia` **(NUEVA B)** | Encuentra pares de insights que dicen lo mismo sobre la misma entidad | Evita repetir el mismo problema con distintas palabras | `candidatos[]` con vendedor/cliente/producto/tipo/descripcion | Array de `{ mantener, descartar, razon }` | ⏳ Disponible |
+
+### Grupo 3 — Análisis de Clientes
+
+| Regla | Qué hace | Por qué existe | Parámetros | Retorna | Estado |
+|-------|----------|----------------|------------|---------|--------|
+| `calcularChurnBaseline` | Calcula la tasa histórica de pérdida de clientes, ponderando períodos recientes más fuerte | La rotación normal no es insight; solo lo que sale de lo habitual | `clientesActivosPorPeriodo[]` (mín. 4 períodos) | `{ tasaPromedio, desviacionEstandar }` | ⏳ Disponible |
+| `esChurnSignificativo` | Decide si perder a un cliente específico es relevante o ruido normal | Filtrar pérdidas ordinarias de las que sí importan | `valorCliente, p75Clientes, churnActual, churnBaseline, esUnicoEnSegmento?, tendenciaCliente?` | `boolean` | ⏳ Disponible |
+| `evaluarDormidoConContexto` | Determina si un cliente inactivo está realmente dormido o si hay una razón válida (patrón de compra tardío, desabasto, zona en caída, vendedor en riesgo) | Evitar reactivaciones innecesarias y detectar causas reales | `diasSinCompra, contexto (ContextoCompleto), valorCliente?, p75Clientes?` | `{ esDormidoReal, razon, reactivacionPrioritaria }` | ⏳ Disponible |
+| `evaluarPenetracion` | Mide qué fracción del catálogo disponible compra este cliente, vs el promedio | Detectar oportunidad de venta cruzada sin requerir historial largo | `productosCliente, totalProductosDisponibles, promedioProductosPorCliente` | `{ penetracion, fragil, oportunidad, porDebajoDelPromedio, diferenciaVsPromedio }` | ⏳ Disponible |
+
+### Grupo 4 — Análisis de Productos
+
+| Regla | Qué hace | Por qué existe | Parámetros | Retorna | Estado |
+|-------|----------|----------------|------------|---------|--------|
+| `calcularPareto` | Lista los productos/vendedores/clientes que componen el 80% del volumen | Priorizar análisis en las entidades que más impactan | `entidades[]: { nombre, valor }` | `string[]` (nombres) | ⏳ Disponible |
+| `esEntidadPareto` | Verifica si un nombre está en la lista Pareto | Lookup rápido en el pipeline | `nombre, paretoList` | `boolean` | ⏳ Disponible |
+| `detectarFamiliasProducto` | Agrupa variantes del mismo producto base quitando medidas, formatos y sufijos promocionales | Evitar tratar "COCA 600ML" y "COCA 2L PROMO" como productos distintos al analizar declive | `productos: string[]` | `Map<familia, productos[]>` | ⏳ Disponible |
+| `esVariantePromocional` | Detecta si un nombre de producto es una edición promo o bonificada | Las promos no representan demanda real; deben excluirse de trends | `nombre: string` | `boolean` | ⏳ Disponible |
+| `calcularCoOcurrencia` | Cuenta cuántos clientes compran cada par de productos juntos | Base para detectar co-declive y oportunidades de venta cruzada | `clientProductMap: Map<cliente, Set<producto>>` | `Map<producto, Map<producto, count>>` | ⏳ Disponible |
+| `detectarCoDeclive` | Agrupa productos en caída que comparten clientes o departamento (descarta coincidencias) | Distinguir una caída de categoría real de dos declines sin relación | `productosEnDeclive, coMatrix, totalClientes, productoDeptMap` | `string[][]` (grupos) | ⏳ Disponible |
+
+### Grupo 5 — Análisis Cruzado
+
+| Regla | Qué hace | Por qué existe | Parámetros | Retorna | Estado |
+|-------|----------|----------------|------------|---------|--------|
+| `CRUCES_DISPONIBLES` | Mapa completo de campos disponibles por entidad (vendedor, cliente, producto) | Los generadores deben intentar todos los cruces disponibles antes de emitir | Constante de solo lectura | `{ vendedor, cliente, producto }` con directos/conVentas/conOtrasTablas | ⏳ Disponible |
+| `evaluarIndicadorAnticipado` | Score ponderado (0-7.5) de señales de riesgo convergentes | Detectar problemas antes de que aparezcan en ventas; no requiere justificación histórica | `{ cambioBaseClientes, cambioRevenue, tendenciaMensual3m, inventarioMesesCobertura, saludVendedor }` | `{ esAnticipado, riesgo, scoreTotal, scorePosible, señalesActivadas, confianza }` | ⏳ Disponible |
+| `detectarCascadas` | Identifica entidades que aparecen en ≥2 insights, con severidad por prioridad | Una entidad con múltiples señales requiere atención urgente | `candidatos[]` con entityType/entityId/prioridad | `Map<entidad, { insights, severidad }>` | ⏳ Disponible |
+
+### Grupo 6 — Validación Temporal
+
+| Regla | Qué hace | Por qué existe | Parámetros | Retorna | Estado |
+|-------|----------|----------------|------------|---------|--------|
+| `validarComparacionTemporal` | Asigna confianza al tipo de comparación según el día del mes (escala progresiva) | Los primeros 7 días del mes no tienen suficiente data para comparar | `tipo ('YTD'\|'MTD'\|'historico'), diaDelMes, _fechaRef` | `{ valido, confianza ('alta'\|'media'\|'temprana'\|'muy_temprana') }` | ⏳ Disponible |
+| `calcularConfianzaTemporal` | Mide qué tan predecible es el negocio usando coeficiente de variación | Negocios volátiles no deben proyectar igual que negocios estables | `_diaDelMes, historialPctPorDia: number[]` | `{ pctTipico, varianza, confiable, coeficienteVariacion, tipoNegocio }` | ⏳ Disponible |
+| `validarCoherenciaTemporal` **(NUEVA D)** | Detecta si el texto usa certezas ("cerrará", "no llegará") en la primera semana del mes | Evitar afirmaciones falsas cuando el mes apenas empieza | `texto, diaDelMes, diasEnMes` | `{ coherente, progreso, problema }` | ⏳ Disponible |
+
+### Grupo 7 — Calidad de Contenido
+
+| Regla | Qué hace | Por qué existe | Parámetros | Retorna | Estado |
+|-------|----------|----------------|------------|---------|--------|
+| `validarAccionConcreta` | Rechaza acciones vagas (monitorear, evaluar, dar seguimiento) y sin datos de respaldo | Las acciones deben ser ejecutables, no filosóficas | `accion: AccionConcreta` | `boolean` | ⏳ Disponible |
+| `TERMINOS_PROHIBIDOS_EN_OUTPUT` | Lista de términos técnicos prohibidos en texto para el usuario final | El usuario no es analista de datos; no debe ver "churn", "YoY", "SKU", etc. | Constante | `string[]` (22 términos) | ✅ Activa (via `contieneJerga`) |
+| `sustituirJerga` | Reemplaza términos técnicos por equivalentes en español natural | Garantizar lenguaje comprensible sin edición manual | `texto: string` | `string` (texto limpio) | ✅ Activa |
+| `contieneJerga` | Detecta si un texto contiene algún término prohibido | Permite rechazar o corregir antes de mostrar al usuario | `texto: string` | `{ tieneJerga, terminosEncontrados }` | ✅ Activa |
+| `esConclusionValida` | Rechaza conclusiones genéricas ("requiere atención", "es importante", etc.) | La conclusión debe interpretar, no repetir los datos | `conclusion: string` | `boolean` | ✅ Activa |
+| `sanitizarNarrativa` **(NUEVA A)** | Corrige tiempo verbal (mes no cerrado → presente progresivo) y concordancia de número | Evitar "cerró el mes con" cuando el mes aún va a la mitad | `texto, { diaDelMes, diasEnMes }` | `string` (texto corregido) | ⏳ Disponible |
+| `limitarRepeticionKPI` **(NUEVA E)** | Detecta si el Estado General repite valores que ya muestran las cards | El texto explicativo debe complementar las KPIs, no duplicarlas | `texto, kpiValues: { ventaYTD?, variacionYTD?, ... }` | `{ tieneRepeticiones, valoresRepetidos }` | ⏳ Disponible |
+
+### Grupo 8 — Integración de Datos
+
+| Regla | Qué hace | Por qué existe | Parámetros | Retorna | Estado |
+|-------|----------|----------------|------------|---------|--------|
+| `formatearImpacto` | Formatea un número como "$1.2M", "$450k" o "1,200 uds" según disponibilidad de venta neta | Presentar impacto en unidades apropiadas para cada empresa | `valor, hasVentaNeta, simboloMoneda? (default '$')` | `string` | ✅ Activa |
+| `evaluarIntegracionInventario` | Cruza un producto con el inventario para obtener stock actual y meses de cobertura | El inventario explica muchos declines de venta; debe cruzarse siempre | `producto, inventory[], ventasMensualesPromedio` | `{ stockActual, mesesCobertura, sinStock, sobrestock } \| null` | ⏳ Disponible |
+| `evaluarIntegracionMetas` | Cruza un vendedor con sus metas del mes y calcula cumplimiento, gap y dos proyecciones | Contexto de meta es obligatorio para insights de vendedor | `vendedor, metas[], fechaRef, ventaActualMes, ventaUltimos7Dias?` | `{ metaMes, cumplimiento, gap, proyeccion, proyeccionReciente, tipoMeta } \| null` | ⏳ Disponible |
+| `calcularDiasEnMes` / `calcularDiaDelMes` | Utilitarios de fecha | Centralizar cálculo de días para consistencia | `fecha: Date` | `number` | ⏳ Disponible |
+| `FORMATO` | Objeto con funciones de formateo estándar (moneda, porcentaje, número) | API uniforme para formateo en todos los generadores | — | `{ moneda, porcentaje, numero }` | ⏳ Disponible |
+
+### Grupo 9 — Pipeline
+
+| Regla | Qué hace | Por qué existe | Parámetros | Retorna | Estado |
+|-------|----------|----------------|------------|---------|--------|
+| `resolverContradiccion` | Cuando una misma entidad tiene múltiples candidatos, mantiene el de mayor impacto y fusiona los títulos de los descartados en `contextoAdicional` | Evitar que el mismo vendedor aparezca con dos insights contradictorios | `candidatos[]` | `candidatos[]` (sin duplicados de entidad) | ⏳ Disponible |
+| `validarBalance` | Verifica ratio mínimo de 1 insight positivo por cada 4 negativos; si no hay ningún positivo sugiere `cap_negativos` | Un reporte solo de malas noticias es parcial y desmotiva | `insights[]: { esPositivo }` | `{ balanceado, positivosFaltantes, sugerencia? }` | ⏳ Disponible |
+| `validarInsight` | 18 checks secuenciales sobre un candidato real del engine: cruces mínimos, impacto cuantificado, descripción suficiente, comparación temporal, acción concreta, sin jerga, conclusión válida | Puerta de calidad final antes de emitir; usa campos reales (`__impactoAbs`, `cruces`, `descripcion`) | `candidato, config: { percentileRank?, comparacionTipo?, diaDelMes }` | `{ aprobado, razon?, maxPrioridad, warnings[] }` | ⏳ Disponible |
 
 ---
 

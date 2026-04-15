@@ -122,6 +122,7 @@ export type InsightTipo =
   | 'riesgo_vendedor'
   | 'riesgo_cliente'
   | 'riesgo_producto'
+  | 'riesgo_inventario'
   | 'riesgo_meta'
   | 'riesgo_equipo'
   | 'cruzado'

@@ -99,6 +99,7 @@ interface AppState {
   orgId: string
   dataSource: 'none' | 'demo' | 'real'
   selectedPeriod: { year: number; month: number }
+  selectedMonths: { year: number; month: number }[] | null
   tipoMetaActivo: 'uds' | 'usd'
 
   // Comparativa de períodos
@@ -140,6 +141,7 @@ interface AppState {
   setLoadingMessage: (msg: string) => void
   setDataSource: (source: 'none' | 'demo' | 'real') => void
   setSelectedPeriod: (period: { year: number; month: number }) => void
+  setSelectedMonths: (months: { year: number; month: number }[] | null) => void
   setTipoMetaActivo: (tipo: 'uds' | 'usd') => void
   setConfiguracion: (config: Partial<Configuracion>) => void
   setChatContextVendedor: (v: VendorAnalysis | null) => void
@@ -201,6 +203,7 @@ export const useAppStore = create<AppState>()(
         year: new Date().getFullYear(),
         month: new Date().getMonth(), // 0-indexed
       },
+      selectedMonths: null,
       configuracion: DEFAULT_CONFIG,
       tipoMetaActivo: 'uds',
 
@@ -234,6 +237,14 @@ export const useAppStore = create<AppState>()(
       setLoadingMessage: (loadingMessage) => set({ loadingMessage }),
       setIsLoading: (isLoading) => set({ isLoading }),
       setSelectedPeriod: (selectedPeriod) => set({ selectedPeriod, isProcessed: false }),
+      setSelectedMonths: (months) => {
+        if (months && months.length > 0) {
+          const latest = months.reduce((a, b) => (a.year > b.year || (a.year === b.year && a.month > b.month)) ? a : b)
+          set({ selectedMonths: months, selectedPeriod: latest })
+        } else {
+          set({ selectedMonths: null })
+        }
+      },
       setTipoMetaActivo: (tipoMetaActivo) => set({ tipoMetaActivo, isProcessed: false }),
       setConfiguracion: (config) =>
         set((state) => ({

@@ -59,6 +59,7 @@ function getFeedLabel(tipo: InsightTipo): string {
     case 'riesgo_vendedor': return 'VENDEDOR'
     case 'riesgo_cliente': return 'CLIENTE'
     case 'riesgo_producto': return 'PRODUCTO'
+    case 'riesgo_inventario': return 'INVENTARIO'
   }
 }
 
@@ -71,7 +72,7 @@ const FEED_FILTERS: { key: FeedFilterKey; label: string; match: (i: Insight) => 
   { key: 'vendedores', label: 'Equipo',        match: i => i.tipo === 'riesgo_vendedor' || i.tipo === 'riesgo_equipo' },
   { key: 'hallazgo',   label: 'Oportunidades', match: i => i.tipo === 'hallazgo' },
   // kept for count logic but not shown as tabs:
-  { key: 'productos',  label: 'Productos',     match: i => i.tipo === 'riesgo_producto' },
+  { key: 'productos',  label: 'Productos',     match: i => i.tipo === 'riesgo_producto' || i.tipo === 'riesgo_inventario' },
   { key: 'clientes',   label: 'Clientes',      match: i => i.tipo === 'riesgo_cliente' },
 ]
 
@@ -154,6 +155,7 @@ function formatAlertaContent(
     keyLabel = tipo === 'riesgo_vendedor' ? 'caída % vs promedio'
       : tipo === 'riesgo_cliente' ? 'días sin actividad'
       : tipo === 'riesgo_producto' ? 'uds sin movimiento'
+      : tipo === 'riesgo_inventario' ? 'días de cobertura'
       : tipo === 'riesgo_meta' ? '% cumplimiento'
       : tipo === 'riesgo_equipo' ? '% brecha vs meta'
       : tipo === 'cruzado' ? 'factores combinados'
@@ -248,6 +250,7 @@ export default function EstadoComercialPage() {
     configuracion, selectedPeriod, setSelectedPeriod, sales, loadingMessage,
     clientesDormidos, concentracionRiesgo, categoriasInventario, supervisorAnalysis,
     canalAnalysis, categoriaAnalysis, dataSource, tipoMetaActivo,
+    selectedMonths, setSelectedMonths,
   } = useAppStore()
 
   const [vendedorPanel, setVendedorPanel] = useState<VendorAnalysis | null>(null)
@@ -354,9 +357,23 @@ export default function EstadoComercialPage() {
   }, [monthlyTotals])
 
   // â"€â"€ Slices de ventas cacheados (evitar llamadas repetidas a salesInPeriod) â"€
-  const salesActual = useMemo(() =>
-    salesInPeriod(sales, selectedPeriod.year, selectedPeriod.month),
-  [sales, selectedPeriod.year, selectedPeriod.month])
+  const salesActual = useMemo(() => {
+    if (selectedMonths === null) {
+      return sales.filter((s) => {
+        const fd = s.fecha instanceof Date ? s.fecha : new Date(s.fecha)
+        return fd.getFullYear() === selectedPeriod.year
+      })
+    }
+    if (selectedMonths.length === 1) {
+      return salesInPeriod(sales, selectedMonths[0].year, selectedMonths[0].month)
+    }
+    return sales.filter((s) => {
+      const fd = s.fecha instanceof Date ? s.fecha : new Date(s.fecha)
+      const y = fd.getFullYear()
+      const m = fd.getMonth()
+      return selectedMonths.some((sm) => sm.year === y && sm.month === m)
+    })
+  }, [sales, selectedMonths, selectedPeriod.year])
 
   // â"€â"€ Datos diferidos para secciones secundarias (evita freeze UI) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const deferredSales            = useDeferredValue(sales)
@@ -1399,10 +1416,12 @@ export default function EstadoComercialPage() {
 
   // ── Diagnóstico v2: tarjetas individuales basadas en el motor de insights ──
   const diagInsights: Insight[] = insights ?? []
-  const diagUrgentes = diagInsights.filter(i => i.prioridad === 'CRITICA' || i.prioridad === 'ALTA')
-  const diagAdicionales = diagInsights.filter(i => i.prioridad === 'MEDIA')
+  const estadoGeneral = diagInsights.find(i => i.tipo === 'riesgo_equipo')
+  const diagBase = diagInsights.filter(i => i.tipo !== 'riesgo_equipo')
+  const diagUrgentes = diagBase.filter(i => i.prioridad === 'CRITICA' || i.prioridad === 'ALTA')
+  const diagAdicionales = diagBase.filter(i => i.prioridad === 'MEDIA')
   // BAJA se omite del diagnóstico
-  const diagCriticaCount = diagInsights.filter(i => i.prioridad === 'CRITICA').length
+  const diagCriticaCount = diagBase.filter(i => i.prioridad === 'CRITICA').length
   const [mostrarAdicionales, setMostrarAdicionales] = useState(false)
 
   // ── YTD chart data (mensual individual: año actual vs anterior) ──
@@ -1551,8 +1570,11 @@ export default function EstadoComercialPage() {
   const activeYtdUp = activeYtdDiff >= 0
   const activeYtdPct = activeYtdChart.totalAnterior > 0 ? ((activeYtdDiff / activeYtdChart.totalAnterior) * 100) : null
 
-  const rawMesLabel = new Date(selectedPeriod.year, selectedPeriod.month, 1).toLocaleDateString('es-MX', { month: 'long', year: 'numeric' })
-  const mesLabel = rawMesLabel.charAt(0).toUpperCase() + rawMesLabel.slice(1)
+  const mesLabel = selectedMonths === null
+    ? "Todos los meses"
+    : selectedMonths.length === 1
+      ? `${MESES_LARGO[selectedMonths[0].month].charAt(0).toUpperCase() + MESES_LARGO[selectedMonths[0].month].slice(1)} ${selectedMonths[0].year}`
+      : `${selectedMonths.length} meses`
 
   // proyección de ingresos: misma lógica diaria que proyeccion_cierre en unidades
   const proyeccion_neta = dataAvailability.has_venta_neta && estadoMes.diasTranscurridos > 0
@@ -1656,7 +1678,7 @@ export default function EstadoComercialPage() {
             style={{ background: 'var(--sf-inset)', color: 'var(--sf-t2)', border: '1px solid var(--sf-border)' }}
           >
             <Calendar className="w-3.5 h-3.5" style={{ color: 'var(--sf-t4)' }} />
-            {MESES_LARGO[selectedPeriod.month].charAt(0).toUpperCase() + MESES_LARGO[selectedPeriod.month].slice(1)} {selectedPeriod.year}
+            {mesLabel}
             <ChevronDown className="w-3 h-3" style={{ color: 'var(--sf-t4)', transform: monthDropOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
           </button>
           {monthDropOpen && monthDropRect && createPortal(
@@ -1677,24 +1699,69 @@ export default function EstadoComercialPage() {
               }}
             >
               <div className="p-1.5 flex flex-col gap-0.5">
+                {/* Opción "Todos los meses" */}
+                <button
+                  onClick={() => {
+                    setSelectedMonths(null)
+                    setMonthDropOpen(false)
+                  }}
+                  className="w-full px-3 py-1.5 rounded-lg text-[12px] font-medium text-left flex items-center justify-between transition-colors cursor-pointer"
+                  style={{
+                    background: selectedMonths === null ? 'var(--sf-green-bg)' : 'transparent',
+                    color: selectedMonths === null ? 'var(--sf-green)' : 'var(--sf-t3)',
+                  }}
+                >
+                  Todos los meses
+                  {selectedMonths === null && <span style={{ color: 'var(--sf-green)', fontSize: 14, marginLeft: 4 }}>✓</span>}
+                </button>
+
+                {/* Separador */}
+                <div style={{ height: 1, background: 'var(--sf-border)', margin: '4px 0' }} />
+
+                {/* Meses individuales con checkboxes */}
                 {availableMonths.map(({ year, month }) => {
-                  const isSelected = year === selectedPeriod.year && month === selectedPeriod.month
+                  const isChecked = selectedMonths === null
+                    ? true
+                    : selectedMonths.some((m) => m.year === year && m.month === month)
                   const label = MESES_LARGO[month].charAt(0).toUpperCase() + MESES_LARGO[month].slice(1)
                   return (
                     <button
                       key={`${year}-${month}`}
                       onClick={() => {
-                        setSelectedPeriod({ year, month })
-                        setMonthDropOpen(false)
+                        if (selectedMonths === null) {
+                          setSelectedMonths([{ year, month }])
+                        } else if (isChecked) {
+                          const next = selectedMonths.filter((m) => !(m.year === year && m.month === month))
+                          if (next.length === 0) {
+                            setSelectedMonths(null)
+                          } else {
+                            setSelectedMonths(next)
+                          }
+                        } else {
+                          const next = [...selectedMonths, { year, month }].sort((a, b) => b.year - a.year || b.month - a.month)
+                          if (next.length === availableMonths.length) {
+                            setSelectedMonths(null)
+                          } else {
+                            setSelectedMonths(next)
+                          }
+                        }
                       }}
-                      className="w-full px-3 py-1.5 rounded-lg text-[12px] font-medium text-left flex items-center justify-between transition-colors cursor-pointer"
+                      className="w-full px-3 py-1.5 rounded-lg text-[12px] font-medium text-left flex items-center gap-2 transition-colors cursor-pointer"
                       style={{
-                        background: isSelected ? 'var(--sf-green-bg)' : 'transparent',
-                        color: isSelected ? 'var(--sf-green)' : 'var(--sf-t3)',
+                        background: isChecked && selectedMonths !== null ? 'var(--sf-green-bg)' : 'transparent',
+                        color: isChecked ? 'var(--sf-green)' : 'var(--sf-t3)',
                       }}
                     >
+                      <span style={{
+                        width: 16, height: 16, borderRadius: 4,
+                        border: `2px solid ${isChecked ? 'var(--sf-green)' : 'var(--sf-border)'}`,
+                        background: isChecked ? 'var(--sf-green)' : 'transparent',
+                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 10, color: 'white', flexShrink: 0,
+                      }}>
+                        {isChecked && '✓'}
+                      </span>
                       {label}
-                      {isSelected && <span style={{ color: 'var(--sf-green)', fontSize: 10 }}>✓</span>}
                     </button>
                   )
                 })}
@@ -1703,13 +1770,15 @@ export default function EstadoComercialPage() {
             document.body
           )}
         </div>
-        <span
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px]"
-          style={{ background: 'var(--sf-inset)', color: 'var(--sf-t4)' }}
-        >
-          <Calendar className="w-3 h-3" />
-          Día {teamStats.dias_transcurridos} de {teamStats.dias_totales}
-        </span>
+        {(selectedMonths === null || selectedMonths.length === 1) && (
+          <span
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px]"
+            style={{ background: 'var(--sf-inset)', color: 'var(--sf-t4)' }}
+          >
+            <Calendar className="w-3 h-3" />
+            Día {teamStats.dias_transcurridos} de {teamStats.dias_totales}
+          </span>
+        )}
       </div>
 
       {/* ── KPI CARDS ──────────────────────────────────────────────────────── */}
@@ -1798,6 +1867,78 @@ export default function EstadoComercialPage() {
           )}
         </div>
       </div>
+
+      {/* ── ESTADO GENERAL ──────────────────────────────────────────────────── */}
+      {estadoGeneral && (
+        <div
+          className="intel-fade rounded-xl p-5 mb-6"
+          style={{
+            background: 'var(--sf-card)',
+            border: '1px solid var(--sf-border)',
+            borderLeft: `3px solid ${estadoGeneral.esPositivo ? 'var(--sf-green)' : 'var(--sf-amber)'}`,
+          }}
+        >
+          {/* Header */}
+          <div className="flex items-start justify-between mb-4">
+            <div className="flex items-start gap-2.5">
+              <span className="text-base mt-0.5">{estadoGeneral.emoji}</span>
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-[10px] font-bold uppercase tracking-[0.12em]" style={{ color: 'var(--sf-t5)' }}>
+                    Estado general
+                  </span>
+                  <span className="text-[13px] font-semibold" style={{ color: 'var(--sf-t1)' }}>
+                    {estadoGeneral.titulo}
+                  </span>
+                </div>
+                {(estadoGeneral.conclusion || estadoGeneral.titulo) && (
+                  <p className="text-[11px] leading-snug" style={{ color: 'var(--sf-t3)', margin: 0 }}>
+                    {estadoGeneral.conclusion ?? estadoGeneral.titulo}
+                  </p>
+                )}
+              </div>
+            </div>
+            {estadoGeneral.señalesConvergentes != null && (
+              <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-full" style={{ background: 'var(--sf-inset)', color: 'var(--sf-t3)' }}>
+                {estadoGeneral.señalesConvergentes} señales convergentes
+              </span>
+            )}
+          </div>
+
+          {/* Bloques temáticos */}
+          <div className="mb-4">
+            {estadoGeneral.descripcion.split('§§§').filter(Boolean).map((bloque, i, arr) => (
+              <div
+                key={i}
+                style={{
+                  padding: '0.75rem 1rem',
+                  marginBottom: i < arr.length - 1 ? '0.5rem' : 0,
+                  background: 'var(--sf-inset)',
+                  borderRadius: '0.5rem',
+                  borderLeft: '2px solid var(--sf-border)',
+                }}
+              >
+                <p style={{ color: 'var(--sf-t2)', fontSize: '0.82rem', lineHeight: '1.65', margin: 0 }}>
+                  {bloque}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          {/* Acción sugerida */}
+          <div className="flex items-start justify-between gap-4 pt-2" style={{ borderTop: '1px solid var(--sf-border-subtle)' }}>
+            <p className="text-[12px]" style={{ color: 'var(--sf-t3)' }}>
+              <span style={{ color: 'var(--sf-t5)' }}>→</span>{' '}
+              {estadoGeneral.accion?.texto ?? estadoGeneral.accion_sugerida}
+            </p>
+            {estadoGeneral.accion?.ejecutableEn && (
+              <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-full whitespace-nowrap" style={{ background: 'var(--sf-inset)', color: 'var(--sf-t4)' }}>
+                {estadoGeneral.accion.ejecutableEn.replace(/_/g, ' ')}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="space-y-8">
 
@@ -1929,7 +2070,7 @@ export default function EstadoComercialPage() {
       </div>
 
       {/* ── DIAGNÓSTICO DEL MES (v2: tarjetas individuales) ─────────────── */}
-      {diagInsights.length > 0 && (
+      {diagBase.length > 0 && (
         <section className="intel-fade space-y-3" style={{ animationDelay: '100ms' }}>
           {/* Encabezado */}
           <div className="flex items-center gap-3 pb-1">
@@ -2142,7 +2283,7 @@ export default function EstadoComercialPage() {
                 ) : (
                   <>
                     <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 28, fontWeight: 400, color: 'var(--sf-amber)', lineHeight: 1 }}>
-                      {insights.filter(i => i.tipo === 'riesgo_producto').length}
+                      {insights.filter(i => i.tipo === 'riesgo_producto' || i.tipo === 'riesgo_inventario').length}
                     </div>
                     <div className="text-xs mt-1" style={{ color: 'var(--sf-t3)' }}>alertas de producto</div>
                     <div className="text-xs mt-2" style={{ color: 'var(--sf-t3)' }}>
