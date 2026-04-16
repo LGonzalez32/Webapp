@@ -1,4 +1,4 @@
-﻿import { useEffect, useState, useMemo, useCallback, useDeferredValue, useRef } from 'react'
+import { useEffect, useState, useMemo, useCallback, useDeferredValue, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { ResponsiveContainer, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, LabelList } from 'recharts'
@@ -59,6 +59,7 @@ function getFeedLabel(tipo: InsightTipo): string {
     case 'riesgo_vendedor': return 'VENDEDOR'
     case 'riesgo_cliente': return 'CLIENTE'
     case 'riesgo_producto': return 'PRODUCTO'
+    case 'riesgo_inventario': return 'INVENTARIO'
   }
 }
 
@@ -71,7 +72,7 @@ const FEED_FILTERS: { key: FeedFilterKey; label: string; match: (i: Insight) => 
   { key: 'vendedores', label: 'Equipo',        match: i => i.tipo === 'riesgo_vendedor' || i.tipo === 'riesgo_equipo' },
   { key: 'hallazgo',   label: 'Oportunidades', match: i => i.tipo === 'hallazgo' },
   // kept for count logic but not shown as tabs:
-  { key: 'productos',  label: 'Productos',     match: i => i.tipo === 'riesgo_producto' },
+  { key: 'productos',  label: 'Productos',     match: i => i.tipo === 'riesgo_producto' || i.tipo === 'riesgo_inventario' },
   { key: 'clientes',   label: 'Clientes',      match: i => i.tipo === 'riesgo_cliente' },
 ]
 
@@ -154,6 +155,7 @@ function formatAlertaContent(
     keyLabel = tipo === 'riesgo_vendedor' ? 'caída % vs promedio'
       : tipo === 'riesgo_cliente' ? 'días sin actividad'
       : tipo === 'riesgo_producto' ? 'uds sin movimiento'
+      : tipo === 'riesgo_inventario' ? 'días de cobertura'
       : tipo === 'riesgo_meta' ? '% cumplimiento'
       : tipo === 'riesgo_equipo' ? '% brecha vs meta'
       : tipo === 'cruzado' ? 'factores combinados'
@@ -245,9 +247,10 @@ export default function EstadoComercialPage() {
   useAnalysis()
   const {
     insights, vendorAnalysis, teamStats, dataAvailability,
-    configuracion, selectedPeriod, setSelectedPeriod, sales, loadingMessage,
+    configuracion, selectedPeriod, setSelectedPeriod, sales, metas, loadingMessage,
     clientesDormidos, concentracionRiesgo, categoriasInventario, supervisorAnalysis,
     canalAnalysis, categoriaAnalysis, dataSource, tipoMetaActivo,
+    selectedMonths, setSelectedMonths,
   } = useAppStore()
 
   const [vendedorPanel, setVendedorPanel] = useState<VendorAnalysis | null>(null)
@@ -350,13 +353,39 @@ export default function EstadoComercialPage() {
       .map(k => { const [y, m] = k.split('-').map(Number); return { year: y, month: m } })
       .sort((a, b) => b.year - a.year || b.month - a.month)
     const latestYear = all[0]?.year ?? new Date().getFullYear()
-    return all.filter(am => am.year === latestYear)
-  }, [monthlyTotals])
+    const monthsFromTotals = all.filter(am => am.year === latestYear)
+    // Incluir también meses desde 0 hasta maxDate.getMonth() para el año latestYear si maxDate está en ese año
+    if (maxDate.getFullYear() === latestYear) {
+      const maxMonth = maxDate.getMonth()
+      const existingMonths = new Set(monthsFromTotals.map(m => m.month))
+      for (let m = 0; m <= maxMonth; m++) {
+        if (!existingMonths.has(m)) {
+          monthsFromTotals.push({ year: latestYear, month: m })
+        }
+      }
+      monthsFromTotals.sort((a, b) => b.month - a.month)
+    }
+    return monthsFromTotals
+  }, [monthlyTotals, maxDate])
 
   // â"€â"€ Slices de ventas cacheados (evitar llamadas repetidas a salesInPeriod) â"€
-  const salesActual = useMemo(() =>
-    salesInPeriod(sales, selectedPeriod.year, selectedPeriod.month),
-  [sales, selectedPeriod.year, selectedPeriod.month])
+  const salesActual = useMemo(() => {
+    if (selectedMonths === null) {
+      return sales.filter((s) => {
+        const fd = s.fecha instanceof Date ? s.fecha : new Date(s.fecha)
+        return fd.getFullYear() === selectedPeriod.year
+      })
+    }
+    if (selectedMonths.length === 1) {
+      return salesInPeriod(sales, selectedMonths[0].year, selectedMonths[0].month)
+    }
+    return sales.filter((s) => {
+      const fd = s.fecha instanceof Date ? s.fecha : new Date(s.fecha)
+      const y = fd.getFullYear()
+      const m = fd.getMonth()
+      return selectedMonths.some((sm) => sm.year === y && sm.month === m)
+    })
+  }, [sales, selectedMonths, selectedPeriod.year])
 
   // â"€â"€ Datos diferidos para secciones secundarias (evita freeze UI) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const deferredSales            = useDeferredValue(sales)
@@ -1399,18 +1428,25 @@ export default function EstadoComercialPage() {
 
   // ── Diagnóstico v2: tarjetas individuales basadas en el motor de insights ──
   const diagInsights: Insight[] = insights ?? []
-  const diagUrgentes = diagInsights.filter(i => i.prioridad === 'CRITICA' || i.prioridad === 'ALTA')
-  const diagAdicionales = diagInsights.filter(i => i.prioridad === 'MEDIA')
+  const estadoGeneral = diagInsights.find(i => i.tipo === 'riesgo_equipo')
+  const diagBase = diagInsights.filter(i => i.tipo !== 'riesgo_equipo')
+  const diagUrgentes = diagBase.filter(i => i.prioridad === 'CRITICA' || i.prioridad === 'ALTA')
+  const diagAdicionales = diagBase.filter(i => i.prioridad === 'MEDIA')
   // BAJA se omite del diagnóstico
-  const diagCriticaCount = diagInsights.filter(i => i.prioridad === 'CRITICA').length
+  const diagCriticaCount = diagBase.filter(i => i.prioridad === 'CRITICA').length
   const [mostrarAdicionales, setMostrarAdicionales] = useState(false)
 
   // ── YTD chart data (mensual individual: año actual vs anterior) ──
   // Must be before early return to respect Rules of Hooks
   const ytdChart = useMemo(() => {
-    const currentYear = selectedPeriod.year
+    // Cuando selectedMonths === null (Todos los meses), mostrar hasta la fecha de referencia más reciente (maxDate)
+    const currentYear = selectedMonths === null && maxDate.getTime() > 0
+      ? maxDate.getFullYear()
+      : selectedPeriod.year
     const previousYear = currentYear - 1
-    const selectedMonth = selectedPeriod.month // 0-based
+    const selectedMonth = selectedMonths === null && maxDate.getTime() > 0
+      ? maxDate.getMonth()
+      : selectedPeriod.month // 0-based
     // El mes "en curso" real es el mes del dato más reciente (puede diferir del seleccionado)
     const latestMonth = maxDate.getFullYear() === currentYear ? maxDate.getMonth() : selectedMonth
     const maxDay = maxDate.getDate() // día hasta el que hay datos en el mes en curso
@@ -1420,6 +1456,10 @@ export default function EstadoComercialPage() {
     let totalAnterior = 0
 
     for (let m = 0; m <= selectedMonth; m++) {
+      // Si hay meses específicos seleccionados, omitir los que no están en la lista
+      if (selectedMonths !== null && !selectedMonths.some((sm) => sm.month === m && sm.year === currentYear)) {
+        continue
+      }
       // Mes realmente parcial = el mes donde están los últimos datos (mes en curso)
       const isPartialMonth = m === latestMonth
       const daysInMonth = new Date(currentYear, m + 1, 0).getDate()
@@ -1443,20 +1483,29 @@ export default function EstadoComercialPage() {
       })
     }
     return { data, totalActual, totalAnterior, maxDay }
-  }, [monthlyTotals, monthlyTotalsSameDay, selectedPeriod.year, selectedPeriod.month, maxDate])
+  }, [monthlyTotals, monthlyTotalsSameDay, selectedPeriod.year, selectedPeriod.month, maxDate, selectedMonths])
 
   // ── YTD chart en dólares (solo si has_venta_neta) ──
   const ytdChartUSD = useMemo(() => {
     if (!dataAvailability.has_venta_neta) return null
-    const currentYear = selectedPeriod.year
+    // Cuando selectedMonths === null (Todos los meses), mostrar hasta la fecha de referencia más reciente (maxDate)
+    const currentYear = selectedMonths === null && maxDate.getTime() > 0
+      ? maxDate.getFullYear()
+      : selectedPeriod.year
     const previousYear = currentYear - 1
-    const selectedMonth = selectedPeriod.month
+    const selectedMonth = selectedMonths === null && maxDate.getTime() > 0
+      ? maxDate.getMonth()
+      : selectedPeriod.month
     const latestMonth = maxDate.getFullYear() === currentYear ? maxDate.getMonth() : selectedMonth
     const maxDay = maxDate.getDate()
     const data: { month: string; actual: number; anterior: number; isPartial: boolean; daysElapsed: number; daysTotal: number }[] = []
     let totalActual = 0
     let totalAnterior = 0
     for (let m = 0; m <= selectedMonth; m++) {
+      // Si hay meses específicos seleccionados, omitir los que no están en la lista
+      if (selectedMonths !== null && !selectedMonths.some((sm) => sm.month === m && sm.year === currentYear)) {
+        continue
+      }
       const isPartialMonth = m === latestMonth
       const daysInMonth = new Date(currentYear, m + 1, 0).getDate()
       const ventasActual = monthlyTotals[`${currentYear}-${m}`]?.neta ?? 0
@@ -1468,7 +1517,57 @@ export default function EstadoComercialPage() {
       data.push({ month: MESES_CORTO[m], actual: ventasActual, anterior: ventasAnterior, isPartial: isPartialMonth, daysElapsed: isPartialMonth ? maxDay : daysInMonth, daysTotal: daysInMonth })
     }
     return { data, totalActual, totalAnterior, maxDay }
-  }, [monthlyTotals, monthlyTotalsSameDay, selectedPeriod.year, selectedPeriod.month, maxDate, dataAvailability.has_venta_neta])
+  }, [monthlyTotals, monthlyTotalsSameDay, selectedPeriod.year, selectedPeriod.month, maxDate, dataAvailability.has_venta_neta, selectedMonths])
+
+  const metasCerradas = useMemo(() => {
+    if (!teamStats || !metas || metas.length === 0) return null
+
+    const currentMonth = selectedPeriod.month // 0-indexed
+    const currentYear = selectedPeriod.year
+    const vendorNames = new Set(
+      (deferredVendorAnalysis ?? []).map((v: any) => v.vendedor)
+    )
+    const isUSD = tipoMetaActivo === 'usd' && dataAvailability.has_venta_neta
+
+    let metaAcum = 0
+    let ventaAcum = 0
+    const mesesCerrados: string[] = []
+    const MESES_C = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
+
+    for (let m = 0; m < currentMonth; m++) {
+      // Respetar el filtro: si hay meses específicos seleccionados y este no está, saltarlo
+      if (selectedMonths !== null && !selectedMonths.some((sm) => sm.month === m && sm.year === currentYear)) continue
+
+      const metasMes = metas.filter(
+        (mt: any) => mt.mes === m + 1 && mt.anio === currentYear && mt.vendedor && vendorNames.has(mt.vendedor) && !mt.supervisor && !mt.categoria
+      )
+      const metaMes = metasMes.reduce((s: number, mt: any) => s + (isUSD ? (mt.meta_usd ?? 0) : (mt.meta_uds ?? mt.meta ?? 0)), 0)
+
+      const mtKey = `${currentYear}-${m}`
+      const mtData = monthlyTotals[mtKey]
+      const ventaMes = isUSD ? (mtData?.neta ?? 0) : (mtData?.uds ?? 0)
+
+      if (metaMes > 0) {
+        metaAcum += metaMes
+        ventaAcum += ventaMes
+        mesesCerrados.push(MESES_C[m])
+      }
+    }
+
+    if (metaAcum === 0) return null
+
+    const cumpl = (ventaAcum / metaAcum) * 100
+
+    return {
+      cumplimiento: cumpl,
+      metaAcum,
+      ventaAcum,
+      mesesLabel: mesesCerrados.length <= 3
+        ? mesesCerrados.join('–')
+        : `${mesesCerrados[0]}–${mesesCerrados[mesesCerrados.length - 1]}`,
+      mesesCount: mesesCerrados.length,
+    }
+  }, [teamStats, metas, selectedPeriod, selectedMonths, deferredVendorAnalysis, tipoMetaActivo, dataAvailability, monthlyTotals])
 
   if (!teamStats) {
     if (sales.length === 0) return null // el useEffect redirige a /cargar
@@ -1551,8 +1650,11 @@ export default function EstadoComercialPage() {
   const activeYtdUp = activeYtdDiff >= 0
   const activeYtdPct = activeYtdChart.totalAnterior > 0 ? ((activeYtdDiff / activeYtdChart.totalAnterior) * 100) : null
 
-  const rawMesLabel = new Date(selectedPeriod.year, selectedPeriod.month, 1).toLocaleDateString('es-MX', { month: 'long', year: 'numeric' })
-  const mesLabel = rawMesLabel.charAt(0).toUpperCase() + rawMesLabel.slice(1)
+  const mesLabel = selectedMonths === null
+    ? "Todos los meses"
+    : selectedMonths.length === 1
+      ? `${MESES_LARGO[selectedMonths[0].month].charAt(0).toUpperCase() + MESES_LARGO[selectedMonths[0].month].slice(1)} ${selectedMonths[0].year}`
+      : `${selectedMonths.length} meses`
 
   // proyección de ingresos: misma lógica diaria que proyeccion_cierre en unidades
   const proyeccion_neta = dataAvailability.has_venta_neta && estadoMes.diasTranscurridos > 0
@@ -1576,7 +1678,6 @@ export default function EstadoComercialPage() {
   const cumplimientoFinal = metaActiva > 0
     ? (proyActiva / metaActiva) * 100
     : (teamStats?.cumplimiento_equipo ?? 0)
-
 
   const fmtBig = (n: number) =>
     n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M`
@@ -1656,7 +1757,7 @@ export default function EstadoComercialPage() {
             style={{ background: 'var(--sf-inset)', color: 'var(--sf-t2)', border: '1px solid var(--sf-border)' }}
           >
             <Calendar className="w-3.5 h-3.5" style={{ color: 'var(--sf-t4)' }} />
-            {MESES_LARGO[selectedPeriod.month].charAt(0).toUpperCase() + MESES_LARGO[selectedPeriod.month].slice(1)} {selectedPeriod.year}
+            {mesLabel}
             <ChevronDown className="w-3 h-3" style={{ color: 'var(--sf-t4)', transform: monthDropOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
           </button>
           {monthDropOpen && monthDropRect && createPortal(
@@ -1677,24 +1778,69 @@ export default function EstadoComercialPage() {
               }}
             >
               <div className="p-1.5 flex flex-col gap-0.5">
+                {/* Opción "Todos los meses" */}
+                <button
+                  onClick={() => {
+                    setSelectedMonths(null)
+                    setMonthDropOpen(false)
+                  }}
+                  className="w-full px-3 py-1.5 rounded-lg text-[12px] font-medium text-left flex items-center justify-between transition-colors cursor-pointer"
+                  style={{
+                    background: selectedMonths === null ? 'var(--sf-green-bg)' : 'transparent',
+                    color: selectedMonths === null ? 'var(--sf-green)' : 'var(--sf-t3)',
+                  }}
+                >
+                  Todos los meses
+                  {selectedMonths === null && <span style={{ color: 'var(--sf-green)', fontSize: 14, marginLeft: 4 }}>✓</span>}
+                </button>
+
+                {/* Separador */}
+                <div style={{ height: 1, background: 'var(--sf-border)', margin: '4px 0' }} />
+
+                {/* Meses individuales con checkboxes */}
                 {availableMonths.map(({ year, month }) => {
-                  const isSelected = year === selectedPeriod.year && month === selectedPeriod.month
+                  const isChecked = selectedMonths === null
+                    ? true
+                    : selectedMonths.some((m) => m.year === year && m.month === month)
                   const label = MESES_LARGO[month].charAt(0).toUpperCase() + MESES_LARGO[month].slice(1)
                   return (
                     <button
                       key={`${year}-${month}`}
                       onClick={() => {
-                        setSelectedPeriod({ year, month })
-                        setMonthDropOpen(false)
+                        if (selectedMonths === null) {
+                          setSelectedMonths([{ year, month }])
+                        } else if (isChecked) {
+                          const next = selectedMonths.filter((m) => !(m.year === year && m.month === month))
+                          if (next.length === 0) {
+                            setSelectedMonths(null)
+                          } else {
+                            setSelectedMonths(next)
+                          }
+                        } else {
+                          const next = [...selectedMonths, { year, month }].sort((a, b) => b.year - a.year || b.month - a.month)
+                          if (next.length === availableMonths.length) {
+                            setSelectedMonths(null)
+                          } else {
+                            setSelectedMonths(next)
+                          }
+                        }
                       }}
-                      className="w-full px-3 py-1.5 rounded-lg text-[12px] font-medium text-left flex items-center justify-between transition-colors cursor-pointer"
+                      className="w-full px-3 py-1.5 rounded-lg text-[12px] font-medium text-left flex items-center gap-2 transition-colors cursor-pointer"
                       style={{
-                        background: isSelected ? 'var(--sf-green-bg)' : 'transparent',
-                        color: isSelected ? 'var(--sf-green)' : 'var(--sf-t3)',
+                        background: isChecked && selectedMonths !== null ? 'var(--sf-green-bg)' : 'transparent',
+                        color: isChecked ? 'var(--sf-green)' : 'var(--sf-t3)',
                       }}
                     >
+                      <span style={{
+                        width: 16, height: 16, borderRadius: 4,
+                        border: `2px solid ${isChecked ? 'var(--sf-green)' : 'var(--sf-border)'}`,
+                        background: isChecked ? 'var(--sf-green)' : 'transparent',
+                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 10, color: 'white', flexShrink: 0,
+                      }}>
+                        {isChecked && '✓'}
+                      </span>
                       {label}
-                      {isSelected && <span style={{ color: 'var(--sf-green)', fontSize: 10 }}>✓</span>}
                     </button>
                   )
                 })}
@@ -1703,28 +1849,42 @@ export default function EstadoComercialPage() {
             document.body
           )}
         </div>
-        <span
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px]"
-          style={{ background: 'var(--sf-inset)', color: 'var(--sf-t4)' }}
-        >
-          <Calendar className="w-3 h-3" />
-          Día {teamStats.dias_transcurridos} de {teamStats.dias_totales}
-        </span>
+        {(selectedMonths === null || selectedMonths.length === 1) && (
+          <span
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px]"
+            style={{ background: 'var(--sf-inset)', color: 'var(--sf-t4)' }}
+          >
+            <Calendar className="w-3 h-3" />
+            Día {teamStats.dias_transcurridos} de {teamStats.dias_totales}
+          </span>
+        )}
       </div>
 
       {/* ── KPI CARDS ──────────────────────────────────────────────────────── */}
-      <div className="intel-fade grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6" style={{ animationDelay: '30ms' }}>
-        {/* Card 1 — VENTAS YTD + variación vs año anterior */}
+      <div className="intel-fade grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6" style={{ animationDelay: '30ms' }}>
+
+        {/* ── Card 1 — VENTA ACUMULADA ── */}
         {(() => {
           const mainUds  = ytdChart.totalActual
           const mainNeto = ytd_neto
-          const varPct   = activeYtdPct
-          const fechaRefAnterior = `${maxDate.getDate()} ${MESES_CORTO[maxDate.getMonth()].toLowerCase()}`
-          const kpiUSD = tipoMetaActivo === 'usd' && dataAvailability.has_venta_neta && mainNeto > 0
+          const kpiUSD   = tipoMetaActivo === 'usd' && dataAvailability.has_venta_neta && mainNeto > 0
+
+          const prevMonthIdx     = selectedPeriod.month === 0 ? 11 : selectedPeriod.month - 1
+          const prevMonthYear    = selectedPeriod.month === 0 ? selectedPeriod.year - 1 : selectedPeriod.year
+          const prevMonthSameDay = monthlyTotalsSameDay[`${prevMonthYear}-${prevMonthIdx}`]
+          const ventaActualMoM   = kpiUSD ? estadoMes.ingreso_actual : estadoMes.actual
+          const ventaAnteriorMoM = kpiUSD ? (prevMonthSameDay?.neta ?? 0) : (prevMonthSameDay?.uds ?? 0)
+          const varPct = ventaAnteriorMoM > 0
+            ? ((ventaActualMoM - ventaAnteriorMoM) / ventaAnteriorMoM) * 100
+            : null
+          const ytdAnterior = kpiUSD ? ytd_anterior_neto : ytdChart.totalAnterior
+          const mesActNombre  = MESES_CORTO[selectedPeriod.month].toUpperCase()
+          const mesAntNombre  = MESES_CORTO[prevMonthIdx].toUpperCase()
+
           return (
             <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
-              <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t5)' }}>
-                Ventas {selectedPeriod.year} — acumulado al día {teamStats.dias_transcurridos}
+              <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--sf-t5)' }}>
+                Venta acumulada {selectedPeriod.year}
               </p>
               {kpiUSD ? (
                 <p className="text-2xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-t1)' }}>
@@ -1736,28 +1896,35 @@ export default function EstadoComercialPage() {
                 </p>
               )}
               {varPct != null && (
-                <p className="text-base font-semibold mt-1.5" style={{ color: varPct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
-                  {varPct >= 0 ? '+' : ''}{varPct.toFixed(1)}% <span className="text-xs" style={{ color: 'var(--sf-t5)', fontWeight: 400 }}>vs 1 ene–{fechaRefAnterior} {selectedPeriod.year - 1}</span>
+                <p className="text-sm font-semibold mt-2" style={{ color: varPct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
+                  {varPct >= 0 ? '+' : ''}{varPct.toFixed(1)}%
+                  <span className="text-xs font-normal ml-1" style={{ color: 'var(--sf-t5)' }}>
+                    {mesActNombre} vs {mesAntNombre} al día {teamStats.dias_transcurridos}
+                  </span>
+                </p>
+              )}
+              {ytdAnterior > 0 && (
+                <p className="text-xs mt-1.5" style={{ color: 'var(--sf-t4)' }}>
+                  Año ant. al día {teamStats.dias_transcurridos}:{' '}
+                  <span style={{ color: 'var(--sf-t3)' }}>
+                    {kpiUSD ? `${configuracion.moneda}${fmtBig(ytdAnterior)}` : `${fmtBig(ytdAnterior)} uds`}
+                  </span>
                 </p>
               )}
             </div>
           )
         })()}
 
-        {/* Card 2 — PROYECCIÓN CIERRE */}
+        {/* ── Card 2 — PROYECCIÓN DEL MES ── */}
         {(() => {
-          const hasNeta = dataAvailability.has_venta_neta
           const mesNombre = MESES_CORTO[selectedPeriod.month].toUpperCase()
-          const card2USD = tipoMetaActivo === 'usd' && hasNeta
-          const mtdVal = card2USD ? estadoMes.ingreso_actual : estadoMes.actual
-          const proyVal = card2USD ? proyeccion_neta : estadoMes.proyeccion_cierre
+          const card2USD  = tipoMetaActivo === 'usd' && dataAvailability.has_venta_neta
+          const mtdVal    = card2USD ? estadoMes.ingreso_actual : estadoMes.actual
+          const proyVal   = card2USD ? proyeccion_neta : estadoMes.proyeccion_cierre
           return (
             <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
-              <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t5)' }}>
-                Proyección de cierre — {mesNombre} {selectedPeriod.year}
-              </p>
-              <p className="text-sm mt-0.5 mb-1" style={{ color: 'var(--sf-t3)' }}>
-                Llevas {card2USD ? `${configuracion.moneda}${fmtBig(mtdVal)}` : `${mtdVal.toLocaleString()} uds`} en {teamStats.dias_transcurridos} días
+              <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--sf-t5)' }}>
+                Proyección — {mesNombre}
               </p>
               <p className="text-2xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-green)' }}>
                 {card2USD
@@ -1765,39 +1932,187 @@ export default function EstadoComercialPage() {
                   : <>{Math.round(proyVal).toLocaleString('es-SV')}<span className="text-sm font-normal ml-1" style={{ color: 'var(--sf-t5)' }}>uds</span></>
                 }
               </p>
-              <p className="text-xs mt-1" style={{ color: 'var(--sf-t4)' }}>
-                proyección al día {teamStats.dias_totales}
+              <p className="text-xs mt-2" style={{ color: 'var(--sf-t4)' }}>
+                Venta al día {teamStats.dias_transcurridos}:{' '}
+                <span style={{ color: 'var(--sf-t3)' }}>
+                  {card2USD ? `${configuracion.moneda}${fmtBig(mtdVal)}` : `${fmtBig(mtdVal)} uds`}
+                </span>
               </p>
             </div>
           )
         })()}
 
-        {/* Card 3 — META DEL MES */}
-        <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
-          <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t5)' }}>
-            Meta — {MESES_CORTO[selectedPeriod.month].toUpperCase()}
-          </p>
-          {teamStats?.meta_equipo ? (
-            <>
-              <p className="text-2xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: cumplimientoFinal >= 100 ? 'var(--sf-green)' : cumplimientoFinal >= 70 ? 'var(--sf-t1)' : 'var(--sf-red)' }}>
-                {Math.round(cumplimientoFinal)}%
-              </p>
-              <p className="text-sm mt-1" style={{ color: 'var(--sf-t2)' }}>
-                {tipoMetaActivo === 'usd' && dataAvailability.has_venta_neta
-                  ? `Meta: ${configuracion.moneda}${fmtBig(metaActiva)}`
-                  : `Meta: ${Math.round(metaActiva).toLocaleString()} uds`
-                }
-              </p>
-              <div className="mt-2 rounded-full overflow-hidden" style={{ height: 4, background: 'var(--sf-inset)' }}>
-                <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(cumplimientoFinal, 100)}%`, background: cumplimientoFinal >= 100 ? 'var(--sf-green)' : cumplimientoFinal >= 70 ? '#eab308' : 'var(--sf-red)' }} />
+        {/* ── Card 3 — MESES CERRADOS ── */}
+        {(() => {
+          if (!metasCerradas) {
+            return (
+              <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
+                <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--sf-t5)' }}>
+                  Meses cerrados
+                </p>
+                <p className="text-sm mt-1" style={{ color: 'var(--sf-t5)' }}>Sin meta configurada</p>
               </div>
-              <p className="text-[10px] mt-1.5 italic" style={{ color: 'var(--sf-t4)' }}>Así proyectas cerrar el mes</p>
-            </>
-          ) : (
+            )
+          }
+          const color3 = metasCerradas.cumplimiento >= 100 ? 'var(--sf-green)' : 'var(--sf-red)'
+          const isUSD3 = tipoMetaActivo === 'usd' && dataAvailability.has_venta_neta
+          const ventaFmt = isUSD3
+            ? `${configuracion.moneda}${fmtBig(metasCerradas.ventaAcum)}`
+            : `${fmtBig(Math.round(metasCerradas.ventaAcum))} uds`
+          const metaFmt = isUSD3
+            ? `${configuracion.moneda}${fmtBig(metasCerradas.metaAcum)}`
+            : `${fmtBig(Math.round(metasCerradas.metaAcum))} uds`
+          return (
+            <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
+              <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--sf-t5)' }}>
+                Meses cerrados — {metasCerradas.mesesLabel}
+              </p>
+              <p className="text-2xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: color3 }}>
+                {Math.round(metasCerradas.cumplimiento)}%
+              </p>
+              <p className="text-xs mt-2" style={{ color: 'var(--sf-t4)' }}>
+                Venta: <span style={{ color: 'var(--sf-t2)', fontWeight: 600 }}>{ventaFmt}</span>
+                <span className="mx-1.5" style={{ color: 'var(--sf-border)' }}>·</span>
+                Meta: <span style={{ color: 'var(--sf-t3)' }}>{metaFmt}</span>
+              </p>
+            </div>
+          )
+        })()}
+
+        {/* ── Card 4 — MES ACTUAL ── */}
+        <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
+          <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--sf-t5)' }}>
+            Mes actual — {MESES_CORTO[selectedPeriod.month].toUpperCase()}
+          </p>
+          {teamStats?.meta_equipo ? (() => {
+            const isUSD4   = tipoMetaActivo === 'usd' && dataAvailability.has_venta_neta
+            const vendido4 = isUSD4 ? estadoMes.ingreso_actual : estadoMes.actual
+            const proy4    = isUSD4 ? proyeccion_neta : proyFinal
+            const realPct  = metaActiva > 0 ? (vendido4 / metaActiva) * 100 : 0
+            const barColor = realPct >= 100 ? 'var(--sf-green)' : realPct >= 70 ? '#eab308' : 'var(--sf-red)'
+            const proyColor = cumplimientoFinal >= 100 ? 'var(--sf-green)' : 'var(--sf-t2)'
+            const fmt4 = (n: number) => isUSD4
+              ? `${configuracion.moneda}${fmtBig(n)}`
+              : `${fmtBig(n)} uds`
+            // Dual-layer bar: scale to projection so vendido and projection are both visible
+            const scale       = Math.max(cumplimientoFinal, 100)
+            const vendidoW    = (realPct / scale) * 100
+            const proyW       = Math.min((cumplimientoFinal / scale) * 100, 100)
+            const metaTickPos = (100 / scale) * 100  // where meta falls in the scaled bar
+            return (
+              <>
+                {/* Meta — referencia */}
+                <div className="flex justify-between items-baseline">
+                  <span className="text-xs" style={{ color: 'var(--sf-t5)' }}>Meta</span>
+                  <span className="text-sm font-semibold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-t4)' }}>{fmt4(metaActiva)}</span>
+                </div>
+                {/* Vendido */}
+                <div className="flex justify-between items-baseline mt-1.5">
+                  <span className="text-xs font-medium" style={{ color: 'var(--sf-t2)' }}>Vendido</span>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-[10px]" style={{ color: barColor }}>{Math.round(realPct)}%</span>
+                    <span className="text-base font-bold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-t1)' }}>{fmt4(vendido4)}</span>
+                  </div>
+                </div>
+                {/* Dual progress bar */}
+                <div className="relative mt-2 mb-2 rounded-full overflow-hidden" style={{ height: 6, background: 'var(--sf-inset)' }}>
+                  {/* Projection layer (faint) */}
+                  <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${proyW}%`, background: `color-mix(in srgb, var(--sf-green) 22%, transparent)` }} />
+                  {/* Vendido layer (solid) */}
+                  <div className="absolute inset-y-0 left-0 rounded-full transition-all" style={{ width: `${vendidoW}%`, background: barColor }} />
+                  {/* Meta tick — only visible when projection > meta */}
+                  {cumplimientoFinal > 105 && (
+                    <div className="absolute inset-y-0" style={{ left: `${metaTickPos}%`, width: 2, marginLeft: -1, background: 'var(--sf-t5)' }} />
+                  )}
+                </div>
+                {/* Proyección */}
+                <div className="flex justify-between items-baseline">
+                  <span className="text-xs font-medium" style={{ color: proyColor }}>Proyección</span>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-[10px]" style={{ color: 'var(--sf-t4)' }}>{Math.round(cumplimientoFinal)}%</span>
+                    <span className="text-base font-bold" style={{ fontFamily: "'DM Mono', monospace", color: proyColor }}>{fmt4(proy4)}</span>
+                  </div>
+                </div>
+              </>
+            )
+          })() : (
             <p className="text-sm mt-1" style={{ color: 'var(--sf-t5)' }}>Sin meta configurada</p>
           )}
         </div>
+
       </div>
+
+      {/* ── ESTADO GENERAL ──────────────────────────────────────────────────── */}
+      {estadoGeneral && (
+        <div
+          className="intel-fade rounded-xl p-5 mb-6"
+          style={{
+            background: 'var(--sf-card)',
+            border: '1px solid var(--sf-border)',
+            borderLeft: `3px solid ${estadoGeneral.esPositivo ? 'var(--sf-green)' : 'var(--sf-amber)'}`,
+          }}
+        >
+          {/* Header */}
+          <div className="flex items-start justify-between mb-4">
+            <div className="flex items-start gap-2.5">
+              <span className="text-base mt-0.5">{estadoGeneral.emoji}</span>
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-[10px] font-bold uppercase tracking-[0.12em]" style={{ color: 'var(--sf-t5)' }}>
+                    Estado general
+                  </span>
+                  <span className="text-[13px] font-semibold" style={{ color: 'var(--sf-t1)' }}>
+                    {estadoGeneral.titulo}
+                  </span>
+                </div>
+                {(estadoGeneral.conclusion || estadoGeneral.titulo) && (
+                  <p className="text-[11px] leading-snug" style={{ color: 'var(--sf-t3)', margin: 0 }}>
+                    {estadoGeneral.conclusion ?? estadoGeneral.titulo}
+                  </p>
+                )}
+              </div>
+            </div>
+            {estadoGeneral.señalesConvergentes != null && (
+              <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-full" style={{ background: 'var(--sf-inset)', color: 'var(--sf-t3)' }}>
+                {estadoGeneral.señalesConvergentes} señales convergentes
+              </span>
+            )}
+          </div>
+
+          {/* Bloques temáticos */}
+          <div className="mb-4">
+            {estadoGeneral.descripcion.split('§§§').filter(Boolean).map((bloque, i, arr) => (
+              <div
+                key={i}
+                style={{
+                  padding: '0.75rem 1rem',
+                  marginBottom: i < arr.length - 1 ? '0.5rem' : 0,
+                  background: 'var(--sf-inset)',
+                  borderRadius: '0.5rem',
+                  borderLeft: '2px solid var(--sf-border)',
+                }}
+              >
+                <p style={{ color: 'var(--sf-t2)', fontSize: '0.82rem', lineHeight: '1.65', margin: 0 }}>
+                  {bloque}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          {/* Acción sugerida */}
+          <div className="flex items-start justify-between gap-4 pt-2" style={{ borderTop: '1px solid var(--sf-border-subtle)' }}>
+            <p className="text-[12px]" style={{ color: 'var(--sf-t3)' }}>
+              <span style={{ color: 'var(--sf-t5)' }}>→</span>{' '}
+              {estadoGeneral.accion?.texto ?? estadoGeneral.accion_sugerida}
+            </p>
+            {estadoGeneral.accion?.ejecutableEn && (
+              <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-full whitespace-nowrap" style={{ background: 'var(--sf-inset)', color: 'var(--sf-t4)' }}>
+                {estadoGeneral.accion.ejecutableEn.replace(/_/g, ' ')}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="space-y-8">
 
@@ -1929,7 +2244,7 @@ export default function EstadoComercialPage() {
       </div>
 
       {/* ── DIAGNÓSTICO DEL MES (v2: tarjetas individuales) ─────────────── */}
-      {diagInsights.length > 0 && (
+      {diagBase.length > 0 && (
         <section className="intel-fade space-y-3" style={{ animationDelay: '100ms' }}>
           {/* Encabezado */}
           <div className="flex items-center gap-3 pb-1">
@@ -2142,7 +2457,7 @@ export default function EstadoComercialPage() {
                 ) : (
                   <>
                     <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 28, fontWeight: 400, color: 'var(--sf-amber)', lineHeight: 1 }}>
-                      {insights.filter(i => i.tipo === 'riesgo_producto').length}
+                      {insights.filter(i => i.tipo === 'riesgo_producto' || i.tipo === 'riesgo_inventario').length}
                     </div>
                     <div className="text-xs mt-1" style={{ color: 'var(--sf-t3)' }}>alertas de producto</div>
                     <div className="text-xs mt-2" style={{ color: 'var(--sf-t3)' }}>

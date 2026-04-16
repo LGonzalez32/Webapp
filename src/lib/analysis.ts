@@ -853,6 +853,33 @@ export function computeCommercialAnalysis(
     ).length
   }
 
+  // --- Metas de meses cerrados (enero hasta mes anterior al actual) ---
+  const getMetaVal2 = (m: MetaRecord) => tipoMetaActivo === 'usd' ? (m.meta_usd ?? 0) : (m.meta_uds ?? m.meta ?? 0)
+  let metaCerradaTotal = 0
+  let ventaCerradaTotal = 0
+  const mesesCerradosArr: number[] = []
+
+  for (let mesIdx = 0; mesIdx < month; mesIdx++) {
+    const metasMes = metas.filter((m) => m.mes === mesIdx + 1 && m.anio === year && m.vendedor && !m.supervisor && !m.categoria)
+    const metaMes = metasMes.reduce((a, m) => a + getMetaVal2(m), 0)
+    if (metaMes === 0) continue
+
+    let ventaMesUds = 0
+    let ventaMesNeta = 0
+    for (const s of sales) {
+      if (s.fecha.getFullYear() === year && s.fecha.getMonth() === mesIdx) {
+        ventaMesUds += s.unidades
+        ventaMesNeta += s.venta_neta ?? 0
+      }
+    }
+
+    metaCerradaTotal += metaMes
+    ventaCerradaTotal += tipoMetaActivo === 'usd' ? ventaMesNeta : ventaMesUds
+    mesesCerradosArr.push(mesIdx + 1)
+  }
+
+  const cumplimientoCerrado = metaCerradaTotal > 0 ? (ventaCerradaTotal / metaCerradaTotal) * 100 : 0
+
   const teamStats: TeamStats = {
     total_ventas,
     total_unidades,
@@ -873,6 +900,12 @@ export function computeCommercialAnalysis(
       const { ytd_actual, ytd_anterior, variacion_ytd_pct } = computeYTD(sales, fechaReferencia)
       return { ytd_actual_equipo: ytd_actual, ytd_anterior_equipo: ytd_anterior, variacion_ytd_equipo: variacion_ytd_pct }
     })(),
+    ...(metaCerradaTotal > 0 ? {
+      meta_cerrada_total: metaCerradaTotal,
+      venta_cerrada_total: ventaCerradaTotal,
+      cumplimiento_cerrado: cumplimientoCerrado,
+      meses_cerrados: mesesCerradosArr,
+    } : {}),
   }
 
   return { vendorAnalysis, teamStats, clientesDormidos, concentracionRiesgo }

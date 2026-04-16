@@ -99,6 +99,7 @@ interface AppState {
   orgId: string
   dataSource: 'none' | 'demo' | 'real'
   selectedPeriod: { year: number; month: number }
+  selectedMonths: { year: number; month: number }[] | null
   tipoMetaActivo: 'uds' | 'usd'
 
   // Comparativa de períodos
@@ -140,6 +141,7 @@ interface AppState {
   setLoadingMessage: (msg: string) => void
   setDataSource: (source: 'none' | 'demo' | 'real') => void
   setSelectedPeriod: (period: { year: number; month: number }) => void
+  setSelectedMonths: (months: { year: number; month: number }[] | null) => void
   setTipoMetaActivo: (tipo: 'uds' | 'usd') => void
   setConfiguracion: (config: Partial<Configuracion>) => void
   setChatContextVendedor: (v: VendorAnalysis | null) => void
@@ -201,6 +203,7 @@ export const useAppStore = create<AppState>()(
         year: new Date().getFullYear(),
         month: new Date().getMonth(), // 0-indexed
       },
+      selectedMonths: null,
       configuracion: DEFAULT_CONFIG,
       tipoMetaActivo: 'uds',
 
@@ -227,13 +230,46 @@ export const useAppStore = create<AppState>()(
       setCanalesDisponibles:    (canalesDisponibles)    => set({ canalesDisponibles }),
       setMonthlyTotals:         (monthlyTotals)         => set({ monthlyTotals }),
       setMonthlyTotalsSameDay:  (monthlyTotalsSameDay)  => set({ monthlyTotalsSameDay }),
-      setFechaRefISO:           (fechaRefISO)           => set({ fechaRefISO }),
+      setFechaRefISO: (fechaRefISO) => set((state) => {
+        const updates: any = { fechaRefISO }
+        // Si selectedMonths es null, actualizar selectedPeriod a la nueva fecha de referencia
+        if (state.selectedMonths === null && fechaRefISO) {
+          const fechaRef = new Date(fechaRefISO)
+          updates.selectedPeriod = { year: fechaRef.getFullYear(), month: fechaRef.getMonth() }
+        }
+        return updates
+      }),
 
       setDataSource: (dataSource) => set({ dataSource }),
       setIsProcessed: (isProcessed) => set({ isProcessed }),
       setLoadingMessage: (loadingMessage) => set({ loadingMessage }),
       setIsLoading: (isLoading) => set({ isLoading }),
       setSelectedPeriod: (selectedPeriod) => set({ selectedPeriod, isProcessed: false }),
+      setSelectedMonths: (months) => {
+        if (months && months.length > 0) {
+          const latest = months.reduce((a, b) => (a.year > b.year || (a.year === b.year && a.month > b.month)) ? a : b)
+          set({ selectedMonths: months, selectedPeriod: latest })
+        } else {
+          set((state) => {
+            // Cuando es null, mantener selectedPeriod en la fecha de referencia más reciente (fechaRefISO)
+            if (state.fechaRefISO) {
+              const fechaRef = new Date(state.fechaRefISO)
+              return {
+                selectedMonths: null,
+                selectedPeriod: { year: fechaRef.getFullYear(), month: fechaRef.getMonth() }
+              }
+            }
+            // Fallback: mes más reciente de monthlyTotals
+            const keys = Object.keys(state.monthlyTotals)
+            if (keys.length > 0) {
+              const latestKey = keys.sort((a, b) => b.localeCompare(a))[0]
+              const [y, m] = latestKey.split('-').map(Number)
+              return { selectedMonths: null, selectedPeriod: { year: y, month: m } }
+            }
+            return { selectedMonths: null }
+          })
+        }
+      },
       setTipoMetaActivo: (tipoMetaActivo) => set({ tipoMetaActivo, isProcessed: false }),
       setConfiguracion: (config) =>
         set((state) => ({

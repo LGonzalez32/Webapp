@@ -26,7 +26,8 @@ const PRIORIDAD_BORDER: Record<string, string> = {
 const TIPO_PILL: Partial<Record<InsightTipo, { label: string; color: string; bg: string }>> = {
   riesgo_vendedor: { label: 'VENDEDOR',  color: '#60A5FA', bg: '#60A5FA15' },
   riesgo_cliente:  { label: 'CLIENTE',   color: '#4ADE80', bg: '#4ADE8015' },
-  riesgo_producto: { label: 'CATEGORÍA', color: '#FFB800', bg: '#FFB80015' },
+  riesgo_producto:   { label: 'CATEGORÍA',  color: '#FFB800', bg: '#FFB80015' },
+  riesgo_inventario: { label: 'INVENTARIO', color: '#F97316', bg: '#F9731615' },
   riesgo_meta:     { label: 'META',      color: '#FFB800', bg: '#FFB80015' },
   riesgo_equipo:   { label: 'EQUIPO',    color: '#60A5FA', bg: '#60A5FA15' },
   hallazgo:        { label: 'HALLAZGO',  color: '#22D3EE', bg: '#22D3EE15' },

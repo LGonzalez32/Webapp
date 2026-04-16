@@ -135,9 +135,17 @@ export default function InsightCardNew({ insight, defaultOpen }: InsightCardNewP
       {open && (
         <div className="px-4 pb-4 border-t border-[var(--sf-border)] mt-3 pt-4">
           {/* Bloque 1 — Análisis */}
-          <p className="text-[15px] leading-relaxed font-normal text-[var(--sf-text)]">
-            {insight.descripcion}
-          </p>
+          {insight.descripcion.includes('§§§') ? (
+            insight.descripcion.split('§§§').map((bloque, i) => (
+              <p key={i} className="text-[15px] leading-relaxed font-normal text-[var(--sf-text)]">
+                {bloque.trim()}
+              </p>
+            ))
+          ) : (
+            <p className="text-[15px] leading-relaxed font-normal text-[var(--sf-text)]">
+              {insight.descripcion}
+            </p>
+          )}
 
           {insight.conclusion && (
             <div className="mt-3 pt-3 border-t border-[var(--sf-border)]">
@@ -157,7 +165,12 @@ export default function InsightCardNew({ insight, defaultOpen }: InsightCardNewP
               )}
               {insight.inventarioContext && insight.inventarioContext.alerta !== 'disponible' && (
                 <span className="text-[12px] font-medium px-2 py-0.5 rounded-full bg-orange-400/15 text-orange-300">
-                  ⚠ Stock: {Math.round(insight.inventarioContext.mesesCobertura * 10) / 10} meses
+                  {insight.inventarioContext.mesesCobertura === 0
+                    ? (insight.inventarioContext.stock > 0
+                        ? `⚠ ${insight.inventarioContext.stock} uds sin rotación`
+                        : '⚠ Sin stock')
+                    : `Stock: ${Math.round(insight.inventarioContext.mesesCobertura * 10) / 10} meses`
+                  }
                 </span>
               )}
             </div>
