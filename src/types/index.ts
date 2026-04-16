@@ -114,6 +114,10 @@ export interface TeamStats {
   ytd_actual_equipo?: number
   ytd_anterior_equipo?: number
   variacion_ytd_equipo?: number | null
+  meta_cerrada_total?: number
+  venta_cerrada_total?: number
+  cumplimiento_cerrado?: number
+  meses_cerrados?: number[]
 }
 
 // ─── INSIGHTS ─────────────────────────────────────────────────────────────────

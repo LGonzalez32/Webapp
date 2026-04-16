@@ -230,7 +230,15 @@ export const useAppStore = create<AppState>()(
       setCanalesDisponibles:    (canalesDisponibles)    => set({ canalesDisponibles }),
       setMonthlyTotals:         (monthlyTotals)         => set({ monthlyTotals }),
       setMonthlyTotalsSameDay:  (monthlyTotalsSameDay)  => set({ monthlyTotalsSameDay }),
-      setFechaRefISO:           (fechaRefISO)           => set({ fechaRefISO }),
+      setFechaRefISO: (fechaRefISO) => set((state) => {
+        const updates: any = { fechaRefISO }
+        // Si selectedMonths es null, actualizar selectedPeriod a la nueva fecha de referencia
+        if (state.selectedMonths === null && fechaRefISO) {
+          const fechaRef = new Date(fechaRefISO)
+          updates.selectedPeriod = { year: fechaRef.getFullYear(), month: fechaRef.getMonth() }
+        }
+        return updates
+      }),
 
       setDataSource: (dataSource) => set({ dataSource }),
       setIsProcessed: (isProcessed) => set({ isProcessed }),
@@ -242,7 +250,24 @@ export const useAppStore = create<AppState>()(
           const latest = months.reduce((a, b) => (a.year > b.year || (a.year === b.year && a.month > b.month)) ? a : b)
           set({ selectedMonths: months, selectedPeriod: latest })
         } else {
-          set({ selectedMonths: null })
+          set((state) => {
+            // Cuando es null, mantener selectedPeriod en la fecha de referencia más reciente (fechaRefISO)
+            if (state.fechaRefISO) {
+              const fechaRef = new Date(state.fechaRefISO)
+              return {
+                selectedMonths: null,
+                selectedPeriod: { year: fechaRef.getFullYear(), month: fechaRef.getMonth() }
+              }
+            }
+            // Fallback: mes más reciente de monthlyTotals
+            const keys = Object.keys(state.monthlyTotals)
+            if (keys.length > 0) {
+              const latestKey = keys.sort((a, b) => b.localeCompare(a))[0]
+              const [y, m] = latestKey.split('-').map(Number)
+              return { selectedMonths: null, selectedPeriod: { year: y, month: m } }
+            }
+            return { selectedMonths: null }
+          })
         }
       },
       setTipoMetaActivo: (tipoMetaActivo) => set({ tipoMetaActivo, isProcessed: false }),

@@ -1,97 +1,156 @@
-Actualiza CLAUDE.md con los siguientes cambios exactos. Usa str_replace para cada sección afectada. NO reescribas el archivo completo.
-
-=== CAMBIO 1: Versión en el título ===
-
-Cambiar:
-## v2.3 | React + TypeScript + Zustand + Recharts + Vite
-
-Por:
+# SalesFlow — Monitor de Riesgo Comercial
 ## v2.0 | React + TypeScript + Zustand + Recharts + Vite
 
-=== CAMBIO 2: Datos demo ===
+---
 
-Cambiar la sección ## DATOS DEMO completa:
+## PRODUCTO
+B2B SaaS para empresas con equipos de ventas. Detecta riesgos comerciales
+antes de que afecten resultados. NO es un dashboard BI, es un motor de decisiones.
 
-Antes:
-## DATOS DEMO
+---
 
-Empresa: Los Pinos S.A.
-8 vendedores, 12 productos, 11 clientes, 18 meses historial
-3 canales: Mostrador, Visita directa, Teléfono
-Inventario demo: 5 categorías activas
+## STACK FRONTEND (activo)
+- React 19 + TypeScript + Vite
+- Zustand v5 (persist v3, key: salesflow-storage)
+- Recharts para gráficas
+- Tailwind v4 (sin tailwind.config.js)
+- react-router-dom v7
+- Lucide React para iconos
+- Sonner para toasts
+- PapaParse + XLSX para archivos
+- Zod para validación
 
-Por:
-## DATOS DEMO
+## STACK BACKEND (construido, no conectado al frontend)
+- Python FastAPI en /backend
+- Modelos: NAIVE, ETS, SARIMA, ENSEMBLE
+- NO tocar backend salvo instrucción explícita
 
-Empresa: Los Pinos S.A.
-8 vendedores, 20 productos, 30 clientes, 93,155 filas de ventas
-Rango: Enero 2024 – Abril 2026 (fecha ref: Abr 9, 2026)
-4 categorías: Refrescos, Lácteos, Limpieza, Snacks
-3 canales: Mayoreo, Mostrador, Autoservicio
-3 supervisores, 10 departamentos (El Salvador)
+## SERVICIOS EXTERNOS
+- DeepSeek API (chat): https://api.deepseek.com/chat/completions
+  Modelos: deepseek-chat, deepseek-reasoner
+  API key: configuracion.deepseek_api_key (en store)
+- Supabase: configurado pero NO activo en frontend
 
-=== CAMBIO 3: Insights ===
+---
 
-Cambiar:
-## LOS 20 INSIGHTS (insightEngine.ts)
+## ARQUITECTURA FRONTEND
 
-Por:
-## INSIGHTS (insightEngine.ts)
+### Flujo de datos
+1. Upload → fileParser.ts → setSales/setMetas/setInventory
+2. useAnalysis.ts → detectDataAvailability → computeCommercialAnalysis
+   → computeCategoriasInventario → generateInsights → store
+3. Páginas leen del store via useAppStore()
+4. TopBar cambia selectedPeriod → isProcessed=false → re-análisis
 
-Y cambiar el contenido de esa sección:
+### Store (appStore.ts)
+PERSISTIDO: selectedPeriod, configuracion, orgId
+SOLO MEMORIA: vendorAnalysis, teamStats, insights, clientesDormidos,
+  concentracionRiesgo, categoriasInventario, forecastData, isProcessed, isLoading
 
-Antes:
-Prioridades: CRITICA > ALTA > MEDIA > BAJA
-fechaReferencia propagada a todos los detectores.
-Insights con impacto_economico (solo si has_venta_neta):
-  #1 Meta en Peligro, #9 Concentración Sistémica,
-  #15 Equipo No Cerrará Meta, #19 Doble Riesgo,
-  #20 Caída Explicada
+### Análisis
+- fechaReferencia = SIEMPRE max(sales.fecha), NUNCA new Date()
+- YTD: comparación homóloga (1 ene año actual vs 1 ene año anterior)
+- Inventario: PM3 de 3 meses CERRADOS antes de selectedPeriod
 
-Por:
-Prioridades: CRITICA > ALTA > MEDIA > BAJA
-fechaReferencia propagada a todos los detectores.
-~26 detectores activos con cross-table analysis (vendedores × clientes × productos × inventario).
-Todos los detectores usan same-day-range para comparaciones YoY.
-Insights con impacto_economico (solo si has_venta_neta):
-  Meta en Peligro, Concentración Sistémica, Equipo No Cerrará Meta,
-  Doble Riesgo, Caída Explicada
-
-=== CAMBIO 4: Agregar sección de reglas críticas de negocio ===
-
-Después de la sección ## ARQUITECTURA FRONTEND y antes de ## REGLAS DE DESARROLLO, agregar esta sección nueva:
+---
 
 ## REGLAS DE NEGOCIO CRÍTICAS
 
 ### Comparaciones de períodos (ABSOLUTO — nunca romper)
-- Solo 2 tipos válidos de comparación:
-  - YTD: Jan 1 a fechaReferencia del año actual vs mismo rango año anterior
-  - MTD YoY: día 1 al día N del mes actual vs mismo rango del mismo mes año anterior
-- NUNCA comparar un período parcial (ej: 9 días) contra un mes completo (30 días)
-- Cuando isCurrentMonth=true: filtrar año anterior con getDate() <= diasTranscurridos
+- YTD: Jan 1 a fechaReferencia año actual vs mismo rango año anterior
+- MTD YoY: día 1 al día N del mes actual vs mismo rango del mismo mes año anterior
+- NUNCA comparar período parcial contra mes completo
+- isCurrentMonth=true: filtrar año anterior con getDate() <= diasTranscurridos
 
 ### recoveryScore
-- Existe internamente en vendorAnalysis para ordenar/priorizar
-- NUNCA mostrar el número x/100 al usuario en ninguna UI
+- Interno en vendorAnalysis — NUNCA mostrar el número x/100 en UI
 - Mostrar solo: etiqueta en español + texto de acción contextual
 
-### tipoMetaActivo
-- Valores: 'uds' | 'usd'
-- Todos los KPIs, cards y tablas deben mostrar SOLO el tipo activo
+### tipoMetaActivo ('uds' | 'usd')
+- Todos los KPIs, cards y tablas muestran SOLO el tipo activo
 - No mezclar métricas en la misma vista
 
 ### Componentes — DO NOT TOUCH (salvo instrucción explícita)
-- PulsoPanel.tsx (Content components ya enriquecidos con cross-table)
-- VendedorPanel.tsx (análisis correcto)
-- AnalysisDrawer.tsx (soporta analysisContent JSX además de texto plano)
+- PulsoPanel.tsx, VendedorPanel.tsx, AnalysisDrawer.tsx
 - El chat / asistente virtual
 - La apariencia de las PULSO cards en el dashboard
 
-### Componentes UI reutilizables (usar siempre en lugar de <select>/<input> nativos)
-- src/components/ui/SFSelect.tsx — select estilizado con chevron propio
-- src/components/ui/SFSearch.tsx — input de búsqueda con icono integrado
+### Componentes UI reutilizables (siempre en lugar de nativos)
+- src/components/ui/SFSelect.tsx — select estilizado
+- src/components/ui/SFSearch.tsx — input de búsqueda
 
-=== VERIFICACIÓN ===
+---
 
-Al terminar: confirma qué secciones editaste y muestra el diff de cada str_replace.
-tsc --noEmit no aplica para archivos .md, pero confirma que el archivo queda bien formado.
+## REGLAS DE DESARROLLO
+
+### Edición de código
+- Usar str_replace, NO reescribir archivos completos
+- Leer SOLO las funciones afectadas, no el archivo entero
+- Cambios quirúrgicos únicamente
+- tsc --noEmit debe dar 0 errores al terminar
+
+### Lo que NO tocar salvo instrucción explícita
+- backend/ (Python FastAPI — no conectado)
+- supabase/ (migraciones — no activo)
+- forecastApi.ts, errorHandler.ts (código muerto)
+
+### Dependencias
+- NO instalar librerías nuevas sin preguntar
+- NO usar react-markdown ni librerías de parsing externas
+- Tailwind v4: no tiene tailwind.config.js, usa @tailwindcss/vite
+
+---
+
+## PÁGINAS ACTIVAS (9 rutas)
+/dashboard      → EstadoComercialPage
+/vendedores     → VendedoresPage
+/rendimiento    → RendimientoPage
+/clientes       → ClientesPage (condicional has_cliente)
+/rotacion       → RotacionPage (condicional has_inventario)
+/metas          → MetasPage (condicional has_metas)
+/chat           → ChatPage (DeepSeek conectado)
+/cargar         → UploadPage
+/configuracion  → ConfiguracionPage
+
+---
+
+## INSIGHTS (insightEngine.ts)
+Prioridades: CRITICA > ALTA > MEDIA > BAJA
+fechaReferencia propagada a todos los detectores.
+~26 detectores activos con cross-table analysis (vendedores × clientes × productos × inventario).
+Same-day-range para comparaciones YoY.
+Impacto económico (solo si has_venta_neta): Meta en Peligro, Concentración Sistémica,
+  Equipo No Cerrará Meta, Doble Riesgo, Caída Explicada
+
+---
+
+## DATOS DEMO
+Empresa: Los Pinos S.A.
+8 vendedores, 20 productos, 30 clientes, 93,155 filas de ventas
+Rango: Enero 2024 – Abril 2026 | 4 categorías | 3 canales | 10 departamentos (El Salvador)
+
+---
+
+## DEUDA TÉCNICA
+- Conectar backend Python forecast a RendimientoPage
+- Supabase Auth + RLS (antes del primer cliente pagador)
+- MetasPage: expandir para dimensiones producto/cliente/canal
+
+---
+
+## RESPONSE STYLE
+- Chat: máx. 5 líneas resumiendo archivos cambiados. Detalle va en los archivos.
+- No hacer dumps de código en el chat — usar Edit/Write directamente.
+- Análisis extensos → escribir en archivo .md, no en el chat.
+
+## BUILD & VERIFICATION
+- Después de editar .ts/.tsx: correr `npx tsc --noEmit` y confirmar 0 errores.
+- Si tsc falla: diagnosticar y corregir antes de continuar.
+
+## REFACTORING RULES
+- Preservar edge-cases, fallbacks y error paths a menos que se indique eliminarlos.
+- Si se eliminó algo no pedido explícitamente: restaurar o preguntar primero.
+
+## PERFORMANCE WORK
+- Medir tiempo actual antes de optimizar (console.time o similar).
+- Solo conservar el cambio si los números mejoran. Si es más lento: revertir.
