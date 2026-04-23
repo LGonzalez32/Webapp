@@ -1,7 +1,7 @@
-// [Z.9.3] decision-engine.ts — Motor de Decisión Ejecutiva
+// [Z.9.3/Z.9.4] decision-engine.ts — Motor de Decisión Ejecutiva
 //
-// Responsabilidad única de este módulo: agrupar InsightCandidates en InsightChains
-// para su consumo posterior por Z.9.4 (ExecutiveProblems).
+// Z.9.3: Agrupa InsightCandidates en InsightChains (causal linking).
+// Z.9.4: Agrupa InsightChains en ExecutiveProblems (compresión ejecutiva).
 //
 // Sin IA, sin probabilidad. Reglas determinísticas basadas en los campos Z.9.2
 // (direction, time_scope, impacto_valor) ya hidratados por hydratarCandidatoZ9.
@@ -265,4 +265,169 @@ export function buildInsightChains(
   })
 
   return chains
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Z.9.4 — ExecutiveProblem: compresión ejecutiva de InsightChains
+// ════════════════════════════════════════════════════════════════════════════
+
+// ─── Tipo ExecutiveProblem ────────────────────────────────────────────────────
+
+/**
+ * Agrupación ejecutiva de InsightChains que comparten la misma raíz del problema.
+ * Unidad de presentación del Panel Ejecutivo (Z.9.5, bajo feature flag).
+ */
+export interface ExecutiveProblem {
+  problemId:      string                          // "problem:{rootProblemKey}"
+  rootProblemKey: string                          // e.g., "down:vendedor:ytd"
+  headline:       string                          // "Caída en vendedores (YTD)"
+  severity:       'CRITICA' | 'ALTA' | 'MEDIA' | 'BAJA'
+  totalImpactUSD: number | null                   // suma de chain.totalImpactValue
+  chainIds:       string[]                        // IDs de las cadenas incluidas
+  candidateIds:   string[]                        // todos los candidatos de todas las cadenas
+  entityCount:    number                          // miembros distintos afectados
+  direction:      'up' | 'down' | 'neutral'
+  dimensionId:    string
+  time_scope:     'mtd' | 'ytd' | 'rolling' | 'monthly' | 'unknown'
+}
+
+// ─── Helpers de headline ─────────────────────────────────────────────────────
+
+const _DIRECTION_LABEL: Record<string, string> = {
+  down:    'Caída',
+  up:      'Alza',
+  neutral: 'Variación',
+}
+
+const _DIM_LABEL: Record<string, string> = {
+  vendedor:    'en vendedores',
+  cliente:     'en clientes',
+  producto:    'en productos',
+  categoria:   'en categorías',
+  canal:       'por canal',
+  departamento:'por departamento',
+  supervisor:  'por supervisor',
+}
+
+const _SCOPE_LABEL: Record<string, string> = {
+  ytd:     'YTD',
+  mtd:     'mes actual',
+  rolling: 'últimos meses',
+  monthly: 'mensual',
+  unknown: '',
+}
+
+function _buildHeadline(problemKey: string, entityCount: number): string {
+  const [dir = 'neutral', dim = '', scope = 'unknown'] = problemKey.split(':')
+  const dirLabel   = _DIRECTION_LABEL[dir]  ?? 'Variación'
+  const dimLabel   = _DIM_LABEL[dim]        ?? `en ${dim}`
+  const scopeLabel = _SCOPE_LABEL[scope]    ?? scope
+  const scopePart  = scopeLabel ? ` (${scopeLabel})` : ''
+  const countPart  = entityCount > 1 ? ` — ${entityCount} entidades` : ''
+  return `${dirLabel} ${dimLabel}${scopePart}${countPart}`
+}
+
+// ─── Severidad desde impacto ─────────────────────────────────────────────────
+
+function _severityFromImpact(usd: number | null): ExecutiveProblem['severity'] {
+  if (usd == null) return 'MEDIA'
+  if (usd >= 10_000) return 'CRITICA'
+  if (usd >=  3_000) return 'ALTA'
+  if (usd >=  1_000) return 'MEDIA'
+  return 'BAJA'
+}
+
+// ─── buildExecutiveProblems ──────────────────────────────────────────────────
+
+/**
+ * Agrupa InsightChains en ExecutiveProblems por rootProblemKey compartida.
+ *
+ * Algoritmo:
+ *   1. Agrupar chains por rootProblemKey.
+ *   2. Por cada grupo: sumar totalImpactValue, reunir candidateIds y entidades.
+ *   3. Calcular severity desde totalImpactUSD.
+ *   4. Construir headline legible a partir de los componentes de la clave.
+ *
+ * No aplica EXECUTIVE_COMPRESSION_ENABLED — ese flag vive en el render (Z.9.5).
+ */
+export function buildExecutiveProblems(
+  chains: InsightChain[],
+): ExecutiveProblem[] {
+  if (!chains || chains.length === 0) return []
+
+  const groups = new Map<string, InsightChain[]>()
+  for (const chain of chains) {
+    const key = chain.rootProblemKey
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)!.push(chain)
+  }
+
+  const problems: ExecutiveProblem[] = []
+
+  for (const [problemKey, groupChains] of groups) {
+    // Sumar impacto total
+    let totalImpactUSD: number | null = null
+    for (const chain of groupChains) {
+      const v = chain.totalImpactValue
+      if (v != null && isFinite(v)) {
+        totalImpactUSD = (totalImpactUSD ?? 0) + v
+      }
+    }
+
+    // Reunir candidateIds únicos
+    const candidateSet = new Set<string>()
+    for (const chain of groupChains) {
+      for (const node of chain.nodes) {
+        candidateSet.add(node.candidateId)
+      }
+    }
+    const candidateIds = [...candidateSet]
+
+    // Miembros distintos: extraer del candidateId (formato "type:dim:member")
+    const memberSet = new Set<string>()
+    for (const cid of candidateIds) {
+      const parts = cid.split(':')
+      if (parts.length >= 3) memberSet.add(parts.slice(2).join(':'))
+    }
+    const entityCount = memberSet.size
+
+    // Descomponer la clave para headline y campos tipados
+    const [dirStr = 'neutral', dimStr = '', scopeStr = 'unknown'] = problemKey.split(':')
+    const direction  = (['up', 'down', 'neutral'].includes(dirStr)
+      ? dirStr : 'neutral') as ExecutiveProblem['direction']
+    const time_scope = (['mtd', 'ytd', 'rolling', 'monthly', 'unknown'].includes(scopeStr)
+      ? scopeStr : 'unknown') as ExecutiveProblem['time_scope']
+
+    const severity = _severityFromImpact(totalImpactUSD)
+    const headline = _buildHeadline(problemKey, entityCount)
+
+    problems.push({
+      problemId:      `problem:${problemKey}`,
+      rootProblemKey: problemKey,
+      headline,
+      severity,
+      totalImpactUSD,
+      chainIds:       groupChains.map(c => c.chainId),
+      candidateIds,
+      entityCount,
+      direction,
+      dimensionId:    dimStr,
+      time_scope,
+    })
+  }
+
+  // Ordenar: severity desc, luego impacto desc
+  const _SEV_RANK: Record<string, number> = { CRITICA: 3, ALTA: 2, MEDIA: 1, BAJA: 0 }
+  problems.sort((a, b) => {
+    const ds = (_SEV_RANK[b.severity] ?? 0) - (_SEV_RANK[a.severity] ?? 0)
+    if (ds !== 0) return ds
+    return (b.totalImpactUSD ?? 0) - (a.totalImpactUSD ?? 0)
+  })
+
+  console.log('[Z.9.4] buildExecutiveProblems', {
+    chains:   chains.length,
+    problems: problems.length,
+  })
+
+  return problems
 }
