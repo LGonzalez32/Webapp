@@ -30,6 +30,8 @@ export const MIN_CONTRIBUTION_TO_PARENT_PCT = 0.05   // [R139] 5%
 export const MAX_CHAIN_DEPTH                = 4       // [R140]
 /** Candidatos máximos por cadena antes del corte. */
 export const MAX_CANDIDATES_PER_CHAIN       = 8       // [R141]
+/** Problemas ejecutivos máximos que llegan al render (Z.9.6). */
+export const MAX_EXECUTIVE_PROBLEMS_SHOWN   = 7       // [R142]
 
 // ─── ID canónico de candidato ────────────────────────────────────────────────
 
@@ -179,9 +181,9 @@ export function buildInsightChains(
   for (const [problemKey, group] of groups) {
     if (group.length < 2) continue
 
-    // Ordenar por score desc y limitar
+    // [R143] Ordenar por render_priority_score (Z.9.6) con fallback a score
     const capped = [...group]
-      .sort((a, b) => b.score - a.score)
+      .sort((a, b) => (b.render_priority_score ?? b.score) - (a.render_priority_score ?? a.score))
       .slice(0, MAX_CANDIDATES_PER_CHAIN)
 
     // El root es el de mayor score
@@ -430,10 +432,14 @@ export function buildExecutiveProblems(
     return (b.totalImpactUSD ?? 0) - (a.totalImpactUSD ?? 0)
   })
 
+  // [R142] Aplicar cap de problemas ejecutivos
+  const capped = problems.slice(0, MAX_EXECUTIVE_PROBLEMS_SHOWN)
+
   console.log('[Z.9.4] buildExecutiveProblems', {
     chains:   chains.length,
     problems: problems.length,
+    shown:    capped.length,
   })
 
-  return problems
+  return capped
 }

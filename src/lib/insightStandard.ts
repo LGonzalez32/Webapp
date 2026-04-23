@@ -2106,18 +2106,44 @@ export function calcularTimeScopeZ9(
   }
 }
 
+// ─── calcularRenderPriorityScore ─────────────────────────────────────────────
+// [R143] Score determinístico del ranker ejecutivo.
+// Insumo: campos ya calculados (severity, impacto_valor, direction, time_scope, score).
+// Rango de salida: [0, 5] aprox. No exponer el número en UI.
+const _SEV_W:   Record<string, number> = { CRITICA: 4, ALTA: 3, MEDIA: 2, BAJA: 1 }
+const _SCOPE_W: Record<string, number> = { ytd: 4, mtd: 3, rolling: 2, monthly: 1, unknown: 0 }
+
+export function calcularRenderPriorityScore(c: InsightImpactoInput & {
+  severity?:      string
+  impacto_valor?: number | null
+  direction?:     string
+  time_scope?:    string
+  score?:         number
+}): number {
+  const sevW       = _SEV_W[c.severity ?? '']   ?? 1
+  const scopeW     = _SCOPE_W[c.time_scope ?? ''] ?? 0
+  const iv         = c.impacto_valor
+  const impactNorm = iv != null && isFinite(iv) ? Math.min(1, Math.abs(iv) / 50_000) : 0
+  const rawScore   = typeof c.score === 'number' && isFinite(c.score) ? c.score : 0
+  const dirMult    = c.direction === 'down' ? 1.2 : c.direction === 'up' ? 0.9 : 1.0
+  return (sevW * 0.4 + scopeW * 0.2 + impactNorm * 0.3 + rawScore * 0.1) * dirMult
+}
+
 // ─── hydratarCandidatoZ9 ─────────────────────────────────────────────────────
 // Hidratar in-place todos los campos Z.9.2 en un candidato.
 // Llamado desde runInsightEngine después de la dedup pass.
 // Todos los campos son opcionales en InsightCandidate (R134).
 export function hydratarCandidatoZ9<T extends InsightImpactoInput & {
-  impacto_valor?:       number | null
-  impacto_pct?:         number | null
-  impacto_gap_meta?:    number | null
-  impacto_recuperable?: number | null
-  direction?:           "up" | "down" | "neutral"
-  time_scope?:          "mtd" | "ytd" | "rolling" | "monthly" | "unknown"
-  entity_path?:         string[]
+  impacto_valor?:         number | null
+  impacto_pct?:           number | null
+  impacto_gap_meta?:      number | null
+  impacto_recuperable?:   number | null
+  direction?:             "up" | "down" | "neutral"
+  time_scope?:            "mtd" | "ytd" | "rolling" | "monthly" | "unknown"
+  entity_path?:           string[]
+  render_priority_score?: number
+  severity?:              string
+  score?:                 number
 }>(c: T, ctx?: ContextoImpactoZ9): void {
   c.impacto_valor       = calcularImpactoValor(c, ctx)
   c.impacto_pct         = calcularImpactoPct(c, ctx)
@@ -2125,6 +2151,8 @@ export function hydratarCandidatoZ9<T extends InsightImpactoInput & {
   c.impacto_recuperable = calcularImpactoRecuperableCandidato(c)
   c.direction           = calcularDirection(c)
   c.time_scope          = calcularTimeScopeZ9(c)
+  // R143: render_priority_score — calculado después de direction y time_scope
+  c.render_priority_score = calcularRenderPriorityScore(c)
   // entity_path básico si no viene poblado (Z.9.3 refinará con cruces reales)
   if (!c.entity_path || c.entity_path.length === 0) {
     const member = (c.detail['member'] as string | undefined) ?? ''
