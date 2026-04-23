@@ -15,6 +15,12 @@
 import type { InsightCandidate } from './insight-engine'
 import type { InsightChain, InsightChainNode } from '../types/diagnostic-types'
 
+// ─── Feature flag (Z.9.5) ────────────────────────────────────────────────────
+
+/** Habilita el Panel Ejecutivo en EstadoComercialPage.
+ *  Mantener en false hasta completar Z.9.6 (ranker + caps). */
+export const EXECUTIVE_COMPRESSION_ENABLED = false
+
 // ─── Constantes (R139–R141) ───────────────────────────────────────────────────
 
 /** Contribución mínima del hijo respecto al padre para ser incluido en la cadena.

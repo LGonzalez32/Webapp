@@ -9,9 +9,12 @@ import { salesInPeriod } from '../lib/analysis'
 import { callAI } from '../lib/chatService'
 import VendedorPanel from '../components/vendedor/VendedorPanel'
 import { useDemoPath } from '../lib/useDemoPath'
-import { buildDiagnostic, type DiagnosticBlock } from '../lib/diagnostic-engine'
+import { runInsightEngine, candidatesToDiagnosticBlocks, filtrarConEstandar, buildRichBlocksFromInsights, type DiagnosticBlock } from '../lib/insight-engine'
 import DiagnosticBlockView from '../components/diagnostic/DiagnosticBlock'
-import InsightCardNew from '../components/InsightCardNew'
+import EstadoGeneralEmpresa from '../components/estado-general/EstadoGeneralEmpresa'
+import { enrichDiagnosticBlocks, type EnrichedDiagnosticBlock } from '../lib/diagnostic-actions'
+import { getTopProductosPorClienteAmbosRangos, getAgregadosParaFiltro } from '../lib/domain-aggregations'
+import { buildInsightChains, buildExecutiveProblems, EXECUTIVE_COMPRESSION_ENABLED, type ExecutiveProblem } from '../lib/decision-engine'
 import { Calendar, CheckCircle, RotateCcw, ChevronDown, Users, Building2, Star, TrendingUp, TrendingDown, Bell } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAlertStatusStore } from '../store/alertStatusStore'
@@ -341,13 +344,14 @@ export default function EstadoComercialPage() {
   const monthlyTotals = useAppStore(s => s.monthlyTotals)
   const monthlyTotalsSameDay = useAppStore(s => s.monthlyTotalsSameDay)
 
+  // R103: helper de fecha — derivado de fechaRefISO (store), no de ventas crudas
   const maxDate = useMemo(
     () => fechaRefISO ? new Date(fechaRefISO) : new Date(0),
     [fechaRefISO],
   )
   const maxChipMonth = maxDate.getFullYear() === selectedPeriod.year ? maxDate.getMonth() : selectedPeriod.month
 
-  // ── Meses disponibles (derivados del map de totales mensuales) ──────────
+  // R103: derivación UI-local — meses disponibles para el chip selector; depende de monthlyTotals (pre-computado off-thread) y maxDate
   const availableMonths = useMemo(() => {
     const all = Object.keys(monthlyTotals)
       .map(k => { const [y, m] = k.split('-').map(Number); return { year: y, month: m } })
@@ -368,7 +372,7 @@ export default function EstadoComercialPage() {
     return monthsFromTotals
   }, [monthlyTotals, maxDate])
 
-  // â"€â"€ Slices de ventas cacheados (evitar llamadas repetidas a salesInPeriod) â"€
+  // R103: filtro UI — salesActual depende de selectedMonths (estado local UI multi-selección); no es una agregación pura
   const salesActual = useMemo(() => {
     if (selectedMonths === null) {
       return sales.filter((s) => {
@@ -398,7 +402,7 @@ export default function EstadoComercialPage() {
 
   // â"€â"€ Datos producto â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-  // â"€â"€ Estado del mes (vs histórico mismo mes años anteriores) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+  // R103: derivación local — estadoMes usa monthlyTotals (pre-computado off-thread) + teamStats; no itera ventas crudas
   const estadoMes = useMemo(() => {
     const diasTranscurridos = teamStats?.dias_transcurridos ?? 1
     const diasTotales       = teamStats?.dias_totales ?? 30
@@ -458,7 +462,7 @@ export default function EstadoComercialPage() {
     }
   }, [monthlyTotals, selectedPeriod.year, selectedPeriod.month, teamStats])
 
-  // â"€â"€ Causas del atraso â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+  // R103: derivación local — causasAtraso depende de estadoMes (local) + deferredVendorAnalysis (engine output); no es suma cruda de ventas
   const causasAtraso = useMemo(() => {
     if (estadoMes.estado !== 'atrasado' || estadoMes.anos_base === 0) return []
     const { year, month } = selectedPeriod
@@ -517,8 +521,7 @@ export default function EstadoComercialPage() {
     return causas.sort((a, b) => b.impacto_uds - a.impacto_uds).slice(0, 3)
   }, [estadoMes, deferredSales, selectedPeriod, deferredVendorAnalysis, dataAvailability])
 
-  // â"€â"€ Focos de riesgo críticos â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-  // ── Comparación mes vs mes anterior ───────────────────────────────────────
+  // R103: derivación local — comparacionMes usa monthlyTotals + monthlyTotalsSameDay (pre-computado off-thread); no itera ventas crudas
   const comparacionMes = useMemo(() => {
     const fmtK = (n: number) => n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : n.toLocaleString()
     const { year, month } = selectedPeriod // month 0-based
@@ -607,6 +610,7 @@ export default function EstadoComercialPage() {
     }
   }, [monthlyTotals, monthlyTotalsSameDay, maxDate, selectedPeriod])
 
+  // R103: derivación local — focosRiesgo filtra insights (output del motor); no agrega ventas crudas
   const focosRiesgo = useMemo(() =>
     insights.filter(i => i.prioridad === 'CRITICA' && i.impacto_economico).slice(0, 3),
   [insights])
@@ -757,7 +761,8 @@ export default function EstadoComercialPage() {
     return bullets.slice(0, 6)
   }, [estadoMes, causasAtraso, comparacionMes, deferredVendorAnalysis, deferredClientesDormidos, concentracionRiesgo])
 
-  // â"€â"€ Escenario de mejora con clientes recuperables â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+  // ── Escenario de mejora con clientes recuperables ─────────────────────────
+  // TODO Z.1 — extraer cálculo de impacto recuperable a domain-aggregations
   const escenarioMejora = useMemo(() => {
     if (estadoMes.proyeccion_cierre <= 0) return null
 
@@ -1150,7 +1155,7 @@ export default function EstadoComercialPage() {
           if (dormidosZona.length > 0) {
             let l3 = `Clientes dormidos en la zona: ${dormidosZona.length}`
             if (dataAvailability.has_venta_neta) {
-              const valorRiesgo = dormidosZona.reduce((s, c) => s + c.valor_historico, 0)
+              const valorRiesgo = dormidosZona.reduce((s, c) => s + c.valor_yoy_usd, 0)
               if (valorRiesgo > 0) l3 += ` — Valor en riesgo: ${sym}${Math.round(valorRiesgo).toLocaleString('es-SV')}`
             }
             lineas.push(l3)
@@ -1302,8 +1307,8 @@ export default function EstadoComercialPage() {
         }
 
         // Línea 7 — YTD
-        if (peorVendedor.ytd_actual != null && peorVendedor.ytd_anterior != null && peorVendedor.ytd_anterior > 0) {
-          const ytdPct = Math.round(((peorVendedor.ytd_actual - peorVendedor.ytd_anterior) / peorVendedor.ytd_anterior) * 100)
+        if (peorVendedor.ytd_actual_uds != null && peorVendedor.ytd_anterior_uds != null && peorVendedor.ytd_anterior_uds > 0) {
+          const ytdPct = Math.round(((peorVendedor.ytd_actual_uds - peorVendedor.ytd_anterior_uds) / peorVendedor.ytd_anterior_uds) * 100)
           if (ytdPct < 0) {
             lineas.push(`También cae en YTD: ${Math.abs(ytdPct)}% vs año anterior — no es solo este mes`)
           } else if (ytdPct > 0) {
@@ -1339,9 +1344,9 @@ export default function EstadoComercialPage() {
         }
         lineas.push(l1)
 
-        // Línea 2 — valor histórico
-        if (topDormido.valor_historico > 0) {
-          lineas.push(`Valor histórico mensual: ${Math.round(topDormido.valor_historico).toLocaleString('es-SV')} uds`)
+        // Línea 2 — valor YoY
+        if (topDormido.valor_yoy_usd > 0) {
+          lineas.push(`Valor YoY: ${Math.round(topDormido.valor_yoy_usd).toLocaleString('es-SV')}`)
         }
 
         // Línea 3 — vendedor responsable
@@ -1403,8 +1408,8 @@ export default function EstadoComercialPage() {
           }
         }
 
-        const impacto = topDormido.valor_historico > 0
-          ? `Valor en riesgo: ${Math.round(topDormido.valor_historico).toLocaleString('es-SV')} uds`
+        const impacto = topDormido.valor_yoy_usd > 0
+          ? `Valor YoY: ${Math.round(topDormido.valor_yoy_usd).toLocaleString('es-SV')}`
           : ''
 
         result.push({ titulo: `${topDormido.cliente} — sin actividad`, lineas, impacto, tipo: 'riesgo_cliente', dimLabel: 'CLIENTE', dimColor: '#4ADE80' })
@@ -1414,30 +1419,113 @@ export default function EstadoComercialPage() {
     return result
   }, [causasAtraso, vendorAnalysis, supervisorAnalysis, clientesDormidos, canalAnalysis, categoriaAnalysis, categoriasInventario, insights, teamStats, dataAvailability, configuracion, deferredSales, selectedPeriod])
 
-  // ── Diagnóstico del mes — agrupa los insights en bloques narrativos ─────
-  // (Legacy: se mantiene calculado pero ya no se renderiza en la sección Diagnóstico)
-  const diagnosticBlocks: DiagnosticBlock[] = useMemo(() => {
-    if (!insights?.length) return []
-    return buildDiagnostic(insights, vendorAnalysis)
+  // ── Diagnóstico del mes — motor único Metric × Dimension + narrativa rica (Z.2) ─
+  // Cuello 6: tres useMemos encadenados para minimizar re-cómputo por deps independientes
+
+  // PASO 1: Candidatos del motor estadístico — solo re-computa si cambian datos o período
+  const _insightCandidates = useMemo(() => {
+    if (!sales?.length || !vendorAnalysis?.length) return []
+    return runInsightEngine({
+      sales, metas, vendorAnalysis, categoriaAnalysis, canalAnalysis,
+      supervisorAnalysis, concentracionRiesgo, clientesDormidos,
+      categoriasInventario, selectedPeriod, selectedMonths, tipoMetaActivo,
+    })
+  }, [
+    sales, metas, vendorAnalysis, categoriaAnalysis, canalAnalysis,
+    supervisorAnalysis, concentracionRiesgo, clientesDormidos,
+    categoriasInventario, selectedPeriod, selectedMonths, tipoMetaActivo,
+  ])
+
+  // [Z.4 — perf: cuello-2] Pre-computa mapas de sales en una sola pasada con deps [sales, selectedPeriod]
+  // Solo se re-computa cuando cambia el dataset o el período — independiente de los candidatos.
+  const _agregadosFiltro = useMemo(() => {
+    if (!sales?.length) return null
+    return getAgregadosParaFiltro(sales, selectedPeriod)
+  }, [sales, selectedPeriod])
+
+  // PASO 2: Filtrado con estándares — re-computa solo si cambian candidatos o datos de filtro
+  const _filteredCandidates = useMemo(() => {
+    if (!sales?.length) return []
+    const diaDelMes = maxDate.getTime() > 0
+      ? maxDate.getDate()
+      : new Date(selectedPeriod.year, selectedPeriod.month + 1, 0).getDate()
+    const diasEnMes = new Date(selectedPeriod.year, selectedPeriod.month + 1, 0).getDate()
+    const ventaTotalNegocio = _agregadosFiltro?.ventaTotalNegocio ?? 0
+    return filtrarConEstandar(_insightCandidates, {
+      diaDelMes, diasEnMes, sales, metas,
+      inventory: categoriasInventario, clientesDormidos,
+      ventaTotalNegocio, tipoMetaActivo, selectedPeriod,
+      agregados: _agregadosFiltro ?? undefined,
+    })
+  }, [_insightCandidates, _agregadosFiltro, sales, metas, categoriasInventario, clientesDormidos, tipoMetaActivo, selectedPeriod, maxDate])
+
+  // [Z.9.5] Causal linking + compresión ejecutiva — gateado por EXECUTIVE_COMPRESSION_ENABLED
+  const _insightChains = useMemo(() => {
+    if (!EXECUTIVE_COMPRESSION_ENABLED || !_filteredCandidates.length) return []
+    return buildInsightChains(_filteredCandidates)
+  }, [_filteredCandidates])
+
+  const _executiveProblems: ExecutiveProblem[] = useMemo(() => {
+    if (!EXECUTIVE_COMPRESSION_ENABLED || !_insightChains.length) return []
+    return buildExecutiveProblems(_insightChains)
+  }, [_insightChains])
+
+  // [Z.4 — perf: cuello-3] legacyBlocks solo depende de insights y vendorAnalysis — no del período
+  const _legacyBlocks = useMemo(() => {
+    if (!vendorAnalysis?.length) return []
+    return buildRichBlocksFromInsights(insights ?? [], vendorAnalysis)
   }, [insights, vendorAnalysis])
 
+  // PASO 3: Conversión a DiagnosticBlock — narrativa rica + fusión legacy (internos)
+  const diagnosticBlocks: DiagnosticBlock[] = useMemo(() => {
+    if (!sales?.length || !vendorAnalysis?.length) return []
+    return candidatesToDiagnosticBlocks(_filteredCandidates, {
+      tipoMetaActivo, sales, inventory: categoriasInventario, metas,
+      clientesDormidos, vendorAnalysis, insights: insights ?? [], selectedPeriod,
+    }, _legacyBlocks)
+  }, [_filteredCandidates, _legacyBlocks, tipoMetaActivo, sales, categoriasInventario, metas,
+      clientesDormidos, vendorAnalysis, insights, selectedPeriod])
+
+  // R102: migrado a domain-aggregations.getTopProductosPorClienteAmbosRangos
+  const topProductosPorCliente = useMemo(() => {
+    if (!dataAvailability.has_venta_neta || !dataAvailability.has_cliente || !dataAvailability.has_producto) return undefined
+    const now = new Date(selectedPeriod.year, selectedPeriod.month, teamStats?.dias_transcurridos ?? maxDate.getDate())
+    return getTopProductosPorClienteAmbosRangos(sales, now, teamStats?.dias_transcurridos)
+  }, [sales, selectedPeriod, teamStats, dataAvailability, maxDate])
+
+  // R68–R73: enrich blocks with sujeto, delta, chip, narrative, deterministic actions
+  const enrichedBlocks: EnrichedDiagnosticBlock[] = useMemo(() => {
+    const diasTranscurridos = teamStats?.dias_transcurridos ?? 1
+    const diasTotalesMes    = teamStats?.dias_totales ?? 30
+    return enrichDiagnosticBlocks(diagnosticBlocks, {
+      vendorAnalysis:      vendorAnalysis ?? [],
+      clientesDormidos:    clientesDormidos ?? [],
+      categoriasInventario: categoriasInventario ?? [],
+      tipoMetaActivo,
+      selectedPeriod,
+      diasTranscurridos,
+      diasTotalesMes,
+      topProductosPorCliente,
+    })
+  }, [diagnosticBlocks, teamStats, vendorAnalysis, clientesDormidos, categoriasInventario, tipoMetaActivo, selectedPeriod, topProductosPorCliente])
+
+  // R103: conteo UI sobre enrichedBlocks, no agregación de ventas
   const urgentPendingCount = useMemo(
-    () => diagnosticBlocks.filter((b: DiagnosticBlock) => b.severity === 'critical' || b.severity === 'warning').length,
-    [diagnosticBlocks],
+    () => enrichedBlocks.filter(b => b.severity === 'critical' || b.severity === 'warning').length,
+    [enrichedBlocks],
   )
 
-  // ── Diagnóstico v2: tarjetas individuales basadas en el motor de insights ──
+  // ── Estado general (riesgo_equipo) — sin cambios ──────────────────────────
   const diagInsights: Insight[] = insights ?? []
   const estadoGeneral = diagInsights.find(i => i.tipo === 'riesgo_equipo')
-  const diagBase = diagInsights.filter(i => i.tipo !== 'riesgo_equipo')
-  const diagUrgentes = diagBase.filter(i => i.prioridad === 'CRITICA' || i.prioridad === 'ALTA')
-  const diagAdicionales = diagBase.filter(i => i.prioridad === 'MEDIA')
-  // BAJA se omite del diagnóstico
-  const diagCriticaCount = diagBase.filter(i => i.prioridad === 'CRITICA').length
+
+  // ── Diagnóstico del mes — bloques enriquecidos (R68–R73) ──────────────────
+  const diagUrgentes    = enrichedBlocks.filter(b => b.severity === 'critical' || b.severity === 'warning')
+  const diagAdicionales = enrichedBlocks.filter(b => b.severity === 'info' || b.severity === 'positive')
+  const diagCriticaCount = enrichedBlocks.filter(b => b.severity === 'critical').length
   const [mostrarAdicionales, setMostrarAdicionales] = useState(false)
 
-  // ── YTD chart data (mensual individual: año actual vs anterior) ──
-  // Must be before early return to respect Rules of Hooks
+  // R103: derivación local — ytdChart usa monthlyTotals (pre-computado off-thread) + lógica de selectedMonths UI; migrar en Z.2 cuando RendimientoPage lo comparta
   const ytdChart = useMemo(() => {
     // Cuando selectedMonths === null (Todos los meses), mostrar hasta la fecha de referencia más reciente (maxDate)
     const currentYear = selectedMonths === null && maxDate.getTime() > 0
@@ -1485,7 +1573,7 @@ export default function EstadoComercialPage() {
     return { data, totalActual, totalAnterior, maxDay }
   }, [monthlyTotals, monthlyTotalsSameDay, selectedPeriod.year, selectedPeriod.month, maxDate, selectedMonths])
 
-  // ── YTD chart en dólares (solo si has_venta_neta) ──
+  // R103: derivación local — ytdChartUSD mismo patrón que ytdChart pero para venta_neta; migrar junto con ytdChart en Z.2
   const ytdChartUSD = useMemo(() => {
     if (!dataAvailability.has_venta_neta) return null
     // Cuando selectedMonths === null (Todos los meses), mostrar hasta la fecha de referencia más reciente (maxDate)
@@ -1519,6 +1607,7 @@ export default function EstadoComercialPage() {
     return { data, totalActual, totalAnterior, maxDay }
   }, [monthlyTotals, monthlyTotalsSameDay, selectedPeriod.year, selectedPeriod.month, maxDate, dataAvailability.has_venta_neta, selectedMonths])
 
+  // R103: derivación local — metasCerradas cruza monthlyTotals (pre-computado) + metas + deferredVendorAnalysis; no itera ventas crudas
   const metasCerradas = useMemo(() => {
     if (!teamStats || !metas || metas.length === 0) return null
 
@@ -1625,7 +1714,7 @@ export default function EstadoComercialPage() {
   // Derived card metrics
   const dormidosRec      = clientesDormidos.filter(c => c.recovery_label === 'alta' || c.recovery_label === 'recuperable')
   const activosMes       = new Set(salesActual.filter(s => s.cliente).map(s => s.cliente)).size
-  const valorRiesgoClien = clientesDormidos.reduce((s, c) => s + c.valor_historico, 0)
+  const valorRiesgoClien = clientesDormidos.reduce((s, c) => s + c.valor_yoy_usd, 0)
   const canalPrincipal   = [...canalAnalysis].sort((a, b) => b.participacion_pct - a.participacion_pct)[0] ?? null
   const canalesActivos   = canalAnalysis.filter(c => c.activo_periodo).length
   const canalesEnCaida   = canalAnalysis.filter(c => c.tendencia === 'caida' || c.tendencia === 'desaparecido').length
@@ -1635,7 +1724,7 @@ export default function EstadoComercialPage() {
   const lentoMov         = categoriasInventario.filter(c => c.clasificacion === 'lento_movimiento').length
   const normalInv        = categoriasInventario.filter(c => c.clasificacion === 'normal').length
 
-  const ytdVar  = teamStats.variacion_ytd_equipo
+  const ytdVar  = teamStats.variacion_ytd_equipo_uds_pct
   const ytdAnno = maxDate.getFullYear()
 
   const ytdDiff = ytdChart.totalActual - ytdChart.totalAnterior
@@ -1662,10 +1751,10 @@ export default function EstadoComercialPage() {
     : 0
   // YTD en dólares: usar los campos _neto calculados en el motor (suma directa de venta_neta)
   const ytd_neto = dataAvailability.has_venta_neta
-    ? vendorAnalysis.reduce((sum, v) => sum + (v.ytd_actual_neto ?? 0), 0)
+    ? vendorAnalysis.reduce((sum, v) => sum + (v.ytd_actual_usd ?? 0), 0)
     : 0
   const ytd_anterior_neto = dataAvailability.has_venta_neta
-    ? vendorAnalysis.reduce((sum, v) => sum + (v.ytd_anterior_neto ?? 0), 0)
+    ? vendorAnalysis.reduce((sum, v) => sum + (v.ytd_anterior_usd ?? 0), 0)
     : 0
 
   // FIX 2: fecha de comparación YTD año anterior
@@ -1869,17 +1958,16 @@ export default function EstadoComercialPage() {
           const mainNeto = ytd_neto
           const kpiUSD   = tipoMetaActivo === 'usd' && dataAvailability.has_venta_neta && mainNeto > 0
 
-          const prevMonthIdx     = selectedPeriod.month === 0 ? 11 : selectedPeriod.month - 1
-          const prevMonthYear    = selectedPeriod.month === 0 ? selectedPeriod.year - 1 : selectedPeriod.year
-          const prevMonthSameDay = monthlyTotalsSameDay[`${prevMonthYear}-${prevMonthIdx}`]
-          const ventaActualMoM   = kpiUSD ? estadoMes.ingreso_actual : estadoMes.actual
-          const ventaAnteriorMoM = kpiUSD ? (prevMonthSameDay?.neta ?? 0) : (prevMonthSameDay?.uds ?? 0)
-          const varPct = ventaAnteriorMoM > 0
-            ? ((ventaActualMoM - ventaAnteriorMoM) / ventaAnteriorMoM) * 100
-            : null
+          // R64: monto YTD y % YTD deben ser de la misma ventana.
+          // ytdAnterior ya es YTD same-day (monthlyTotalsSameDay para el mes parcial).
           const ytdAnterior = kpiUSD ? ytd_anterior_neto : ytdChart.totalAnterior
-          const mesActNombre  = MESES_CORTO[selectedPeriod.month].toUpperCase()
-          const mesAntNombre  = MESES_CORTO[prevMonthIdx].toUpperCase()
+          const ytdActual   = kpiUSD ? mainNeto : mainUds
+          // % YTD vs mismo período año anterior (misma ventana que el monto)
+          const varPctYTD = ytdAnterior > 0
+            ? ((ytdActual - ytdAnterior) / ytdAnterior) * 100
+            : null
+          const yoyYear      = selectedPeriod.year - 1
+          const mesActNombre = MESES_CORTO[selectedPeriod.month].toUpperCase()
 
           return (
             <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
@@ -1895,17 +1983,17 @@ export default function EstadoComercialPage() {
                   {fmtBig(mainUds)}<span className="text-sm font-normal ml-1" style={{ color: 'var(--sf-t5)' }}>uds</span>
                 </p>
               )}
-              {varPct != null && (
-                <p className="text-sm font-semibold mt-2" style={{ color: varPct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
-                  {varPct >= 0 ? '+' : ''}{varPct.toFixed(1)}%
+              {varPctYTD != null && (
+                <p className="text-sm font-semibold mt-2" style={{ color: varPctYTD >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
+                  {varPctYTD >= 0 ? '+' : ''}{varPctYTD.toFixed(1)}%
                   <span className="text-xs font-normal ml-1" style={{ color: 'var(--sf-t5)' }}>
-                    {mesActNombre} vs {mesAntNombre} al día {teamStats.dias_transcurridos}
+                    Acumulado Ene–{mesActNombre} día {teamStats.dias_transcurridos} vs mismo período {yoyYear}
                   </span>
                 </p>
               )}
               {ytdAnterior > 0 && (
                 <p className="text-xs mt-1.5" style={{ color: 'var(--sf-t4)' }}>
-                  Año ant. al día {teamStats.dias_transcurridos}:{' '}
+                  Año ant. (mismo período):{' '}
                   <span style={{ color: 'var(--sf-t3)' }}>
                     {kpiUSD ? `${configuracion.moneda}${fmtBig(ytdAnterior)}` : `${fmtBig(ytdAnterior)} uds`}
                   </span>
@@ -2243,8 +2331,42 @@ export default function EstadoComercialPage() {
         </div>
       </div>
 
-      {/* ── DIAGNÓSTICO DEL MES (v2: tarjetas individuales) ─────────────── */}
-      {diagBase.length > 0 && (
+      {/* ── ESTADO GENERAL DE LA EMPRESA (PR-FIX.7 — prosa convergente) ────── */}
+      <EstadoGeneralEmpresa />
+
+      {/* ── PANEL EJECUTIVO [Z.9.5] — gateado por EXECUTIVE_COMPRESSION_ENABLED ── */}
+      {EXECUTIVE_COMPRESSION_ENABLED && _executiveProblems.length > 0 && (
+        <section className="intel-fade space-y-2" style={{ animationDelay: '50ms' }}>
+          <div className="flex items-center gap-3 pb-1">
+            <span className="text-[13px] font-semibold uppercase tracking-wider text-[var(--sf-text-muted)]">
+              PROBLEMAS EJECUTIVOS
+            </span>
+            <span className="text-[12px] font-medium px-2 py-0.5 rounded-full bg-[var(--sf-bg)] border border-[var(--sf-border)] text-[var(--sf-text-muted)]">
+              {_executiveProblems.length} problemas
+            </span>
+          </div>
+          {_executiveProblems.map(p => (
+            <div key={p.problemId} className="rounded-xl p-4 border border-[var(--sf-border)] bg-[var(--sf-surface)]">
+              <div className="flex items-center gap-2">
+                <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
+                  p.severity === 'CRITICA' ? 'bg-red-500/15 text-red-400' :
+                  p.severity === 'ALTA'    ? 'bg-amber-500/15 text-amber-400' :
+                  'bg-[var(--sf-bg)] text-[var(--sf-text-muted)]'
+                }`}>{p.severity}</span>
+                <span className="text-[14px] font-semibold text-[var(--sf-text)]">{p.headline}</span>
+              </div>
+              {p.totalImpactUSD != null && (
+                <p className="text-[13px] text-[var(--sf-text-muted)] mt-1">
+                  Impacto acumulado: ${p.totalImpactUSD.toLocaleString('es-MX', { maximumFractionDigits: 0 })}
+                </p>
+              )}
+            </div>
+          ))}
+        </section>
+      )}
+
+      {/* ── DIAGNÓSTICO DEL MES — R68–R73 (cards enriquecidas v1.9.0) ────────── */}
+      {enrichedBlocks.length > 0 && (
         <section className="intel-fade space-y-3" style={{ animationDelay: '100ms' }}>
           {/* Encabezado */}
           <div className="flex items-center gap-3 pb-1">
@@ -2252,27 +2374,27 @@ export default function EstadoComercialPage() {
               DIAGNÓSTICO DEL MES
             </span>
             <span className="text-[12px] font-medium px-2 py-0.5 rounded-full bg-[var(--sf-bg)] border border-[var(--sf-border)] text-[var(--sf-text-muted)]">
-              {diagUrgentes.length + (mostrarAdicionales ? diagAdicionales.length : 0)} hallazgos
+              {enrichedBlocks.length} hallazgos
             </span>
-            {diagCriticaCount > 0 && (
+            {diagUrgentes.length > 0 && (
               <span className="text-[12px] font-semibold px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">
-                {diagCriticaCount} {diagCriticaCount === 1 ? 'urgente' : 'urgentes'}
+                {diagUrgentes.length} {diagUrgentes.length === 1 ? 'urgente' : 'urgentes'}
               </span>
             )}
           </div>
 
-          {/* Tarjetas urgentes — CRITICA y ALTA */}
+          {/* Bloques urgentes — CRITICAL y WARNING, orden por |delta| (R73) */}
           <div className="space-y-2.5">
-            {diagUrgentes.map((ins, idx) => (
-              <InsightCardNew
-                key={ins.id}
-                insight={ins}
-                defaultOpen={idx === 0 && ins.prioridad === 'CRITICA'}
+            {diagUrgentes.map((b, idx) => (
+              <DiagnosticBlockView
+                key={b.id}
+                block={b}
+                defaultExpanded={idx === 0 && b.severity === 'critical'}
               />
             ))}
           </div>
 
-          {/* Hallazgos adicionales — MEDIA */}
+          {/* Hallazgos adicionales — INFO / POSITIVE */}
           {diagAdicionales.length > 0 && (
             <>
               <button
@@ -2285,8 +2407,8 @@ export default function EstadoComercialPage() {
               </button>
               {mostrarAdicionales && (
                 <div className="space-y-2.5">
-                  {diagAdicionales.map(ins => (
-                    <InsightCardNew key={ins.id} insight={ins} />
+                  {diagAdicionales.map(b => (
+                    <DiagnosticBlockView key={b.id} block={b} defaultExpanded={false} />
                   ))}
                 </div>
               )}
@@ -2295,10 +2417,6 @@ export default function EstadoComercialPage() {
         </section>
       )}
 
-      {/* DiagnosticBlockView legacy (no renderizado, conservado para no romper imports) */}
-      {false && diagnosticBlocks.length > 0 && (
-        <DiagnosticBlockView block={diagnosticBlocks[0]} defaultExpanded={false} />
-      )}
 
 
       {/* Explorar Dimensiones removed — replaced by Pulso above */}
