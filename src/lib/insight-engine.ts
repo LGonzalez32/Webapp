@@ -382,6 +382,42 @@ export interface EngineParams {
   tipoMetaActivo: 'uds' | 'usd'
 }
 
+// ─── [Z.9.7] Engine status report ────────────────────────────────────────────
+
+export type EngineDetectorResult = 'ok' | 'partial' | 'failed' | 'skipped'
+
+export interface EngineDetectorStatus {
+  result:            EngineDetectorResult
+  candidatesEmitted: number
+  error?:            string
+}
+
+export interface EngineStatusReport {
+  runAt:              number   // Date.now()
+  candidatesTotal:    number
+  candidatesSelected: number
+  detectors: {
+    motor1:            EngineDetectorStatus
+    outlier_builder:   EngineDetectorStatus
+    change_point:      EngineDetectorStatus
+    steady_share:      EngineDetectorStatus
+    correlation:       EngineDetectorStatus
+    meta_gap_temporal: EngineDetectorStatus
+    z9_hydration:      EngineDetectorStatus
+  }
+}
+
+function _emptyDetector(): EngineDetectorStatus {
+  return { result: 'skipped', candidatesEmitted: 0 }
+}
+
+let _lastEngineStatus: EngineStatusReport | null = null
+
+/** Retorna el último EngineStatusReport generado por runInsightEngine, o null si aún no se ejecutó. */
+export function getLastInsightEngineStatus(): EngineStatusReport | null {
+  return _lastEngineStatus
+}
+
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 function toDate(fecha: unknown): Date {
@@ -4299,6 +4335,22 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   const { sales, metas, selectedPeriod, tipoMetaActivo, clientesDormidos } = params
   const { year, month } = selectedPeriod
 
+  // [Z.9.7] Inicializar status report
+  const _status: EngineStatusReport = {
+    runAt:              Date.now(),
+    candidatesTotal:    0,
+    candidatesSelected: 0,
+    detectors: {
+      motor1:            _emptyDetector(),
+      outlier_builder:   _emptyDetector(),
+      change_point:      _emptyDetector(),
+      steady_share:      _emptyDetector(),
+      correlation:       _emptyDetector(),
+      meta_gap_temporal: _emptyDetector(),
+      z9_hydration:      _emptyDetector(),
+    },
+  }
+
   // 1. Slice sales by period
   const currentSales = getSalesForPeriod(sales, year, month)
 
@@ -5164,6 +5216,9 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
     console.error('[PR-M4] cross_engine failed:', e)
   }
 
+  // [Z.9.7] Motor 1 completado — registrar candidatos emitidos hasta aquí
+  _status.detectors.motor1 = { result: 'ok', candidatesEmitted: allCandidates.length }
+
   // [PR-M7d] Builder aditivo de outliers de num_transacciones (cliente|vendedor).
   // Candidatos non_monetary (ver NON_MONETARY_METRIC_IDS). No suman a totalImpact.
   // Compiten con el resto en dedup + ranker. Si no detecta outliers, retorna [].
@@ -5173,6 +5228,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
       selectedPeriod: { year, month },
     })
     allCandidates.push(..._pm7dOut.candidates)
+    _status.detectors.outlier_builder = { result: 'ok', candidatesEmitted: _pm7dOut.candidates.length }
     if (import.meta.env.DEV) {
       // [PR-M7f] log separado para la extensión multi-métrica.
       if (_pm7dOut.telemetry?.m7f) {
@@ -5181,6 +5237,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
       console.debug('[PR-M7d] transaction_outlier_builder', _pm7dOut.telemetry)
     }
   } catch (e) {
+    _status.detectors.outlier_builder = { result: 'failed', candidatesEmitted: 0, error: String(e) }
     if (import.meta.env.DEV) console.warn('[PR-M7d] builder failed (degradación silenciosa):', e)
   }
 
@@ -5189,7 +5246,9 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   try {
     const _pm8aOut = buildChangePointBlocks(sales)
     allCandidates.push(..._pm8aOut.candidates)
+    _status.detectors.change_point = { result: 'ok', candidatesEmitted: _pm8aOut.candidates.length }
   } catch (e) {
+    _status.detectors.change_point = { result: 'failed', candidatesEmitted: 0, error: String(e) }
     if (import.meta.env.DEV) console.warn('[PR-M8a] builder failed (degradación silenciosa):', e)
   }
 
@@ -5198,7 +5257,9 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   try {
     const _pm9Out = buildSteadyShareBlocks(sales)
     allCandidates.push(..._pm9Out.candidates)
+    _status.detectors.steady_share = { result: 'ok', candidatesEmitted: _pm9Out.candidates.length }
   } catch (e) {
+    _status.detectors.steady_share = { result: 'failed', candidatesEmitted: 0, error: String(e) }
     if (import.meta.env.DEV) console.warn('[PR-M9] builder failed (degradación silenciosa):', e)
   }
 
@@ -5207,7 +5268,9 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   try {
     const _pm10Out = buildCorrelationBlocks(sales)
     allCandidates.push(..._pm10Out.candidates)
+    _status.detectors.correlation = { result: 'ok', candidatesEmitted: _pm10Out.candidates.length }
   } catch (e) {
+    _status.detectors.correlation = { result: 'failed', candidatesEmitted: 0, error: String(e) }
     if (import.meta.env.DEV) console.warn('[PR-M10] builder failed (degradación silenciosa):', e)
   }
 
@@ -5217,8 +5280,10 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   try {
     const _pm11Out = buildMetaGapTemporalBlocks({ sales, metas, tipoMetaActivo, selectedPeriod: { year, month } })
     allCandidates.push(..._pm11Out.candidates)
+    _status.detectors.meta_gap_temporal = { result: 'ok', candidatesEmitted: _pm11Out.candidates.length }
     console.log('[PR-M11] meta_gap_temporal_builder', _pm11Out.telemetry)
   } catch (e) {
+    _status.detectors.meta_gap_temporal = { result: 'failed', candidatesEmitted: 0, error: String(e) }
     if (import.meta.env.DEV) console.warn('[PR-M11] builder failed (degradación silenciosa):', e)
   }
 
@@ -5680,9 +5745,16 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
     for (const c of selected) {
       hydratarCandidatoZ9(c, _z9ctx)
     }
+    _status.detectors.z9_hydration = { result: 'ok', candidatesEmitted: selected.length }
   } catch (e) {
+    _status.detectors.z9_hydration = { result: 'failed', candidatesEmitted: 0, error: String(e) }
     if (import.meta.env.DEV) console.warn('[Z.9.2] hydration failed (degradación silenciosa):', e)
   }
+
+  // [Z.9.7] Commit status report
+  _status.candidatesTotal    = allCandidates.length
+  _status.candidatesSelected = selected.length
+  _lastEngineStatus          = _status
 
   return selected
 }
