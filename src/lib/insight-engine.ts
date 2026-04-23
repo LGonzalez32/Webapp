@@ -104,6 +104,9 @@ import {
   // [PR-M7e] normalización de score por métrica
   applyScoreNormalizationByMetric,
   type NormalizationAudit,
+  // [Z.9.2] hidratación de campos ejecutivos por candidato
+  hydratarCandidatoZ9,
+  type ContextoImpactoZ9,
 } from './insightStandard'
 import { getAgregadosParaFiltro, type AgregadosFiltro } from './domain-aggregations' // [Z.4 — perf: cuello-2]
 import { buildTransactionOutlierBlocks } from './builders/buildTransactionOutlierBlocks' // [PR-M7d]
@@ -2692,6 +2695,18 @@ function classifyCandidateType(c: InsightCandidate): OperationalType {
 // ─── [Z.5 — Frente 2] R119: convierte candidato del motor nuevo a impacto en USD ─
 
 function computeImpactoUSDFromCandidate(c: InsightCandidate, ctx: BlockContext): number {
+  // [Z.9.2 — R138] Si impacto_valor ya fue hidratado y está en USD, usarlo directamente.
+  // Condición: impacto_valor disponible Y la métrica produce USD (no unidades/txns).
+  const isUSDMetric = c.metricId === 'venta' || c.metricId === 'ticket_promedio'
+  if (typeof c.impacto_valor === 'number' && isFinite(c.impacto_valor) && isUSDMetric) {
+    return Math.abs(c.impacto_valor)
+  }
+  // Para tipos que ya devuelven USD en impacto_valor independiente de la métrica:
+  const _usdDirectTypes = new Set(['stock_risk', 'stock_excess', 'co_decline', 'product_dead', 'cliente_dormido', 'migration', 'meta_gap_temporal'])
+  if (typeof c.impacto_valor === 'number' && isFinite(c.impacto_valor) && _usdDirectTypes.has(c.insightTypeId)) {
+    return Math.abs(c.impacto_valor)
+  }
+
   const det = c.detail as Record<string, unknown>
   const isUSD = c.metricId === 'venta' || c.metricId === 'ticket_promedio'
 
@@ -5654,6 +5669,19 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
     }
   } catch (e) {
     if (import.meta.env.DEV) console.warn('[PR-M6a] enrichment failed (degradación silenciosa):', e)
+  }
+
+  // [Z.9.2] Hidratación de campos ejecutivos: impacto_valor, impacto_pct,
+  // impacto_gap_meta, impacto_recuperable, direction, time_scope, entity_path.
+  // Se aplica DESPUÉS de dedup y ranker para no duplicar trabajo.
+  // Todos los campos son opcionales (R134); fallo silencioso para no romper pipeline.
+  try {
+    const _z9ctx: ContextoImpactoZ9 = { tipoMetaActivo }
+    for (const c of selected) {
+      hydratarCandidatoZ9(c, _z9ctx)
+    }
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn('[Z.9.2] hydration failed (degradación silenciosa):', e)
   }
 
   return selected
