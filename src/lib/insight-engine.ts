@@ -116,7 +116,7 @@ import { buildCorrelationBlocks }       from './builders/buildCorrelationBlocks'
 import { buildMetaGapTemporalBlocks }   from './builders/buildMetaGapTemporalBlocks'    // [PR-M11]
 
 // Re-export so the page only imports from this file
-export type { DiagnosticBlock, InsightChain } from '../types/diagnostic-types'
+export type { DiagnosticBlock, InsightChain, DiagnosticBlockChain } from '../types/diagnostic-types'
 
 // ════════════════════════════════════════════════════════════════════
 // REGLA UNIVERSAL DE STORYTELLING — NO ROMPER, NO HACER EXCEPCIONES

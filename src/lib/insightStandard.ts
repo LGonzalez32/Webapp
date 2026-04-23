@@ -1,7 +1,7 @@
 // src/lib/insightStandard.ts
 // INSIGHT ENGINE STANDARD v2.0
 import type { VendorAnalysis } from '../types'
-import type { DiagnosticBlock, InsightChain } from '../types/diagnostic-types'
+import type { DiagnosticBlock, DiagnosticBlockChain } from '../types/diagnostic-types'
 // 37 reglas en 9 grupos (32 mejoradas + 5 nuevas A-E)
 // Activas hoy: formatearImpacto, sustituirJerga, contieneJerga, esConclusionValida
 // Conectada al pipeline — todo insight pasa por validarInsight(), validarProporcionalidad(), validarBalance(), detectarRedundancia(), validarCoherenciaTemporal() y sanitizarNarrativa()
@@ -1287,7 +1287,7 @@ export function sonInsightsRelacionables(
 export function construirInsightChains(
   insights: DiagnosticBlock[],
   pertenencia: Map<string, Set<string>>,
-): InsightChain[] {
+): DiagnosticBlockChain[] {
   const MAX_DEPTH = 4
   const MAX_WIDTH = 3
   // [PR-FIX.3-D] resetear contador de sign mismatch por invocación
@@ -1308,7 +1308,7 @@ export function construirInsightChains(
     return nodos
   }
 
-  const chains: InsightChain[] = []
+  const chains: DiagnosticBlockChain[] = []
   for (const root of roots) {
     const visited = new Set<string>([root.id])
     const nodos = dfs(root, visited, 0)
