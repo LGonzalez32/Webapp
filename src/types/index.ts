@@ -14,6 +14,10 @@ export interface SaleRecord {
   supervisor?: string
   codigo_producto?: string
   codigo_cliente?: string
+  // [PR-M1] Clave canónica de cliente derivada por el parser:
+  //   codigo_cliente?.trim() || nombre_cliente?.trim().toUpperCase() || null
+  // Útil para agregaciones cuando conviven códigos y nombres entre filas.
+  clientKey?: string | null
 }
 
 export interface MetaRecord {
@@ -53,6 +57,11 @@ export interface DataAvailability {
   has_departamento: boolean
   has_metas: boolean
   has_inventario: boolean
+  // [PR-M1] Flags para ingesta dual (métrica global configurable).
+  //   has_unidades:        ≥80% filas con unidades>0 (gate de métrica "unidades")
+  //   has_precio_unitario: has_unidades && has_venta_neta (derivable)
+  has_unidades?: boolean
+  has_precio_unitario?: boolean
 }
 
 // ─── ANÁLISIS POR VENDEDOR ────────────────────────────────────────────────────
@@ -80,11 +89,15 @@ export interface VendorAnalysis {
   variacion_vs_promedio_pct?: number | null
   periodos_base_promedio?: number
   riesgo: RiesgoVendedor
-  ytd_actual?: number
-  ytd_anterior?: number
-  ytd_actual_neto?: number
-  ytd_anterior_neto?: number
-  variacion_ytd_pct?: number | null
+  // ── YTD ──
+  // Sufijo _uds = unidades · Sufijo _usd = dinero (Venta Neta).
+  // Prohibido campos "ytd_actual" sin unidad explícita (ver manifiesto R55).
+  ytd_actual_uds?: number
+  ytd_anterior_uds?: number
+  variacion_ytd_uds_pct?: number | null
+  ytd_actual_usd?: number
+  ytd_anterior_usd?: number
+  variacion_ytd_usd_pct?: number | null
   // ── Enriquecimiento del motor ──
   top_clientes_periodo: Array<{ cliente: string; unidades: number; venta_neta: number | null }> | null
   productos_ausentes: Array<{ producto: string; dias_sin_venta: number; ultimo_periodo: string }> | null
@@ -111,9 +124,9 @@ export interface TeamStats {
   dias_transcurridos: number
   dias_totales: number
   dias_restantes: number
-  ytd_actual_equipo?: number
-  ytd_anterior_equipo?: number
-  variacion_ytd_equipo?: number | null
+  ytd_actual_equipo_uds?: number
+  ytd_anterior_equipo_uds?: number
+  variacion_ytd_equipo_uds_pct?: number | null
   meta_cerrada_total?: number
   venta_cerrada_total?: number
   cumplimiento_cerrado?: number
@@ -164,6 +177,7 @@ export interface Insight {
   esPositivo?: boolean
   esAccionable?: boolean
   señalesConvergentes?: number
+  impactoUSD?: number // [Z.6 F2.1 — hydration fix] R119.2: hidratado en buildRichBlocksFromInsights
 }
 
 // ─── CLIENTES DORMIDOS ────────────────────────────────────────────────────────
@@ -173,8 +187,8 @@ export interface ClienteDormido {
   vendedor: string
   ultima_compra: Date
   dias_sin_actividad: number
-  valor_historico: number
-  compras_historicas: number
+  valor_yoy_usd: number
+  transacciones_yoy: number
   recovery_score: number
   recovery_label: 'alta' | 'recuperable' | 'dificil' | 'perdido'
   recovery_explicacion: string
@@ -340,8 +354,8 @@ export interface SupervisorAnalysis {
   vendedores_ok: number
   vendedores_superando: number
   riesgo_zona: 'critico' | 'riesgo' | 'ok' | 'superando'
-  ytd_actual: number
-  ytd_anterior: number
+  ytd_actual_uds: number
+  ytd_anterior_uds: number
 }
 
 // ─── ANÁLISIS POR CATEGORÍA ───────────────────────────────────────────────────
@@ -435,8 +449,8 @@ export type ChatClienteContext =
       cliente: string
       vendedor: string
       dias_sin_actividad: number
-      compras_historicas: number
-      valor_historico: number
+      transacciones_yoy: number
+      valor_yoy_usd: number
       recovery_score: number
       recovery_explicacion: string
       frecuencia_esperada_dias: number | null

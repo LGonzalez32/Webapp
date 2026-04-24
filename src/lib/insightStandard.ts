@@ -1896,7 +1896,15 @@ export function calcularImpactoValor(
       const val = n('value'); const mean = n('mean')
       return (val != null && mean != null) ? val - mean : null
     }
-    case 'seasonality': return null
+    case 'seasonality': {
+      // [Z.9.6] Usar detail.impact cuando is_monetary = true
+      const imp = d['impact']
+      const isMonetary = d['is_monetary']
+      if (isMonetary === true && typeof imp === 'number' && isFinite(imp) && imp !== 0) {
+        return Math.abs(imp)
+      }
+      return null
+    }
     case 'meta_gap_temporal': {
       // Suma de gaps (metaVal - vendido) en serieTail donde cumplPct < 100
       type TailItem = { cumplPct: number; vendido: number; metaVal: number }
@@ -2073,7 +2081,12 @@ export function calcularDirection(
       if (typeof val === 'number' && typeof mean === 'number') return val >= mean ? 'up' : 'down'
       return 'neutral'
     }
-    case 'seasonality':        return 'neutral'
+    case 'seasonality': {
+      // [Z.9.6] Leer direccion real del detail en lugar de fijar 'neutral'
+      const raw = d['direccion']
+      if (raw === 'up' || raw === 'down') return raw
+      return 'neutral'
+    }
     case 'meta_gap_temporal':  return 'down'
     default:                   return 'neutral'
   }
@@ -2083,7 +2096,7 @@ export function calcularDirection(
 // Alcance temporal real del insight — informa el ranker ejecutivo de Z.9.4.
 export function calcularTimeScopeZ9(
   c: InsightImpactoInput,
-): "mtd" | "ytd" | "rolling" | "monthly" | "unknown" {
+): "mtd" | "ytd" | "rolling" | "monthly" | "seasonal" | "unknown" {
   switch (c.insightTypeId) {
     case 'change':          return 'mtd'
     case 'contribution':    return 'mtd'
@@ -2091,7 +2104,7 @@ export function calcularTimeScopeZ9(
     case 'dominance':       return 'mtd'
     case 'trend':           return 'rolling'
     case 'correlation':     return 'unknown'
-    case 'seasonality':     return 'unknown'
+    case 'seasonality':     return 'seasonal'  // [Z.9.6] era 'unknown'
     case 'stock_risk':      return 'rolling'
     case 'stock_excess':    return 'rolling'
     case 'cliente_dormido': return 'rolling'
@@ -2129,6 +2142,217 @@ export function calcularRenderPriorityScore(c: InsightImpactoInput & {
   return (sevW * 0.4 + scopeW * 0.2 + impactNorm * 0.3 + rawScore * 0.1) * dirMult
 }
 
+// ─── buildSupportingEvidence ─────────────────────────────────────────────────
+// [Z.9.5] Evidencia trazable por tipo de insight.
+// Extrae frases cortas con cifras desde c.detail. Nunca usa c.description
+// para evitar colisión Jaccard con primaryCause en buildExecutiveProblems.
+// Devuelve [] cuando no hay keys esperadas — degradación silenciosa.
+// Solo cubre tipos activos en el pipeline Z.9 con detail shape confirmado.
+export function buildSupportingEvidence(c: InsightImpactoInput): string[] {
+  const d = (c.detail || {}) as Record<string, unknown>
+  const num = (k: string): number | null => {
+    const v = d[k]
+    return typeof v === 'number' && isFinite(v) ? v : null
+  }
+  const str = (k: string): string | null => {
+    const v = d[k]
+    return typeof v === 'string' && v.length > 0 ? v : null
+  }
+  const fmt0   = (n: number) => Math.round(n).toLocaleString('en-US')
+  const fmt1   = (n: number) => (Math.round(n * 10) / 10).toFixed(1)
+  const fmtPct = (n: number) => (n >= 0 ? '+' : '') + fmt1(n) + '%'
+  const fmtUSD = (n: number) => '$' + fmt0(n)
+  const member = str('member') || str('clienteNombre') || ''
+
+  const out: string[] = []
+
+  switch (c.insightTypeId) {
+    case 'change_point': {
+      const pre = num('meanPre'), post = num('meanPost'),
+            pct = num('pctChange'), mPost = num('monthsPost')
+      if (pre !== null && post !== null && mPost !== null && member) {
+        out.push(`Cambio de régimen en ${member}: ${fmt0(pre)} → ${fmt0(post)} sostenido ${mPost} meses`)
+      }
+      if (pct !== null) out.push(`Variación ${fmtPct(pct)} vs régimen previo`)
+      break
+    }
+    case 'steady_share': {
+      const pre = num('meanPre'), post = num('meanPost'),
+            shiftPP = num('shiftPP'), stable = num('monthsStable'), postM = num('monthsPost')
+      if (pre !== null && post !== null && member) {
+        out.push(`${member}: participación ${fmt1(pre)}% → ${fmt1(post)}%`)
+      }
+      if (shiftPP !== null && stable !== null) {
+        out.push(`Desplazamiento ${fmtPct(shiftPP)} pp tras ${stable} meses estables`)
+      }
+      if (postM !== null && postM > 0) out.push(`Nivel nuevo sostenido ${postM} meses`)
+      break
+    }
+    case 'correlation': {
+      const r = num('r'), n = num('n')
+      const a = str('metricA'), b = str('metricB')
+      if (r !== null && a && b && member) {
+        const nTxt = n !== null ? ` (n=${fmt0(n)})` : ''
+        out.push(`${member}: correlación ${a}↔${b} r=${fmt1(r)}${nTxt}`)
+      }
+      break
+    }
+    case 'meta_gap_temporal': {
+      const cumpl = num('cumplActual'), impUSD = num('impactoUSD'),
+            months = num('monthsDeclining'), lastYm = str('lastYmLabel')
+      if (cumpl !== null && member) {
+        const asPct = cumpl > 1 ? cumpl : cumpl * 100
+        out.push(`${member}: cumplimiento ${fmt1(asPct)}% ${lastYm ? 'al ' + lastYm : ''}`.trim())
+      }
+      if (months !== null && months > 0) out.push(`Patrón descendente sostenido ${months} meses`)
+      if (impUSD !== null && impUSD > 0) out.push(`Gap acumulado ${fmtUSD(impUSD)}`)
+      break
+    }
+    case 'outlier':
+    case 'multi_metric_outlier': {
+      const v = num('value'), mean = num('mean'),
+            z = num('zScore') ?? num('absZ')
+      if (v !== null && mean !== null && member) {
+        out.push(`${member}: ${fmt0(v)} vs media del grupo ${fmt0(mean)}`)
+      }
+      if (z !== null) out.push(`Desvío z=${fmt1(Math.abs(z))}`)
+      break
+    }
+    case 'cliente_dormido': {
+      const dias = num('diasSinCompra'), umbral = num('umbralDiasDormido'),
+            imp = num('impactoVentaHistorica'), frec = num('frecuenciaHistoricaDias')
+      const nombre = str('clienteNombre') || member
+      if (dias !== null && nombre) {
+        const umbralTxt = umbral !== null ? ` (umbral ${fmt0(umbral)})` : ''
+        out.push(`${nombre}: sin compras hace ${fmt0(dias)} días${umbralTxt}`)
+      }
+      if (imp !== null && imp > 0) out.push(`Impacto histórico ${fmtUSD(imp)}`)
+      if (frec !== null && frec > 0) out.push(`Cadencia habitual cada ${fmt0(frec)} días`)
+      break
+    }
+    case 'stock_risk': {
+      const impactoTotal = num('impactoTotal')
+      const top = str('topProduct') || member
+      const items = Array.isArray(d['items']) ? d['items'] as Array<Record<string, unknown>> : []
+      const topItem = items[0]
+      if (topItem && typeof topItem === 'object') {
+        const s  = typeof topItem['stock'] === 'number' ? topItem['stock'] as number : null
+        const dc = typeof topItem['diasCobertura'] === 'number' ? topItem['diasCobertura'] as number : null
+        const m  = typeof topItem['member'] === 'string' ? topItem['member'] as string : top
+        if (s !== null && dc !== null) {
+          out.push(`${m}: ${fmt0(s)} uds de stock para ${fmt0(dc)} días de cobertura`)
+        }
+      }
+      if (items.length > 1) out.push(`${fmt0(items.length)} productos en riesgo de quiebre`)
+      if (impactoTotal !== null && impactoTotal > 0) {
+        out.push(`Venta YTD combinada en riesgo: ${fmtUSD(impactoTotal)}`)
+      }
+      break
+    }
+    case 'product_dead': {
+      const totalPrev    = num('totalPrev')
+      const totalStock   = num('totalStock')
+      const productCount = num('productCount')
+      const items = Array.isArray(d['items']) ? d['items'] as Array<Record<string, unknown>> : []
+      if (productCount !== null && productCount > 0) {
+        const names = items
+          .map(it => typeof it['member'] === 'string' ? it['member'] as string : null)
+          .filter((x): x is string => !!x)
+          .slice(0, 3)
+        if (names.length > 0) {
+          out.push(`${fmt0(productCount)} productos sin venta reciente: ${names.join(', ')}`)
+        }
+      }
+      if (totalPrev !== null && totalPrev > 0) out.push(`Venta histórica combinada: ${fmtUSD(totalPrev)}`)
+      if (totalStock !== null && totalStock > 0) out.push(`Inventario remanente: ${fmt0(totalStock)} unidades`)
+      break
+    }
+    case 'migration': {
+      const declining  = str('declining')
+      const rising     = str('rising')
+      const grupo      = str('grupo')
+      const magnitud   = num('magnitud')
+      const totalCaida = num('totalCaida')
+      if (declining && rising) {
+        const gTxt = grupo && grupo !== 'Sin categoría' ? ` en ${grupo}` : ''
+        out.push(`Desplazamiento${gTxt}: ${declining} → ${rising}`)
+      }
+      if (magnitud !== null && magnitud !== 0) out.push(`Magnitud del traslado: ${fmtUSD(Math.abs(magnitud))}`)
+      if (totalCaida !== null && totalCaida > 0 && totalCaida !== magnitud) {
+        out.push(`Caída total del grupo perdedor: ${fmtUSD(totalCaida)}`)
+      }
+      break
+    }
+    case 'contribution': {
+      const pct           = num('contributionPct')
+      const memberChange  = num('memberChange')
+      const totalChange   = num('totalChange')
+      const memberValue   = num('memberValue')
+      const memberPrevVal = num('memberPrevValue')
+      if (pct !== null && member) out.push(`${member} aporta ${fmt1(pct)}% del cambio total del grupo`)
+      if (memberPrevVal !== null && memberValue !== null && member) {
+        out.push(`${member}: ${fmt0(memberPrevVal)} → ${fmt0(memberValue)}`)
+      }
+      if (memberChange !== null && totalChange !== null && totalChange !== 0) {
+        const sM = memberChange >= 0 ? '+' : ''
+        const sT = totalChange  >= 0 ? '+' : ''
+        out.push(`Δ individual ${sM}${fmt0(memberChange)} vs Δ total del grupo ${sT}${fmt0(totalChange)}`)
+      }
+      break
+    }
+    case 'change': {
+      const cur  = num('current')
+      const prev = num('previous')
+      const pct  = num('pctChange')
+      const cmp  = str('comparison')
+      if (cur !== null && prev !== null && member) out.push(`${member}: ${fmt0(cur)} vs ${fmt0(prev)}`)
+      if (pct !== null) {
+        const base = cmp === 'yoy_mtd' ? ' vs mismo período año anterior' : ''
+        out.push(`Variación ${fmtPct(pct)}${base}`)
+      }
+      break
+    }
+    case 'trend': {
+      const dirStr = str('direction')
+      const months = num('months')
+      const pct    = num('pctChange')
+      const hStart = num('historyStart')
+      const hEnd   = num('historyEnd')
+      if (hStart !== null && hEnd !== null && months !== null && member) {
+        out.push(`${member}: ${fmt0(hStart)} → ${fmt0(hEnd)} en ${fmt0(months)} meses`)
+      }
+      if (pct !== null) {
+        const asPct = Math.abs(pct) < 10 ? pct * 100 : pct
+        const dirLbl = dirStr === 'down' ? 'descendente' : 'ascendente'
+        out.push(`Pendiente sostenida ${dirLbl} ${fmtPct(asPct)}`)
+      }
+      break
+    }
+    case 'seasonality': {
+      const mesPico  = num('mes_pico')
+      const idxPico  = num('index_pico')
+      const mesValle = num('mes_valle')
+      const idxValle = num('index_valle')
+      const meses = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']
+      const pkName = mesPico  !== null && mesPico  >= 1 && mesPico  <= 12 ? meses[mesPico  - 1] : null
+      const vlName = mesValle !== null && mesValle >= 1 && mesValle <= 12 ? meses[mesValle - 1] : null
+      if (pkName && idxPico !== null && member) {
+        out.push(`${member}: pico estacional en ${pkName} (${fmt1(idxPico)}× el promedio)`)
+      }
+      if (vlName && idxValle !== null) out.push(`Valle en ${vlName} (${fmt1(idxValle)}× el promedio)`)
+      break
+    }
+    default:
+      break
+  }
+
+  const seen = new Set<string>()
+  return out
+    .filter(s => typeof s === 'string' && s.length > 0 && s.length <= 140)
+    .filter(s => (seen.has(s) ? false : (seen.add(s), true)))
+    .slice(0, 3)
+}
+
 // ─── hydratarCandidatoZ9 ─────────────────────────────────────────────────────
 // Hidratar in-place todos los campos Z.9.2 en un candidato.
 // Llamado desde runInsightEngine después de la dedup pass.
@@ -2139,9 +2363,10 @@ export function hydratarCandidatoZ9<T extends InsightImpactoInput & {
   impacto_gap_meta?:      number | null
   impacto_recuperable?:   number | null
   direction?:             "up" | "down" | "neutral"
-  time_scope?:            "mtd" | "ytd" | "rolling" | "monthly" | "unknown"
+  time_scope?:            "mtd" | "ytd" | "rolling" | "monthly" | "seasonal" | "unknown"
   entity_path?:           string[]
   render_priority_score?: number
+  supporting_evidence?:   string[]
   severity?:              string
   score?:                 number
 }>(c: T, ctx?: ContextoImpactoZ9): void {
@@ -2153,14 +2378,65 @@ export function hydratarCandidatoZ9<T extends InsightImpactoInput & {
   c.time_scope          = calcularTimeScopeZ9(c)
   // R143: render_priority_score — calculado después de direction y time_scope
   c.render_priority_score = calcularRenderPriorityScore(c)
+  // [Z.9.5] evidencia trazable — solo si no viene ya poblada
+  if (!c.supporting_evidence || c.supporting_evidence.length === 0) {
+    c.supporting_evidence = buildSupportingEvidence(c)
+  }
   // entity_path básico si no viene poblado (Z.9.3 refinará con cruces reales)
   if (!c.entity_path || c.entity_path.length === 0) {
-    const member = (c.detail['member'] as string | undefined) ?? ''
+    let member = (c.detail['member'] as string | undefined) ?? ''
+
+    // [Z.9.6] migration: la entidad protagonista es el declining (quien pierde valor)
+    if (!member && c.insightTypeId === 'migration') {
+      const declining = (c.detail['declining'] as string | undefined) ?? ''
+      if (declining) {
+        member = declining
+        ;(c as unknown as { member?: string }).member = declining
+      }
+    }
+
     c.entity_path = member ? [c.dimensionId, member] : [c.dimensionId]
   }
+
+  // [Z.9.7 Gap 2] Inicialización defensiva — los campos se populan
+  // en buildInsightChains cuando el candidato se conecta a un padre/hijo.
+  // Si el candidato queda fuera de toda chain, quedan como [] (no undefined).
+  const cAny = c as unknown as { parent_entity_keys?: string[]; child_entity_keys?: string[] }
+  if (!Array.isArray(cAny.parent_entity_keys)) cAny.parent_entity_keys = []
+  if (!Array.isArray(cAny.child_entity_keys)) cAny.child_entity_keys = []
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ─── Materialidad ejecutiva (R148) ─────────────────────────────────────────
+//
+// Umbral mínimo para que un hallazgo califique como "ejecutivo".
+// Ratio = |totalImpactUSD| / denominador; denominador preferido: salesLYSamePeriod.
+// Si no hay LY disponible el motor degrada a salesCurrentPeriod o salesYTDCurrent
+// y marca degraded=true en MaterialityContext.
+
+/** Piso de materialidad: impacto ≥2% del denominador para ser ejecutivo. */
+export const MATERIALITY_FLOOR_EXECUTIVE   = 0.02   // 2%
+
+/** Umbral de materialidad alta: impacto ≥10% del denominador. */
+export const MATERIALITY_HIGH              = 0.10   // 10%
+
+/** Umbral de materialidad crítica: impacto ≥20% del denominador. */
+export const MATERIALITY_CRITICAL          = 0.20   // 20%
+
+/** Cantidad máxima de cards ejecutivas que llegan al render.
+ *  Aplicado después del filtro de materialidad. */
+export const EXECUTIVE_TOP_N               = 4
+
+/** Score mínimo del candidato raíz para marcar el hallazgo como anomalía estadística.
+ *  Permite que un insight sub-material llegue al ejecutivo si su desvío es alto. */
+export const STATISTICAL_ANOMALY_THRESHOLD = 0.85
+
+/** Cuando true, statistical_anomaly por sí sola NO califica para el panel ejecutivo.
+ *  Requiere acompañarse de material_magnitude o chain_depth.
+ *  Razón: un hallazgo estadísticamente raro pero económicamente irrelevante es
+ *  curiosidad analítica, no decisión ejecutiva. */
+export const STATISTICAL_ANOMALY_REQUIRES_COMPANION = true
 
 // [PR-0] Entidades cuyo nombre no es canónico y no deben aparecer en el ranking.
 // Comparación case-sensitive; usar .some(e => headline.includes(e)).

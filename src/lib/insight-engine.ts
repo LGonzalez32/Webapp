@@ -107,6 +107,9 @@ import {
   // [Z.9.2] hidratación de campos ejecutivos por candidato
   hydratarCandidatoZ9,
   type ContextoImpactoZ9,
+  // [Z.12] Tabla de la verdad ejecutiva
+  MATERIALITY_FLOOR_EXECUTIVE,
+  EXECUTIVE_TOP_N,
 } from './insightStandard'
 import { getAgregadosParaFiltro, type AgregadosFiltro } from './domain-aggregations' // [Z.4 — perf: cuello-2]
 import { buildTransactionOutlierBlocks } from './builders/buildTransactionOutlierBlocks' // [PR-M7d]
@@ -114,6 +117,7 @@ import { buildChangePointBlocks }       from './builders/buildChangePointBlocks'
 import { buildSteadyShareBlocks }       from './builders/buildSteadyShareBlocks'        // [PR-M9]
 import { buildCorrelationBlocks }       from './builders/buildCorrelationBlocks'        // [PR-M10]
 import { buildMetaGapTemporalBlocks }   from './builders/buildMetaGapTemporalBlocks'    // [PR-M11]
+import { buildEnrichmentContext, enriquecerCandidate } from './cross-context' // [Z.10.4]
 
 // Re-export so the page only imports from this file
 export type { DiagnosticBlock, InsightChain, DiagnosticBlockChain } from '../types/diagnostic-types'
@@ -354,7 +358,7 @@ export interface InsightCandidate {
   direction?: "up" | "down" | "neutral"
 
   // Z.9.2 — Alcance temporal real del insight
-  time_scope?: "mtd" | "ytd" | "rolling" | "monthly" | "unknown"
+  time_scope?: "mtd" | "ytd" | "rolling" | "monthly" | "seasonal" | "unknown"
 
   // Z.9.3 — Jerarquía de entidades para chaining
   entity_path?:        string[]         // ej. ["vendedor", "Carlos Ramírez"]
@@ -365,6 +369,28 @@ export interface InsightCandidate {
   root_problem_key?:      string | null   // direction:dimensionId:time_scope (buildRootProblemKey)
   supporting_evidence?:   string[]        // frases trazables con cifras (no prosa consultiva)
   render_priority_score?: number          // score determinístico del ranker ejecutivo (R143)
+
+  // [Z.10.5a] Normalización de impacto económico en USD (observabilidad)
+  // impacto_usd_normalizado: monto absoluto en USD del candidato; null si no aplica
+  // (metric no-monetaria) o si no se pudo resolver.
+  // impacto_usd_source: trazabilidad del origen del número.
+  impacto_usd_normalizado?: number | null
+  impacto_usd_source?:
+    | 'gap_meta'
+    | 'recuperable'
+    | 'cross_varAbs'
+    | 'detail_monto'
+    | 'detail_magnitud'
+    | 'detail_totalCaida'
+    | 'cross_delta_yoy'
+    | 'non_monetary'
+    | 'unavailable'
+
+  // [Z.10.5b] Composición de render_priority_score por impacto económico.
+  // render_priority_score_base preserva el valor pre-boost para auditoría.
+  // render_priority_score_impacto_factor es el multiplicador aplicado (≥1).
+  render_priority_score_base?: number
+  render_priority_score_impacto_factor?: number
 }
 
 export interface EngineParams {
@@ -2971,6 +2997,13 @@ const NON_MONETARY_METRIC_IDS = new Set([
   'ventas_por_cliente',
 ])
 
+// [Z.10.5b] Parámetros de composición del ranker ejecutivo por impacto económico.
+// impactoFactor = 1 + WEIGHT * log1p(usd / REFERENCIA)
+// Default conservador: peso 0.15, referencia $500 (factor ≈ 1.10 a $500, ≈ 1.27 a $3k).
+// Candidatos con usd null/0 → factor 1 (no se penalizan).
+const IMPACTO_USD_WEIGHT = 0.15
+const IMPACTO_USD_REFERENCIA = 500
+
 // [PR-2] Calcula impacto recuperable para bloques ie-* a partir del InsightCandidate.detail.
 // Se invoca inline durante blocks.push() donde c.detail aún está disponible.
 function computeRecuperableFromCandidate(
@@ -3795,7 +3828,13 @@ export function filtrarConEstandar(
   let paretoList: string[] = []
   try {
     paretoList = _preStats?.paretoList ?? (() => {
-      const entidades = candidates.map(c => ({ nombre: c.member, valor: c.score * 100 }))
+      // [Z.12] Pareto sobre dinero real (|impacto_usd_normalizado|), no sobre score.
+      const entidades = candidates
+        .map(c => ({
+          nombre: c.member,
+          valor: Math.abs(Number(c.impacto_usd_normalizado) || 0),
+        }))
+        .filter(e => e.valor > 0)
       return calcularPareto(entidades)
     })()
   } catch (e) { console.warn('[filtrarConEstandar] calcularPareto:', e) }
@@ -4034,6 +4073,157 @@ export function filtrarConEstandar(
     } catch (e) { console.warn('[filtrarConEstandar] esEntidadPareto:', e) }
   }
 
+  // === Z.12: Tabla de la verdad ejecutiva ===
+  // Cuatro reglas en AND con excepciones por diseño (root-strong + cross>=2).
+  // Se apoya en la infraestructura de insightStandard.ts sin umbrales fijos en USD.
+  const _Z12_ROOT_STRONG = new Set(['meta_gap_temporal', 'product_dead', 'migration'])
+  const _Z12_VALID_USD_SOURCES = /* @__PURE__ */ new Set([
+    'gap_meta',
+    'cross_varAbs',
+    'recuperable',
+    'detail_monto',
+    'detail_magnitud',
+    'detail_totalCaida',
+    'cross_delta_yoy',
+  ])
+  const _Z12_GENERIC_ACTION_RE = /identificar\s+qu[eé]\s+cambi[oó]|comparar\s+con\s+el\s+per[ií]odo|aislar\s+la\s+causa|validar\s+patr[oó]n\s+detectado|monitorear\s+tendencia|revisar\s+el\s+comportamiento/i
+  const _Z12_GENERIC_DESC_RE   = /sugiere\s+mejora|podr[ií]a\s+indicar|posible\s+oportunidad|parece\s+haber/i
+
+  const _Z12_ventaTotal = ventaTotalNegocio > 0 ? ventaTotalNegocio : 1
+  const _Z12_floorAbs   = _Z12_ventaTotal * MATERIALITY_FLOOR_EXECUTIVE
+
+  const _Z12_suppressed: Array<{
+    member: string
+    insightTypeId: string
+    usdAbs: number
+    pctSobreVenta: number
+    cross: number
+    reglas: { r1_materialidad: boolean; r2_pareto: boolean; r3_coherencia_monetaria: boolean; r4_coherencia_narrativa: boolean }
+    r4_mode: 'strict' | 'relaxed' | 'fail'
+    accionOk: boolean
+    tituloOk: boolean
+    descOk: boolean
+    isRootStrong: boolean
+    esParetoReal: boolean
+    usdSource: string | null
+  }> = []
+
+  result = result.filter((c) => {
+    try {
+      const cAny = c as unknown as {
+        impacto_usd_normalizado?: number | null
+        impacto_usd_source?: string
+        detail?: Record<string, unknown>
+        title?: string
+        description?: string
+        accion?: { texto?: string } | string
+      }
+      const usdAbs = Math.abs(Number(cAny.impacto_usd_normalizado) || 0)
+      // [Z.12.1] usar el contador de cross concreto (objeto, no array).
+      const cross = _z11ContarCrossConcreto(c)
+      const isRootStrong = _Z12_ROOT_STRONG.has(c.insightTypeId) && cross >= 2
+
+      // [Z.12.1] Regla 1 bi-nivel:
+      //   >= 2% del negocio: pasa directo.
+      //   entre 1% y 2%: pasa si además es Pareto real o root-strong.
+      //   < 1%: solo pasa si es root-strong.
+      const _Z12_floorAbsAlto = _Z12_floorAbs                                        // 2%
+      const _Z12_floorAbsBajo = _Z12_ventaTotal * (MATERIALITY_FLOOR_EXECUTIVE / 2)  // 1%
+      const esParetoReal      = !!c.member && esEntidadPareto(c.member, paretoList)
+      const r1_materialidad =
+        usdAbs >= _Z12_floorAbsAlto ||
+        (usdAbs >= _Z12_floorAbsBajo && (esParetoReal || isRootStrong)) ||
+        isRootStrong
+
+      // Regla 2: Pareto real del negocio; si no hay paretoList, no bloqueamos
+      const r2_pareto =
+        (!!c.member && esEntidadPareto(c.member, paretoList)) ||
+        isRootStrong ||
+        paretoList.length === 0
+
+      // Regla 3: Coherencia monetaria (USD != null/0 y source válido) o root-strong
+      const hasUsd =
+        cAny.impacto_usd_normalizado != null && Number(cAny.impacto_usd_normalizado) !== 0
+      const validSource =
+        !!cAny.impacto_usd_source && _Z12_VALID_USD_SOURCES.has(cAny.impacto_usd_source)
+      const r3_coherencia_monetaria = (hasUsd && validSource) || isRootStrong
+
+      // Regla 4: Coherencia narrativa (título + descripción + acción no genéricas)
+      const tituloOk =
+        typeof cAny.title === 'string' && cAny.title.trim().length >= 6
+      const descOk =
+        typeof cAny.description === 'string' &&
+        cAny.description.trim().length >= 20 &&
+        esConclusionValida(cAny.description) &&
+        !_Z12_GENERIC_DESC_RE.test(cAny.description)
+      const accionTxt =
+        (typeof cAny.accion === 'object' && cAny.accion !== null
+          ? (cAny.accion as { texto?: string }).texto ?? ''
+          : typeof cAny.accion === 'string'
+            ? cAny.accion
+            : '').toString()
+      const accionOk = accionTxt.trim().length >= 10 && !_Z12_GENERIC_ACTION_RE.test(accionTxt)
+
+      // [Z.12.2] r4 bi-nivel:
+      //   - estricto: título + descripción + acción concretos.
+      //   - relajado: si r1 + r2 + r3 están en verde y título + descripción son
+      //     concretos, se acepta acción vacía. El usuario la genera vía "+ Profundizar".
+      // NO se inventan acciones genéricas. La narrativa textual sigue siendo
+      // obligatoria y se valida con esConclusionValida() + regex anti-genéricas.
+      const _Z122_estricto = tituloOk && descOk && accionOk
+      const _Z122_relajado =
+        r1_materialidad &&
+        r2_pareto &&
+        r3_coherencia_monetaria &&
+        tituloOk &&
+        descOk &&
+        !accionOk // sólo activa la puerta relajada cuando accion falla
+      const r4_coherencia_narrativa = _Z122_estricto || _Z122_relajado
+
+      const pasa =
+        r1_materialidad && r2_pareto && r3_coherencia_monetaria && r4_coherencia_narrativa
+
+      if (!pasa) {
+        _Z12_suppressed.push({
+          member:        c.member,
+          insightTypeId: c.insightTypeId,
+          usdAbs,
+          pctSobreVenta: _Z12_ventaTotal > 0 ? usdAbs / _Z12_ventaTotal : 0,
+          cross,
+          reglas:        { r1_materialidad, r2_pareto, r3_coherencia_monetaria, r4_coherencia_narrativa },
+          r4_mode:       _Z122_estricto ? 'strict' : (_Z122_relajado ? 'relaxed' : 'fail'),
+          accionOk,
+          tituloOk,
+          descOk,
+          isRootStrong,
+          esParetoReal,
+          usdSource:     cAny.impacto_usd_source ?? null,
+        })
+      } else if (_Z122_relajado) {
+        // [Z.12.2] Marcar candidato salvado por puerta relajada para auditar downstream.
+        ;(cAny as { _z122_relaxed?: boolean })._z122_relaxed = true
+      }
+      return pasa
+    } catch (e) {
+      console.warn('[Z.12 exec_gate] evaluación falló, conservando candidato:', e)
+      return true
+    }
+  })
+
+  if (import.meta.env.DEV) {
+    console.debug('[Z.12] exec_gate resumen', {
+      ventaTotalNegocio: _Z12_ventaTotal,
+      floorAbs:          _Z12_floorAbs,
+      floorPct:          MATERIALITY_FLOOR_EXECUTIVE,
+      executiveTopN:     EXECUTIVE_TOP_N,
+      surviving:         result.length,
+      suppressed:        _Z12_suppressed.length,
+      relaxed_survivors: result.filter((c) => (c as { _z122_relaxed?: boolean })._z122_relaxed === true).length,
+      suppressedDetail:  _Z12_suppressed,
+    })
+  }
+  // === fin Z.12 ===
+
   // V11 — cruces-tipo-estándar
   // C16. CRUCES_DISPONIBLES — validar que el cruce métrica×dimensión está permitido
   result = result.filter(c => {
@@ -4059,7 +4249,7 @@ export function filtrarConEstandar(
       )
       // Los tipos estándar del engine siempre pasan (la validación de cruces se aplica a tipos custom)
       const isStandardType = ['trend', 'change', 'dominance', 'contribution',
-        'meta_gap', 'proportion_shift', 'correlation'].includes(c.insightTypeId)
+        'meta_gap', 'proportion_shift', 'correlation', 'cross_delta'].includes(c.insightTypeId)
       return metricMatch || isStandardType
     } catch { return true }
   })
@@ -4331,6 +4521,268 @@ export function filtrarConEstandar(
 
 // ─── Main engine ──────────────────────────────────────────────────────────────
 
+// [Z.11.1] Quality gate ejecutivo — helpers puros.
+// Filtra insights de Clase B (ruido estadístico sin carga ejecutiva)
+// según reglas de supervivencia OR:
+//   A) |usd| >= 200, cualquier tipo
+//   B) 30 <= |usd| < 200 con cross>=2 y acción no genérica
+//   C) usd==null con tipo raíz fuerte y cross>=2
+const Z11_ROOT_STRONG_TYPES = new Set<string>([
+  'meta_gap_temporal',
+  'product_dead',
+  'migration',
+])
+const Z11_GENERIC_ACTION_REGEX =
+  /identificar qu[eé] cambi[oó]|comparar con el per[ií]odo|aislar la causa|validar patr[oó]n detectado|monitorear tendencia/i
+
+function _z11ContarCrossConcreto(c: InsightCandidate): number {
+  const cx = (c?.detail as Record<string, unknown> | undefined)?.cross_context
+  if (!cx || typeof cx !== 'object') return 0
+  let n = 0
+  for (const v of Object.values(cx as Record<string, unknown>)) {
+    if (typeof v === 'string' && v.trim()) n++
+    else if (Array.isArray(v) && v.length > 0) n++
+    else if (v && typeof v === 'object') {
+      const obj = v as Record<string, unknown>
+      const name =
+        obj.cliente ?? obj.producto ?? obj.vendedor ?? obj.member ??
+        obj.departamento ?? obj.categoria
+      if (typeof name === 'string' && name.trim()) n++
+    }
+  }
+  return n
+}
+
+function _z11EvaluarSupervivencia(c: InsightCandidate): { sobrevive: boolean; regla: string } {
+  const usd = c.impacto_usd_normalizado
+  const absUsd = typeof usd === 'number' ? Math.abs(usd) : 0
+  const cross = _z11ContarCrossConcreto(c)
+  const accionTexto = typeof c.accion === 'object' && c.accion !== null
+    ? ((c.accion as { texto?: string }).texto ?? '')
+    : (typeof c.accion === 'string' ? c.accion : '')
+  const accionGenerica = Z11_GENERIC_ACTION_REGEX.test(accionTexto)
+
+  if (usd != null && absUsd >= 200) {
+    return { sobrevive: true, regla: 'A:usd>=200' }
+  }
+  if (usd != null && absUsd >= 30 && cross >= 2 && !accionGenerica) {
+    return { sobrevive: true, regla: 'B:usd-medio+cross+narr' }
+  }
+  if (usd == null && Z11_ROOT_STRONG_TYPES.has(c.insightTypeId) && cross >= 2) {
+    return { sobrevive: true, regla: 'C:null-usd+root-strong+cross' }
+  }
+
+  const razones: string[] = []
+  if (usd == null) razones.push('sin-usd')
+  else if (absUsd < 30) razones.push(`usd-trivial($${Math.round(absUsd)})`)
+  else if (absUsd < 200) razones.push(`usd-medio($${Math.round(absUsd)})`)
+  if (cross < 2) razones.push(`cross-pobre(${cross})`)
+  if (accionGenerica) razones.push('accion-generica')
+  if (!Z11_ROOT_STRONG_TYPES.has(c.insightTypeId) && usd == null) {
+    razones.push(`tipo-debil(${c.insightTypeId})`)
+  }
+  return { sobrevive: false, regla: razones.join('|') || 'sin-senales' }
+}
+
+// [Z.10.6b] return del engine es un array de candidatos con propiedades
+// adjuntas para compresión ejecutiva. Backward compatible: el array itera,
+// filtra y mapea como siempre; los campos problems/root_narratives viajan
+// como properties enumerables. El tipo de esas estructuras se deja como
+// unknown (internas, no contractuales).
+type RunInsightEngineResult = InsightCandidate[] & {
+  problems?:        ReadonlyArray<unknown>
+  root_narratives?: ReadonlyArray<unknown>
+}
+
+// [Z.10.6d] jerarquía causal de insight types.
+// Indice menor = más raíz causal. Indice mayor = síntoma más visible.
+// Tipos no listados caen al final (síntoma débil).
+const ROOT_CAUSE_TAXONOMY: ReadonlyArray<string> = [
+  'meta_gap_temporal',  // brecha estructural de meta (raíz ejecutiva)
+  'product_dead',       // producto sin ventas (raíz operativa)
+  'migration',          // cambio de comportamiento sostenido (raíz comercial)
+  'change_point',       // quiebre de régimen detectado (raíz temporal)
+  'outlier',            // anomalía individual (raíz cualitativa)
+  'contribution',       // aporte al descenso/crecimiento (síntoma medible)
+  'change',             // variación puntual (síntoma cuantitativo)
+  'trend',              // tendencia (síntoma observable)
+  'seasonality',        // patrón estacional (señal cualitativa)
+  'correlation',        // correlación entre métricas (señal analítica)
+  'steady_share',       // participación estable (señal contextual)
+  'stock_risk',         // riesgo de inventario (señal operativa)
+  'stock_excess',       // exceso de inventario (señal operativa)
+]
+const _taxonomyRank = (tid: string): number => {
+  const i = ROOT_CAUSE_TAXONOMY.indexOf(tid)
+  return i === -1 ? ROOT_CAUSE_TAXONOMY.length : i
+}
+
+// [Z.10.6c] Narrador raíz determinístico — función pura sobre problems de Z.10.6a.
+// Emite RootNarrative[] con títulos, qué pasó, por qué importa y acción sugerida
+// ejecutables, con confidence audit-able. Sin LLM, sin closures mutables.
+interface Z10RootNarrative {
+  groupKey:          string
+  dimensionId:       string
+  member:            string
+  syntoma:           InsightCandidate | null
+  causas:            InsightCandidate[]
+  impactoUsdTotal:   number
+  impactoUsdSources: string[]
+  size:              number
+  insightTypeIds:    string[]
+  titulo:            string
+  que_paso:          string
+  por_que_importa:   string
+  accion_sugerida:   string
+  confidence:        'high' | 'medium' | 'low'
+  generated_by:      'Z.10.6c'
+}
+
+function buildRootNarratives(problems: Array<{
+  groupKey:          string
+  dimensionId:       string
+  member:            string
+  members:           InsightCandidate[]
+  insightTypeIds:    string[]
+  impactoUsdTotal:   number
+  impactoUsdSources: string[]
+  topMember:         InsightCandidate | null
+  topRps:            number
+  size:              number
+}>): Z10RootNarrative[] {
+  const _fmtUsd = (n: number): string => {
+    if (!Number.isFinite(n) || n === 0) return 'sin USD'
+    const abs = Math.abs(n)
+    const sign = n < 0 ? '-' : ''
+    if (abs >= 100) return `${sign}$${Math.round(abs).toLocaleString('en-US')}`
+    return `${sign}$${abs.toFixed(2)}`
+  }
+
+  return problems.map((p) => {
+    // [Z.10.6d] syntoma = member con insightTypeId más raíz (taxonomía).
+    // Empate por rps desc. Causas ordenadas por rps desc (sin cambio).
+    const sortedByTaxonomy = [...p.members].sort((a, b) => {
+      const taxDelta = _taxonomyRank(a.insightTypeId) - _taxonomyRank(b.insightTypeId)
+      if (taxDelta !== 0) return taxDelta
+      return (b.render_priority_score ?? 0) - (a.render_priority_score ?? 0)
+    })
+    const syntoma = sortedByTaxonomy[0] ?? p.topMember ?? null
+    const causas  = sortedByTaxonomy.slice(1).sort(
+      (a, b) => (b.render_priority_score ?? 0) - (a.render_priority_score ?? 0),
+    )
+    const topType = syntoma?.insightTypeId ?? (p.insightTypeIds[0] ?? 'default')
+    const usdFmt  = _fmtUsd(p.impactoUsdTotal)
+    const member  = p.member || '(sin entidad)'
+
+    let confidence: 'high' | 'medium' | 'low'
+    if (p.size >= 2 && p.impactoUsdTotal > 500) confidence = 'high'
+    else if (p.impactoUsdTotal > 100)           confidence = 'medium'
+    else                                         confidence = 'low'
+
+    let titulo: string
+    switch (topType) {
+      case 'meta_gap_temporal':
+        titulo = p.size >= 2
+          ? `${member} — brecha de meta con efectos acumulados (${usdFmt})`
+          : `${member} — brecha de meta (${usdFmt})`
+        break
+      case 'product_dead':
+        titulo = `${member} — producto sin ventas (${usdFmt})`
+        break
+      case 'contribution': {
+        const dir = (syntoma?.direction === 'down' || (syntoma?.detail as { direction?: string } | undefined)?.direction === 'negativo')
+          ? 'descenso'
+          : (syntoma?.direction === 'up' || (syntoma?.detail as { direction?: string } | undefined)?.direction === 'positivo')
+            ? 'crecimiento'
+            : 'impacto'
+        titulo = `${member} — mayor ${dir} detectado (${usdFmt})`
+        break
+      }
+      case 'migration':
+        titulo = `${member} — migración de comportamiento (${usdFmt})`
+        break
+      case 'outlier':
+        titulo = `${member} — anomalía individual (${usdFmt})`
+        break
+      case 'change':
+        titulo = `${member} — cambio detectado (${usdFmt})`
+        break
+      case 'trend':
+        titulo = `${member} — tendencia activa (${usdFmt})`
+        break
+      case 'change_point':
+        titulo = `${member} — quiebre de régimen (${usdFmt})`
+        break
+      case 'seasonality':
+        titulo = `${member} — patrón estacional (${usdFmt})`
+        break
+      case 'correlation':
+        titulo = `${member} — correlación detectada (${usdFmt})`
+        break
+      default:
+        titulo = `${member} — problema compuesto (${usdFmt})`
+    }
+
+    const que_paso = p.size === 1
+      ? `${member} — 1 señal de tipo ${topType}.`
+      : `${member} — ${p.size} señales: ${p.insightTypeIds.join(', ')}.`
+
+    const por_que_importa = p.impactoUsdTotal !== 0
+      ? `Impacto agregado: ${usdFmt} (fuentes: ${p.impactoUsdSources.join(', ') || 'n/d'}).`
+      : 'Señal cualitativa — sin impacto USD monetizable.'
+
+    let accion_sugerida: string
+    switch (topType) {
+      case 'meta_gap_temporal':
+        accion_sugerida = `Revisar desempeño de ${member}: causas combinadas por ${usdFmt}.`
+        break
+      case 'product_dead':
+        accion_sugerida = `Evaluar reactivación o descontinuación de ${member}.`
+        break
+      case 'contribution':
+        accion_sugerida = `Investigar drivers detrás de la contribución de ${member} (${usdFmt}).`
+        break
+      case 'migration':
+        accion_sugerida = `Identificar causas de la migración de ${member} (${usdFmt}).`
+        break
+      case 'outlier':
+        accion_sugerida = `Contactar a ${member}: comportamiento anómalo detectado (${usdFmt}).`
+        break
+      case 'change':
+        accion_sugerida = `Verificar cambio sostenido en ${member} (${usdFmt}).`
+        break
+      case 'trend':
+        accion_sugerida = `Monitorear tendencia de ${member} (${usdFmt}).`
+        break
+      case 'change_point':
+      case 'seasonality':
+      case 'correlation':
+        accion_sugerida = `Validar patrón detectado en ${member}.`
+        break
+      default:
+        accion_sugerida = `Revisar ${member}.`
+    }
+
+    return {
+      groupKey:          p.groupKey,
+      dimensionId:       p.dimensionId,
+      member:            p.member,
+      syntoma,
+      causas,
+      impactoUsdTotal:   p.impactoUsdTotal,
+      impactoUsdSources: p.impactoUsdSources,
+      size:              p.size,
+      insightTypeIds:    p.insightTypeIds,
+      titulo,
+      que_paso,
+      por_que_importa,
+      accion_sugerida,
+      confidence,
+      generated_by:      'Z.10.6c',
+    }
+  })
+}
+
 export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   const { sales, metas, selectedPeriod, tipoMetaActivo, clientesDormidos } = params
   const { year, month } = selectedPeriod
@@ -4353,6 +4805,18 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
 
   // 1. Slice sales by period
   const currentSales = getSalesForPeriod(sales, year, month)
+
+  // [Z.13.1] Venta total del negocio del período, para ranker monetario-consciente.
+  // Reusa getAgregadosParaFiltro (ya importado), no duplica lógica.
+  let _Z13_ventaTotalNegocio = 1
+  try {
+    const _agregadosZ13 = getAgregadosParaFiltro(sales, selectedPeriod)
+    _Z13_ventaTotalNegocio = (_agregadosZ13?.ventaTotalNegocio ?? 0) > 0
+      ? _agregadosZ13.ventaTotalNegocio
+      : 1
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn('[Z.13.1] ventaTotal fallback=1:', e)
+  }
 
   // Issue #5 + Fase 5A: compute period context BEFORE YoY filter (needed for same-day range)
   const diasTotalesMes = new Date(year, month + 1, 0).getDate()
@@ -4377,10 +4841,45 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
     historySales.unshift(getSalesForPeriod(sales, hYear, hMonth))
   }
 
+  // [Z.10.4] contexto de enrichment — cross-tables + churn + dormidos, una vez por run.
+  const _fechaRefMs = currentSales.reduce((max, s) => {
+    const t = s.fecha instanceof Date ? s.fecha.getTime() : new Date(s.fecha).getTime()
+    return t > max ? t : max
+  }, 0)
+  const _fechaRef = _fechaRefMs > 0 ? new Date(_fechaRefMs) : new Date()
+  const _hasVentaNeta = currentSales.some((s: any) => s.venta_neta != null)
+  const _enrichCtx = buildEnrichmentContext(sales, _fechaRef, _hasVentaNeta, clientesDormidos)
+  // [Z.10.4b] Gating de enrichment: dims soportadas + tipos que NO aportan con cross_context
+  const _ENRICH_SKIP_TYPES = new Set(['seasonality', 'correlation', 'steady_share', 'dominance', 'proportion_shift'])
+  const _isEnrichEligible = (dimId: string, typeId: string): boolean =>
+    (dimId === 'producto' || dimId === 'cliente' || dimId === 'vendedor') &&
+    !_ENRICH_SKIP_TYPES.has(typeId)
+
   const baseOpts: MetricComputeOpts = { metas, metaType: tipoMetaActivo, year, month }
   const prevOpts: MetricComputeOpts = { metas, metaType: tipoMetaActivo, year: prev.year, month: prev.month }
 
   const allCandidates: InsightCandidate[] = []
+
+  // [Z.10.4c] push con enrichment para candidatos que vienen de builders PR-M.
+  // Los no-elegibles se pushean bit-idénticos (fallback transparente del helper).
+  const _pushWithEnrichment = (candidates: InsightCandidate[]): void => {
+    for (const c of candidates) {
+      if (_isEnrichEligible(c.dimensionId, c.insightTypeId)) {
+        const _r = enriquecerCandidate(
+          {
+            dimensionId: c.dimensionId,
+            member: c.member,
+            descripcion: c.description,
+            baseDetail: c.detail,
+          },
+          _enrichCtx,
+        )
+        allCandidates.push({ ...c, description: _r.description, detail: _r.detail })
+      } else {
+        allCandidates.push(c)
+      }
+    }
+  }
 
   // 2. Main loop: dimension × metric × insightType
   for (const dim of DIMENSION_REGISTRY) {
@@ -4483,7 +4982,11 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
         const member =
           (finalDetail.member as string | undefined) ??
           ((finalDetail.topMembers as string[] | undefined)?.[0]) ??
-          ''
+          // [Z.10.4e] migration: cuando no hay member directo, usar declining
+          // (la entidad protagonista que pierde valor — alineado con Z.9.6).
+          (insightType.id === 'migration'
+            ? ((finalDetail.declining as string | undefined) ?? '')
+            : '')
 
         const metricDef = METRIC_REGISTRY.find(m => m.id === metric.id)!
         const dimDef    = DIMENSION_REGISTRY.find(d => d.id === dim.id)!
@@ -4509,6 +5012,18 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
           } catch { /* fallback to default buildText output */ }
         }
 
+        // [Z.10.4b] enrichment unificado generic pipeline (dim ∈ {producto, cliente, vendedor}, tipo elegible)
+        let _enrichedDetail: Record<string, unknown> = finalDetail
+        let _enrichedDesc = _finalDesc
+        if (_isEnrichEligible(dim.id, insightType.id)) {
+          const _r = enriquecerCandidate(
+            { dimensionId: dim.id, member, descripcion: _finalDesc, baseDetail: finalDetail },
+            _enrichCtx,
+          )
+          _enrichedDesc = _r.description
+          _enrichedDetail = _r.detail
+        }
+
         allCandidates.push({
           metricId:      metric.id,
           dimensionId:   dim.id,
@@ -4517,8 +5032,8 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
           score:         result.score,
           severity:      scoreToSeverity(result.score),
           title:         _finalTitle,
-          description:   _finalDesc,
-          detail:        finalDetail,
+          description:   _enrichedDesc,
+          detail:        _enrichedDetail,
           conclusion:    _conclusion,
           accion:        _accion,
         })
@@ -4813,6 +5328,21 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
             try {
               const _nar = _tmpl(_res.detail, tipoMetaActivo)
               const _rising = (_res.detail.rising as string | undefined) ?? ''
+              const _declining = (_res.detail.declining as string | undefined) ?? ''
+              // [Z.10.4d] enrichment con el declining (fuente de la historia)
+              const _baseDetail = { ..._res.detail, _conclusion: _nar.conclusion, _accion: _nar.accion }
+              const _rDecl = enriquecerCandidate(
+                {
+                  dimensionId: 'producto',
+                  member: _declining,
+                  descripcion: _nar.descripcion,
+                  baseDetail: _baseDetail,
+                },
+                _enrichCtx,
+              )
+              const _finalDetail = (_rDecl.detail as any)?.cross_context
+                ? _rDecl.detail
+                : _baseDetail
               allCandidates.push({
                 metricId:      'venta',
                 dimensionId:   'producto',
@@ -4821,8 +5351,8 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
                 score:         _res.score,
                 severity:      scoreToSeverity(_res.score),
                 title:         _nar.titulo,
-                description:   _nar.descripcion,
-                detail: { ..._res.detail, _conclusion: _nar.conclusion, _accion: _nar.accion },
+                description:   _rDecl.description,
+                detail:        _finalDetail,
                 conclusion:    _nar.conclusion,
                 accion:        _nar.accion,
               })
@@ -4871,6 +5401,20 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
             try {
               const _nar = _tmpl(_res.detail, tipoMetaActivo)
               const _topProd = (_res.detail.topProduct as string | undefined) ?? ''
+
+              // [Z.10.4] enrichment unificado para product_dead
+              const _r = enriquecerCandidate(
+                {
+                  dimensionId: 'producto',
+                  member: _topProd,
+                  descripcion: _nar.descripcion,
+                  baseDetail: { ..._res.detail, _conclusion: _nar.conclusion, _accion: _nar.accion },
+                },
+                _enrichCtx,
+              )
+              const _enrichedDesc = _r.description
+              const _enrichedDetail = _r.detail
+
               allCandidates.push({
                 metricId:      'venta',
                 dimensionId:   'producto',
@@ -4879,8 +5423,8 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
                 score:         _res.score,
                 severity:      scoreToSeverity(_res.score),
                 title:         _nar.titulo,
-                description:   _nar.descripcion,
-                detail: { ..._res.detail, _conclusion: _nar.conclusion, _accion: _nar.accion },
+                description:   _enrichedDesc,
+                detail:        _enrichedDetail,
                 conclusion:    _nar.conclusion,
                 accion:        _nar.accion,
               })
@@ -5186,6 +5730,17 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
     for (const c of _xe.candidates) {
       const key = `${c.member}|${c.dimensionId}|${c.insightTypeId}`
       if (_xeHardcodedKeys.has(key)) { _xeDedupCount++; continue }
+      // [Z.10.4b] enrichment para candidatos del crossEngine
+      let _desc = c.description
+      let _detail = c.detail
+      if (_isEnrichEligible(c.dimensionId, c.insightTypeId)) {
+        const _r = enriquecerCandidate(
+          { dimensionId: c.dimensionId, member: c.member, descripcion: c.description, baseDetail: c.detail },
+          _enrichCtx,
+        )
+        _desc = _r.description
+        _detail = _r.detail
+      }
       allCandidates.push({
         metricId:      c.metricId,
         dimensionId:   c.dimensionId,
@@ -5194,8 +5749,8 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
         score:         c.score,
         severity:      c.severity,
         title:         c.title,
-        description:   c.description,
-        detail:        c.detail,
+        description:   _desc,
+        detail:        _detail,
         conclusion:    c.conclusion,
         accion:        c.accion,
       })
@@ -5227,7 +5782,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
       currentSales,
       selectedPeriod: { year, month },
     })
-    allCandidates.push(..._pm7dOut.candidates)
+    _pushWithEnrichment(_pm7dOut.candidates)
     _status.detectors.outlier_builder = { result: 'ok', candidatesEmitted: _pm7dOut.candidates.length }
     if (import.meta.env.DEV) {
       // [PR-M7f] log separado para la extensión multi-métrica.
@@ -5245,7 +5800,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   // Usa TODO el historial (`sales`, no `currentSales`). Aditivo; degrada a [].
   try {
     const _pm8aOut = buildChangePointBlocks(sales)
-    allCandidates.push(..._pm8aOut.candidates)
+    _pushWithEnrichment(_pm8aOut.candidates)
     _status.detectors.change_point = { result: 'ok', candidatesEmitted: _pm8aOut.candidates.length }
   } catch (e) {
     _status.detectors.change_point = { result: 'failed', candidatesEmitted: 0, error: String(e) }
@@ -5256,7 +5811,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   // relativa al grupo (complementaria a change_point: relativo vs absoluto).
   try {
     const _pm9Out = buildSteadyShareBlocks(sales)
-    allCandidates.push(..._pm9Out.candidates)
+    _pushWithEnrichment(_pm9Out.candidates)
     _status.detectors.steady_share = { result: 'ok', candidatesEmitted: _pm9Out.candidates.length }
   } catch (e) {
     _status.detectors.steady_share = { result: 'failed', candidatesEmitted: 0, error: String(e) }
@@ -5267,7 +5822,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   // sostenido para una misma entidad. Pearson r ≤ -0.65 durante ≥6 meses.
   try {
     const _pm10Out = buildCorrelationBlocks(sales)
-    allCandidates.push(..._pm10Out.candidates)
+    _pushWithEnrichment(_pm10Out.candidates)
     _status.detectors.correlation = { result: 'ok', candidatesEmitted: _pm10Out.candidates.length }
   } catch (e) {
     _status.detectors.correlation = { result: 'failed', candidatesEmitted: 0, error: String(e) }
@@ -5279,12 +5834,188 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   // ≥15pp por debajo del promedio del equipo). impactoUSD=0.
   try {
     const _pm11Out = buildMetaGapTemporalBlocks({ sales, metas, tipoMetaActivo, selectedPeriod: { year, month } })
-    allCandidates.push(..._pm11Out.candidates)
+    _pushWithEnrichment(_pm11Out.candidates)
     _status.detectors.meta_gap_temporal = { result: 'ok', candidatesEmitted: _pm11Out.candidates.length }
     console.log('[PR-M11] meta_gap_temporal_builder', _pm11Out.telemetry)
   } catch (e) {
     _status.detectors.meta_gap_temporal = { result: 'failed', candidatesEmitted: 0, error: String(e) }
     if (import.meta.env.DEV) console.warn('[PR-M11] builder failed (degradación silenciosa):', e)
+  }
+
+  // [Z.13.3] Detector cross_delta — descomposición combinatoria dim×dim.
+  // Emite candidatos por pares (vendedor×departamento, vendedor×cliente) cuando
+  // el delta YoY de la combinación es material. Capa ADITIVA: no toca el cartesiano
+  // existente, compite en pool regular del ranker. Sin protección en ALWAYS_PROTECTED_CAPS.
+  try {
+    const _Z133_valueOf = (r: SaleRecord): number => {
+      const rAny = r as unknown as Record<string, unknown>
+      const v = (rAny.venta_neta ?? rAny.venta_total ?? rAny.venta ?? rAny.monto ?? 0) as number
+      return Number(v) || 0
+    }
+    const _Z133_ventaTotal = currentSales.reduce((s, r) => s + _Z133_valueOf(r), 0)
+    const _Z133_ventaTotalSafe = _Z133_ventaTotal > 0 ? _Z133_ventaTotal : 1
+
+    // Floors bi-nivel consistentes con gate Z.12.
+    const _Z133_floorAlto = _Z133_ventaTotalSafe * MATERIALITY_FLOOR_EXECUTIVE
+    const _Z133_floorBajo = _Z133_ventaTotalSafe * (MATERIALITY_FLOOR_EXECUTIVE / 2)
+
+    // Pareto set local sobre venta actual (entidades que acumulan ~80%).
+    const _Z133_ventaPorEntidad = new Map<string, number>()
+    for (const r of currentSales) {
+      const v = _Z133_valueOf(r)
+      if (v <= 0) continue
+      const rAny = r as unknown as Record<string, string | undefined>
+      for (const k of [rAny.vendedor, rAny.cliente, rAny.producto, rAny.departamento, rAny.canal]) {
+        if (!k) continue
+        _Z133_ventaPorEntidad.set(k, (_Z133_ventaPorEntidad.get(k) ?? 0) + v)
+      }
+    }
+    const _Z133_paretoRanked = [..._Z133_ventaPorEntidad.entries()].sort((a, b) => b[1] - a[1])
+    const _Z133_paretoTotal  = _Z133_paretoRanked.reduce((s, [, v]) => s + v, 0)
+    const _Z133_paretoSet    = new Set<string>()
+    let _Z133_acc = 0
+    for (const [k, v] of _Z133_paretoRanked) {
+      _Z133_acc += v
+      _Z133_paretoSet.add(k)
+      if (_Z133_paretoTotal > 0 && _Z133_acc / _Z133_paretoTotal >= 0.8) break
+    }
+
+    const _Z133_PARES: Array<{ dimA: string; fieldA: keyof SaleRecord; dimB: string; fieldB: keyof SaleRecord }> = [
+      { dimA: 'vendedor', fieldA: 'vendedor', dimB: 'departamento', fieldB: 'departamento' },
+      { dimA: 'vendedor', fieldA: 'vendedor', dimB: 'cliente',      fieldB: 'cliente' },
+    ]
+
+    let _Z133_emitidos = 0
+    let _Z133_descartadosMaterialidad = 0
+    const _Z133_muestras: Array<Record<string, unknown>> = []
+
+    for (const par of _Z133_PARES) {
+      const _curAgg  = new Map<string, number>()
+      const _prevAgg = new Map<string, number>()
+      for (const r of currentSales) {
+        const a = (r as unknown as Record<string, string | undefined>)[par.fieldA as string]
+        const b = (r as unknown as Record<string, string | undefined>)[par.fieldB as string]
+        if (!a || !b) continue
+        const key = a + '||' + b
+        _curAgg.set(key, (_curAgg.get(key) ?? 0) + _Z133_valueOf(r))
+      }
+      for (const r of prevSales) {
+        const a = (r as unknown as Record<string, string | undefined>)[par.fieldA as string]
+        const b = (r as unknown as Record<string, string | undefined>)[par.fieldB as string]
+        if (!a || !b) continue
+        const key = a + '||' + b
+        _prevAgg.set(key, (_prevAgg.get(key) ?? 0) + _Z133_valueOf(r))
+      }
+
+      const _allKeys = new Set<string>([..._curAgg.keys(), ..._prevAgg.keys()])
+      for (const key of _allKeys) {
+        const cur    = _curAgg.get(key)  ?? 0
+        const prev   = _prevAgg.get(key) ?? 0
+        const delta  = cur - prev
+        const absDelta = Math.abs(delta)
+        if (absDelta <= 0) continue
+        if (cur + prev <= 0) continue
+
+        const [entA, entB] = key.split('||')
+        const esParetoA = _Z133_paretoSet.has(entA)
+        const esParetoB = _Z133_paretoSet.has(entB)
+        const ambosPareto = esParetoA && esParetoB
+
+        // Gate materialidad bi-nivel consistente con Z.12.
+        const pasaMaterialidad =
+          absDelta >= _Z133_floorAlto ||
+          (absDelta >= _Z133_floorBajo && ambosPareto)
+
+        if (!pasaMaterialidad) {
+          _Z133_descartadosMaterialidad++
+          continue
+        }
+
+        const direction = delta >= 0 ? 'up' : 'down'
+        const arrow     = direction === 'up' ? '↑' : '↓'
+        const pctChange = prev > 0 ? delta / prev : (cur > 0 ? 1 : 0)
+        const pctSobreNegocio = absDelta / _Z133_ventaTotalSafe
+
+        const score = Math.min(pctSobreNegocio * 10, 1)
+
+        let severity: 'CRITICA' | 'ALTA' | 'MEDIA' | 'BAJA' = 'BAJA'
+        if      (absDelta >= _Z133_floorAlto * 2) severity = 'CRITICA'
+        else if (absDelta >= _Z133_floorAlto)     severity = 'ALTA'
+        else if (absDelta >= _Z133_floorBajo)     severity = 'MEDIA'
+
+        const _fmt = (n: number) => Math.round(n).toLocaleString('en-US')
+        const title =
+          `${arrow} ${entA} ${direction === 'up' ? 'creció' : 'cayó'} $${_fmt(absDelta)} en ${entB}`
+        const description =
+          `${entA} en ${entB}: $${_fmt(prev)} → $${_fmt(cur)} ` +
+          `(${direction === 'up' ? '+' : ''}${Math.round(pctChange * 1000) / 10}%). ` +
+          `Representa ${Math.round(pctSobreNegocio * 10000) / 100}% del negocio del período.`
+
+        const candidate: InsightCandidate = {
+          metricId:      'venta',
+          dimensionId:   par.dimA,
+          insightTypeId: 'cross_delta',
+          member:        entA,
+          score,
+          severity,
+          title,
+          description,
+          detail: {
+            member:          entA,
+            member2:         entB,
+            dimension2:      par.dimB,
+            memberValue:     cur,
+            memberPrevValue: prev,
+            memberChange:    delta,
+            pctChange,
+            pctSobreNegocio,
+            esParetoA,
+            esParetoB,
+            cross_context: {
+              [par.dimB]: entB,
+            },
+          },
+          conclusion: title,
+          // accion se deja undefined: la puerta relajada Z.12.2 tolera si r1+r2+r3 pasan.
+          impacto_usd_normalizado: absDelta,
+          impacto_usd_source:      'cross_delta_yoy',
+          direction,
+        }
+        // Campos aditivos dim×dim: no están en InsightCandidate; se adjuntan vía cast.
+        ;(candidate as unknown as { dimensionId2?: string; member2?: string }).dimensionId2 = par.dimB
+        ;(candidate as unknown as { dimensionId2?: string; member2?: string }).member2      = entB
+
+        allCandidates.push(candidate)
+        _Z133_emitidos++
+
+        if (_Z133_muestras.length < 6) {
+          _Z133_muestras.push({
+            par:         par.dimA + '×' + par.dimB,
+            entA,
+            entB,
+            delta:       Math.round(delta),
+            pct_negocio: Math.round(pctSobreNegocio * 10000) / 100,
+            ambosPareto,
+            severity,
+          })
+        }
+      }
+    }
+
+    if (import.meta.env.DEV) {
+      console.debug('[Z.13.3] cross_delta_detector', {
+        ventaTotalNegocio:         Math.round(_Z133_ventaTotalSafe),
+        floorAlto:                 Math.round(_Z133_floorAlto),
+        floorBajo:                 Math.round(_Z133_floorBajo),
+        pareto_set_size:           _Z133_paretoSet.size,
+        pares_evaluados:           _Z133_PARES.map(p => p.dimA + '×' + p.dimB),
+        emitidos:                  _Z133_emitidos,
+        descartados_materialidad:  _Z133_descartadosMaterialidad,
+        muestra_top:               _Z133_muestras,
+      })
+    }
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn('[Z.13.3] cross_delta_detector fallback (degradación silenciosa):', e)
   }
 
   // 4. Deduplicate
@@ -5488,9 +6219,17 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
     }
     let bestIdx = 0
     let bestEff = -Infinity
+    // [Z.13.1] Ranker monetario-consciente.
+    // usdWeight ∈ [1, 1+K] según el impacto USD relativo a ventaTotalNegocio.
+    // K=8 calibrado para que un 5% de impacto suba eff ×1.4 aproximadamente.
+    // Mantiene c.score como base: la relevancia estadística sigue importando.
+    const Z13_K = 8
     for (let i = 0; i < _regularPool.length; i++) {
       const c = _regularPool[i]
-      let eff = c.score
+      const _impactoUsd = Math.abs(Number(c.impacto_usd_normalizado ?? 0))
+      const _usdShare = _Z13_ventaTotalNegocio > 0 ? _impactoUsd / _Z13_ventaTotalNegocio : 0
+      const _usdWeight = 1 + Math.min(_usdShare, 1) * Z13_K
+      let eff = (c.score ?? 0) * _usdWeight
       if (c.member && selMembers.has(c.member)) eff *= 0.7
       if ((typeCount.get(c.insightTypeId) ?? 0) >= 2) eff *= 0.6
       if (c.insightTypeId === 'contribution' && (contribMet.get(c.metricId) ?? 0) >= 2) eff *= 0.5
@@ -5498,6 +6237,31 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
     }
     _regularSelected.push(_regularPool[bestIdx])
     _regularPool.splice(bestIdx, 1)
+  }
+
+  // [Z.13.1] Telemetría del ranker monetario-consciente.
+  if (import.meta.env.DEV) {
+    const _z13Ranking = _regularSelected.map((c, idx) => {
+      const _imp = Math.abs(Number(c.impacto_usd_normalizado ?? 0))
+      const _share = _Z13_ventaTotalNegocio > 0 ? _imp / _Z13_ventaTotalNegocio : 0
+      return {
+        pos:           idx + 1,
+        type:          c.insightTypeId,
+        dim:           c.dimensionId,
+        metric:        c.metricId,
+        member:        (c.member || '').slice(0, 30),
+        score:         Math.round((c.score ?? 0) * 1e3) / 1e3,
+        impacto_usd:   Math.round(_imp),
+        usd_share_pct: Math.round(_share * 1e4) / 100,
+      }
+    })
+    console.debug('[Z.13.1] ranker_usd_aware', {
+      ventaTotalNegocio:  Math.round(_Z13_ventaTotalNegocio),
+      K:                  8,
+      regular_selected:   _regularSelected.length,
+      regular_pool_total: _regularCands.length,
+      ranking:            _z13Ranking,
+    })
   }
 
   // [PR-M5a'] Concat: protegidos primero (garantizados), luego seleccionados regulares
@@ -5637,7 +6401,15 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
     try {
       selected[0]._stats = {
         percentiles: calcularPercentiles(selected.map(c => c.score * 100)),
-        paretoList:  calcularPareto(selected.map(c => ({ nombre: c.member, valor: c.score * 100 }))),
+        // [Z.12] Pareto sobre dinero real, no sobre score.
+        paretoList:  calcularPareto(
+          selected
+            .map(c => ({
+              nombre: c.member,
+              valor: Math.abs(Number(c.impacto_usd_normalizado) || 0),
+            }))
+            .filter(e => e.valor > 0),
+        ),
         candidateCount: selected.length,
       }
     } catch { /* no-op: filtrarConEstandar calculará sus propias stats */ }
@@ -5749,6 +6521,247 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   } catch (e) {
     _status.detectors.z9_hydration = { result: 'failed', candidatesEmitted: 0, error: String(e) }
     if (import.meta.env.DEV) console.warn('[Z.9.2] hydration failed (degradación silenciosa):', e)
+  }
+
+  // [Z.10.5a.2] Normalización de impacto económico a USD (observabilidad).
+  // Corre DESPUÉS de hydratarCandidatoZ9 (L.5901) para que impacto_gap_meta e
+  // impacto_recuperable ya estén poblados. Itera `selected` (objetos mutados
+  // in-place que regresan al consumidor). No afecta orden aún.
+  // Simetría de signo: gap_meta y recuperable aceptan cualquier finite != 0
+  // (Math.abs), alineado con cross_varAbs/detail_*.
+  for (const c of selected) {
+    let usd: number | null = null
+    let src: InsightCandidate['impacto_usd_source']
+
+    const det = c.detail as Record<string, unknown> | undefined
+    const cc  = det?.cross_context as Record<string, unknown> | undefined
+
+    if (typeof c.impacto_gap_meta === 'number' && Number.isFinite(c.impacto_gap_meta) && c.impacto_gap_meta !== 0) {
+      // gap_meta es USD puro por construcción, incluso si metricId es no-monetario.
+      usd = Math.abs(c.impacto_gap_meta)
+      src = 'gap_meta'
+    } else if (cc && typeof cc.varAbs === 'number' && Number.isFinite(cc.varAbs as number) && (cc.varAbs as number) !== 0) {
+      // [Z.10.5a.3] cross_varAbs sube antes de recuperable — USD puro dimensional.
+      usd = Math.abs(cc.varAbs as number)
+      src = 'cross_varAbs'
+    } else if (
+      typeof c.impacto_recuperable === 'number' &&
+      Number.isFinite(c.impacto_recuperable) &&
+      c.impacto_recuperable !== 0 &&
+      !NON_MONETARY_METRIC_IDS.has(c.metricId)
+    ) {
+      // [Z.10.5a.3] recuperable sólo es USD puro si metricId es monetario;
+      // en ratios (frecuencia_compra, ticket_promedio, etc.) contiene el ratio, no USD.
+      usd = Math.abs(c.impacto_recuperable)
+      src = 'recuperable'
+    } else if (det && typeof det.monto === 'number' && Number.isFinite(det.monto as number)) {
+      usd = Math.abs(det.monto as number)
+      src = 'detail_monto'
+    } else if (det && typeof det.magnitud === 'number' && Number.isFinite(det.magnitud as number)) {
+      usd = Math.abs(det.magnitud as number)
+      src = 'detail_magnitud'
+    } else if (det && typeof det.totalCaida === 'number' && Number.isFinite(det.totalCaida as number)) {
+      usd = Math.abs(det.totalCaida as number)
+      src = 'detail_totalCaida'
+    } else if (NON_MONETARY_METRIC_IDS.has(c.metricId)) {
+      src = 'non_monetary'
+    } else {
+      src = 'unavailable'
+    }
+
+    c.impacto_usd_normalizado = usd
+    c.impacto_usd_source = src
+
+    // [Z.10.5b] Composición del render_priority_score por impacto económico.
+    const _baseRps = typeof c.render_priority_score === 'number' && Number.isFinite(c.render_priority_score)
+      ? c.render_priority_score
+      : 0
+    const _usdBoost = (typeof usd === 'number' && usd > 0)
+      ? IMPACTO_USD_WEIGHT * Math.log1p(usd / IMPACTO_USD_REFERENCIA)
+      : 0
+    const _impactoFactor = 1 + _usdBoost
+    c.render_priority_score_base            = _baseRps
+    c.render_priority_score_impacto_factor  = _impactoFactor
+    c.render_priority_score                 = _baseRps * _impactoFactor
+  }
+
+  if (import.meta.env.DEV) {
+    const _sourceDist: Record<string, number> = {}
+    const _shifts: Array<{
+      tipo: string; member: string; usd: number;
+      factor: number; rps_antes: number; rps_despues: number;
+    }> = []
+    for (const c of selected) {
+      const s = c.impacto_usd_source ?? 'undefined'
+      _sourceDist[s] = (_sourceDist[s] ?? 0) + 1
+      const factor = c.render_priority_score_impacto_factor ?? 1
+      if (factor > 1.05) {
+        _shifts.push({
+          tipo:        c.insightTypeId,
+          member:      c.member,
+          usd:         Math.round(c.impacto_usd_normalizado ?? 0),
+          factor:      Math.round(factor * 1000) / 1000,
+          rps_antes:   Math.round((c.render_priority_score_base ?? 0) * 100) / 100,
+          rps_despues: Math.round((c.render_priority_score   ?? 0) * 100) / 100,
+        })
+      }
+    }
+    console.debug('[Z.10.5b] impacto_ranking:', {
+      source_dist:      _sourceDist,
+      weight:           IMPACTO_USD_WEIGHT,
+      referencia:       IMPACTO_USD_REFERENCIA,
+      shifts_notables:  _shifts.sort((a, b) => b.factor - a.factor).slice(0, 5),
+    })
+  }
+
+  // [Z.10.5b-fix] Re-ordenar `selected` por render_priority_score post-boost,
+  // preservando invariante protected-first. Mutación in-place para no romper
+  // referencias externas al array.
+  {
+    const _protectedSet = new Set(ALWAYS_PROTECTED_CAPS.keys())
+    const _protectedBucket: InsightCandidate[] = []
+    const _regularBucket: InsightCandidate[] = []
+    for (const c of selected) {
+      if (_protectedSet.has(c.insightTypeId)) _protectedBucket.push(c)
+      else _regularBucket.push(c)
+    }
+    // [Z.10.5b-fix2] sub-orden del bucket P por (hasUsd desc, rps desc).
+    // Un P con USD demostrado antecede a un P sin USD; rps desempata.
+    // Bucket R conserva comparador rps desc.
+    const _cmpR = (a: InsightCandidate, b: InsightCandidate) =>
+      (b.render_priority_score ?? 0) - (a.render_priority_score ?? 0)
+    const _cmpP = (a: InsightCandidate, b: InsightCandidate) => {
+      const aHas = (a.impacto_usd_normalizado != null) ? 1 : 0
+      const bHas = (b.impacto_usd_normalizado != null) ? 1 : 0
+      if (aHas !== bHas) return bHas - aHas
+      return (b.render_priority_score ?? 0) - (a.render_priority_score ?? 0)
+    }
+    _protectedBucket.sort(_cmpP)
+    _regularBucket.sort(_cmpR)
+    selected.length = 0
+    selected.push(..._protectedBucket, ..._regularBucket)
+  }
+
+  // [Z.11.1] Quality gate ejecutivo: filtrar candidatos de Clase B.
+  // Aplica ENTRE el sort Z.10.5b-fix2 y el grouping Z.10.6a, para que
+  // problems/root_narratives se reconstruyan sobre el array ya filtrado.
+  // Preserva invariante protected-first (el orden previo de selected ya lo
+  // reflejaba; el filtro respeta ese orden).
+  {
+    const _z11Supervivientes: InsightCandidate[] = []
+    const _z11Suprimidos: Array<{ candidate: InsightCandidate; regla: string }> = []
+    for (const c of selected) {
+      const ev = _z11EvaluarSupervivencia(c)
+      if (ev.sobrevive) _z11Supervivientes.push(c)
+      else _z11Suprimidos.push({ candidate: c, regla: ev.regla })
+    }
+    selected.length = 0
+    selected.push(..._z11Supervivientes)
+    ;(_status as unknown as { suppressed: typeof _z11Suprimidos }).suppressed = _z11Suprimidos
+    if (import.meta.env.DEV) {
+      console.debug('[Z.11.1] quality_gate:', {
+        entrada:           _z11Supervivientes.length + _z11Suprimidos.length,
+        sobreviven:        _z11Supervivientes.length,
+        suprimidos:        _z11Suprimidos.length,
+        suprimidosDetalle: _z11Suprimidos.map((s) => ({
+          tid:    s.candidate.insightTypeId,
+          metric: s.candidate.metricId,
+          member: s.candidate.member,
+          regla:  s.regla,
+        })),
+      })
+    }
+  }
+
+  // [Z.10.6a] Grouping determinístico de insights por entidad (dim:member).
+  // Aditivo: expone `problems[]` vía _status para inspección y telemetría.
+  // NO modifica `selected` ni el return; Z.10.6b lo promueve al consumidor.
+  {
+    interface Z10Problem {
+      groupKey:          string
+      dimensionId:       string
+      member:            string
+      members:           InsightCandidate[]
+      insightTypeIds:    string[]
+      impactoUsdTotal:   number
+      impactoUsdSources: string[]
+      topMember:         InsightCandidate | null
+      topRps:            number
+    }
+    const _groupsMap = new Map<string, Z10Problem>()
+    for (const c of selected) {
+      const key = `${c.dimensionId}:${c.member ?? '_group_'}`
+      let g = _groupsMap.get(key)
+      if (!g) {
+        g = {
+          groupKey:          key,
+          dimensionId:       c.dimensionId,
+          member:            c.member ?? '',
+          members:           [],
+          insightTypeIds:    [],
+          impactoUsdTotal:   0,
+          impactoUsdSources: [],
+          topMember:         null,
+          topRps:            -Infinity,
+        }
+        _groupsMap.set(key, g)
+      }
+      g.members.push(c)
+      if (!g.insightTypeIds.includes(c.insightTypeId)) {
+        g.insightTypeIds.push(c.insightTypeId)
+      }
+      if (c.impacto_usd_normalizado != null) {
+        g.impactoUsdTotal += c.impacto_usd_normalizado
+      }
+      if (c.impacto_usd_source && !g.impactoUsdSources.includes(c.impacto_usd_source)) {
+        g.impactoUsdSources.push(c.impacto_usd_source)
+      }
+      const rps = c.render_priority_score ?? 0
+      if (rps > g.topRps) {
+        g.topRps    = rps
+        g.topMember = c
+      }
+    }
+    const _problems = Array.from(_groupsMap.values())
+      .map((g) => ({ ...g, size: g.members.length }))
+      .sort((a, b) => {
+        const d = b.impactoUsdTotal - a.impactoUsdTotal
+        if (d !== 0) return d
+        return b.topRps - a.topRps
+      })
+    ;(_status as unknown as { problems: typeof _problems }).problems = _problems
+    if (import.meta.env.DEV) {
+      console.debug('[Z.10.6a] problems_built:', {
+        totalCandidates: selected.length,
+        totalProblems:   _problems.length,
+        topThree:        _problems.slice(0, 3).map((p) => ({
+          key:   p.groupKey,
+          size:  p.size,
+          types: p.insightTypeIds,
+          usd:   Math.round(p.impactoUsdTotal * 100) / 100,
+        })),
+      })
+    }
+
+    // [Z.10.6c] Narrador raíz determinístico sobre problems.
+    const _rootNarratives = buildRootNarratives(_problems)
+    ;(_status as unknown as { root_narratives: typeof _rootNarratives }).root_narratives = _rootNarratives
+    if (import.meta.env.DEV) {
+      console.debug('[Z.10.6c] root_narratives_built:', {
+        total:    _rootNarratives.length,
+        topThree: _rootNarratives.slice(0, 3).map((n) => ({
+          key:        n.groupKey,
+          confidence: n.confidence,
+          titulo:     n.titulo,
+        })),
+      })
+    }
+
+    // [Z.10.6b] Adjuntar estructuras ejecutivas al array `selected` como
+    // propiedades enumerables. El array sigue siendo iterable/filterable;
+    // consumidores nuevos pueden leer result.problems / result.root_narratives.
+    ;(selected as RunInsightEngineResult).problems        = _problems
+    ;(selected as RunInsightEngineResult).root_narratives = _rootNarratives
   }
 
   // [Z.9.7] Commit status report
