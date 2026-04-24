@@ -614,7 +614,7 @@ export default function VendedorPanel({
 
           {/* ── Clientes dormidos ────────────────────────────────────────────── */}
           {dormidos.length > 0 && (() => {
-            const impactoTotal = dormidos.reduce((a, d) => a + d.valor_historico, 0)
+            const impactoTotal = dormidos.reduce((a, d) => a + d.valor_yoy_usd, 0)
             return (
               <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--sf-border)' }}>
                 <div className="flex items-center justify-between mb-3">
@@ -645,8 +645,8 @@ export default function VendedorPanel({
                         </div>
                         <p className="text-[11px] leading-relaxed" style={{ color: 'var(--sf-t3)' }}>{d.recovery_explicacion}</p>
                         <div className="flex items-center justify-between text-[10px]" style={{ color: 'var(--sf-t5)' }}>
-                          <span>{d.dias_sin_actividad} días sin comprar · {d.compras_historicas} compras</span>
-                          {d.valor_historico > 0 && <span>{d.valor_historico.toLocaleString()} uds hist.</span>}
+                          <span>{d.dias_sin_actividad} días sin comprar · {d.transacciones_yoy} txns YoY</span>
+                          {d.valor_yoy_usd > 0 && <span>{d.valor_yoy_usd.toLocaleString()} YoY</span>}
                         </div>
                         <div style={{ height: 3, background: 'var(--sf-border)', borderRadius: 999, overflow: 'hidden' }}>
                           <div style={{ height: '100%', width: `${d.recovery_score}%`, background: barColor, borderRadius: 999 }} />

@@ -11,6 +11,11 @@ import AnalysisDrawer from '../components/ui/AnalysisDrawer'
 import { SFSelect } from '../components/ui/SFSelect'
 import { SFSearch } from '../components/ui/SFSearch'
 import { callAI } from '../lib/chatService'
+import {
+  getConteosPorEstado,
+  getVentasTotalEquipoYTD,
+  getVentasPorVendedorAgrupado,
+} from '../lib/domain-aggregations'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -56,6 +61,7 @@ export default function VendedoresPage() {
     }
   }, [highlightActive])
 
+  // R103: alerta UI derivada — extrae param ?vendedor= de URL, no es agregación cruda
   const alertVendedor = useMemo(() => new URLSearchParams(locationSearch).get('vendedor'), [locationSearch])
   const [alertFilter, setAlertFilter]   = useState<string | null>(alertVendedor)
 
@@ -90,12 +96,13 @@ export default function VendedoresPage() {
     }
   }, [supervisorAnalysis])
 
+  // R103: lookup UI — lista de canales para filtro de select
   const canales = useMemo(
     () => [...new Set(sales.map(s => s.canal).filter((c): c is string => !!c))].sort(),
     [sales],
   )
 
-  // Filter only — sort applied separately in `sorted`
+  // R103: filtro UI — depende de search, filterEstado, filterCanal (estado local)
   const filtered = useMemo(() => {
     let data = [...vendorAnalysis]
     if (search) {
@@ -112,34 +119,22 @@ export default function VendedoresPage() {
     return data
   }, [vendorAnalysis, sales, search, filterEstado, filterCanal])
 
-  // Header counts — refleja el filtro activo
-  const counts = useMemo(() => ({
-    critico:   filtered.filter(v => v.riesgo === 'critico').length,
-    riesgo:    filtered.filter(v => v.riesgo === 'riesgo').length,
-    ok:        filtered.filter(v => v.riesgo === 'ok').length,
-    superando: filtered.filter(v => v.riesgo === 'superando').length,
-  }), [filtered])
+  // R102/Z.1.b: migrado a domain-aggregations.getConteosPorEstado
+  const counts = useMemo(() => getConteosPorEstado(filtered), [filtered])
 
-  // Team total for PESO % denominator (always unfiltered)
-  const teamTotal = useMemo(() => {
-    const usaDolares = metrica === 'dolares' && dataAvailability.has_venta_neta
-    return vendorAnalysis.reduce((sum, v) =>
-      sum + (usaDolares ? (v.ytd_actual_neto ?? 0) : (v.ytd_actual ?? 0)), 0)
-  }, [vendorAnalysis, metrica, dataAvailability.has_venta_neta])
+  // R102/Z.1.b: migrado a domain-aggregations.getVentasTotalEquipoYTD (siempre sin filtrar — denominador de peso %)
+  const teamTotal = useMemo(
+    () => getVentasTotalEquipoYTD(vendorAnalysis, metrica === 'dolares' && dataAvailability.has_venta_neta),
+    [vendorAnalysis, metrica, dataAvailability.has_venta_neta],
+  )
 
-  // Filtered totals for the totals row
-  const filteredTotals = useMemo(() => {
-    const usaDolares = metrica === 'dolares' && dataAvailability.has_venta_neta
-    const total2026 = filtered.reduce((sum, v) =>
-      sum + (usaDolares ? (v.ytd_actual_neto ?? 0) : (v.ytd_actual ?? 0)), 0)
-    const total2025 = filtered.reduce((sum, v) =>
-      sum + (usaDolares ? (v.ytd_anterior_neto ?? 0) : (v.ytd_anterior ?? 0)), 0)
-    const varAbs = total2026 - total2025
-    const varPct = total2025 > 0 ? ((total2026 - total2025) / total2025) * 100 : null
-    return { total2026, total2025, varAbs, varPct }
-  }, [filtered, metrica, dataAvailability.has_venta_neta])
+  // R102/Z.1.b: migrado a domain-aggregations.getVentasPorVendedorAgrupado
+  const filteredTotals = useMemo(
+    () => getVentasPorVendedorAgrupado(filtered, metrica === 'dolares' && dataAvailability.has_venta_neta),
+    [filtered, metrica, dataAvailability.has_venta_neta],
+  )
 
-  // Sorted list — applies after filtering
+  // R103: orden UI — sort multi-criterio con sortCol/sortDir (estado local de tabla)
   const sorted = useMemo(() => {
     const arr = [...filtered]
     arr.sort((a, b) => {
@@ -148,24 +143,35 @@ export default function VendedoresPage() {
       switch (sortCol) {
         case 'vendedor':
           valA = a.vendedor; valB = b.vendedor; break
-        case 'peso':
-          valA = teamTotal > 0 ? (a.ytd_actual ?? 0) / teamTotal : 0
-          valB = teamTotal > 0 ? (b.ytd_actual ?? 0) / teamTotal : 0
+        case 'peso': {
+          const aTot = metrica === 'dolares' ? (a.ytd_actual_usd ?? 0) : (a.ytd_actual_uds ?? 0)
+          const bTot = metrica === 'dolares' ? (b.ytd_actual_usd ?? 0) : (b.ytd_actual_uds ?? 0)
+          valA = teamTotal > 0 ? aTot / teamTotal : 0
+          valB = teamTotal > 0 ? bTot / teamTotal : 0
           break
+        }
         case 'ytd':
-          valA = metrica === 'dolares' ? (a.ytd_actual_neto ?? 0) : (a.ytd_actual ?? 0)
-          valB = metrica === 'dolares' ? (b.ytd_actual_neto ?? 0) : (b.ytd_actual ?? 0)
+          valA = metrica === 'dolares' ? (a.ytd_actual_usd ?? 0) : (a.ytd_actual_uds ?? 0)
+          valB = metrica === 'dolares' ? (b.ytd_actual_usd ?? 0) : (b.ytd_actual_uds ?? 0)
           break
         case 'ytd_ant':
-          valA = metrica === 'dolares' ? (a.ytd_anterior_neto ?? 0) : (a.ytd_anterior ?? 0)
-          valB = metrica === 'dolares' ? (b.ytd_anterior_neto ?? 0) : (b.ytd_anterior ?? 0)
+          valA = metrica === 'dolares' ? (a.ytd_anterior_usd ?? 0) : (a.ytd_anterior_uds ?? 0)
+          valB = metrica === 'dolares' ? (b.ytd_anterior_usd ?? 0) : (b.ytd_anterior_uds ?? 0)
           break
-        case 'var':
-          valA = (a.ytd_actual ?? 0) - (a.ytd_anterior ?? 0)
-          valB = (b.ytd_actual ?? 0) - (b.ytd_anterior ?? 0)
+        case 'var': {
+          const aAct = metrica === 'dolares' ? (a.ytd_actual_usd ?? 0)   : (a.ytd_actual_uds ?? 0)
+          const aAnt = metrica === 'dolares' ? (a.ytd_anterior_usd ?? 0) : (a.ytd_anterior_uds ?? 0)
+          const bAct = metrica === 'dolares' ? (b.ytd_actual_usd ?? 0)   : (b.ytd_actual_uds ?? 0)
+          const bAnt = metrica === 'dolares' ? (b.ytd_anterior_usd ?? 0) : (b.ytd_anterior_uds ?? 0)
+          valA = aAct - aAnt; valB = bAct - bAnt
           break
-        case 'var_pct':
-          valA = a.variacion_ytd_pct ?? 0; valB = b.variacion_ytd_pct ?? 0; break
+        }
+        case 'var_pct': {
+          const aPct = metrica === 'dolares' ? (a.variacion_ytd_usd_pct ?? a.variacion_ytd_uds_pct ?? 0) : (a.variacion_ytd_uds_pct ?? 0)
+          const bPct = metrica === 'dolares' ? (b.variacion_ytd_usd_pct ?? b.variacion_ytd_uds_pct ?? 0) : (b.variacion_ytd_uds_pct ?? 0)
+          valA = aPct; valB = bPct
+          break
+        }
         case 'meta':
           valA = a.cumplimiento_pct ?? 0; valB = b.cumplimiento_pct ?? 0; break
         case 'alertas':
@@ -197,6 +203,7 @@ export default function VendedoresPage() {
   // Supervisor groups
   const hasSuper = dataAvailability.has_supervisor && supervisorAnalysis.length > 0
 
+  // R103: agrupación UI — cruza supervisorAnalysis con sorted (lista ya filtrada/ordenada por UI)
   const supGroups = useMemo(() => {
     if (!hasSuper) return null
     const filteredNames = new Set(sorted.map(v => v.vendedor))
@@ -223,12 +230,15 @@ export default function VendedoresPage() {
     const userPrompt = [
       `Vendedor: ${v.vendedor}`,
       `Estado: ${v.riesgo.toUpperCase()}`,
-      `Unidades período: ${v.ventas_periodo}`,
+      `Unidades período: ${v.ventas_periodo} uds`,
       v.variacion_pct != null ? `Variación vs anterior: ${v.variacion_pct.toFixed(1)}%` : '',
-      v.ytd_actual != null ? `YTD actual: ${v.ytd_actual.toLocaleString()}` : '',
-      v.ytd_anterior != null ? `YTD anterior: ${v.ytd_anterior.toLocaleString()}` : '',
-      v.variacion_ytd_pct != null ? `Variación YTD: ${v.variacion_ytd_pct.toFixed(1)}%` : '',
-      v.meta != null ? `Meta: ${v.meta} | Cumplimiento: ${v.cumplimiento_pct?.toFixed(1)}%` : '',
+      v.ytd_actual_usd != null ? `YTD actual: ${mon} ${v.ytd_actual_usd.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '',
+      v.ytd_anterior_usd != null ? `YTD anterior: ${mon} ${v.ytd_anterior_usd.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '',
+      v.variacion_ytd_usd_pct != null ? `Variación YTD (${mon}): ${v.variacion_ytd_usd_pct.toFixed(1)}%` : '',
+      v.ytd_actual_uds != null ? `YTD actual: ${v.ytd_actual_uds.toLocaleString()} uds` : '',
+      v.ytd_anterior_uds != null ? `YTD anterior: ${v.ytd_anterior_uds.toLocaleString()} uds` : '',
+      v.variacion_ytd_uds_pct != null ? `Variación YTD (uds): ${v.variacion_ytd_uds_pct.toFixed(1)}%` : '',
+      v.meta != null ? `Meta: ${v.meta} uds | Cumplimiento: ${v.cumplimiento_pct?.toFixed(1)}%` : '',
       `Semanas bajo promedio: ${v.semanas_bajo_promedio}`,
       dormidos.length > 0 ? `Clientes dormidos: ${dormidos.slice(0, 3).map(c => `${c.cliente} (${c.dias_sin_actividad}d)`).join(', ')}` : '',
       vis.length > 0 ? `Alertas activas: ${vis.map(i => i.titulo).join('; ')}` : '',
@@ -253,7 +263,13 @@ Reglas:
 - Si una sección no aplica, omítela
 - NUNCA des instrucciones operativas
 - Moneda: ${mon}
-- Responde en español`
+- Responde en español
+
+CONVENCIÓN DE UNIDADES (R57 — obligatoria):
+- Campos con sufijo "_usd" son dinero en ${mon}. Preséntalos con el prefijo de moneda: "${mon} 11,916".
+- Campos con sufijo "_uds" son unidades vendidas. Preséntalos con el sufijo "uds": "8,976 uds".
+- PROHIBIDO prefijar unidades con "$" o con "${mon}". PROHIBIDO presentar dinero sin el símbolo de moneda.
+- Al hablar de "Variación YTD" cita la variación en dinero (variacion_ytd_usd_pct) si existe; la variación en unidades (variacion_ytd_uds_pct) solo se menciona cuando aporta una señal distinta.`
 
     try {
       const json = await callAI(
@@ -273,8 +289,10 @@ Reglas:
     const fullContext = [
       `Profundizar sobre vendedor: ${v.vendedor}`,
       `Estado: ${v.riesgo.toUpperCase()}`,
-      v.ytd_actual != null ? `YTD actual: ${v.ytd_actual.toLocaleString()}` : '',
-      v.variacion_ytd_pct != null ? `Variación YTD: ${v.variacion_ytd_pct.toFixed(1)}%` : '',
+      v.ytd_actual_usd != null ? `YTD actual: ${configuracion.moneda} ${v.ytd_actual_usd.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '',
+      v.ytd_actual_uds != null ? `YTD actual: ${v.ytd_actual_uds.toLocaleString()} uds` : '',
+      v.variacion_ytd_usd_pct != null ? `Variación YTD (${configuracion.moneda}): ${v.variacion_ytd_usd_pct.toFixed(1)}%` : '',
+      v.variacion_ytd_uds_pct != null ? `Variación YTD (uds): ${v.variacion_ytd_uds_pct.toFixed(1)}%` : '',
       v.meta != null ? `Cumplimiento meta: ${v.cumplimiento_pct?.toFixed(1)}%` : '',
       analysisText ? `\nAnálisis previo:\n${analysisText}` : '',
       ``,
@@ -436,17 +454,20 @@ Reglas:
     const vis         = insights.filter(i => i.vendedor === v.vendedor)
     const hasMeta     = dataAvailability.has_metas && v.cumplimiento_pct !== undefined
     const usaDolares  = metrica === 'dolares' && dataAvailability.has_venta_neta
-    const unitsActual   = v.ytd_actual ?? 0
-    const unitsAnterior = v.ytd_anterior ?? 0
-    // En dólares: usar ytd_*_neto del motor (suma directa de venta_neta); null si no hay datos
+    const unitsActual   = v.ytd_actual_uds ?? 0
+    const unitsAnterior = v.ytd_anterior_uds ?? 0
+    // En dólares: usar ytd_*_usd del motor (suma directa de venta_neta); null si no hay datos
     const ytdActual   = usaDolares
-      ? (v.ytd_actual_neto != null ? v.ytd_actual_neto : (unitsActual > 0 ? null : 0))
+      ? (v.ytd_actual_usd != null ? v.ytd_actual_usd : (unitsActual > 0 ? null : 0))
       : unitsActual
     const ytdAnterior = usaDolares
-      ? (v.ytd_anterior_neto != null ? v.ytd_anterior_neto : (unitsAnterior > 0 ? null : 0))
+      ? (v.ytd_anterior_usd != null ? v.ytd_anterior_usd : (unitsAnterior > 0 ? null : 0))
       : unitsAnterior
     const varAbs      = (ytdActual && ytdAnterior) ? ytdActual - ytdAnterior : null
-    const varPct      = v.variacion_ytd_pct
+    // R56: VAR% debe calcularse sobre la MISMA serie que las columnas $ ant/$ act visibles
+    const varPct      = usaDolares
+      ? (v.variacion_ytd_usd_pct ?? null)
+      : (v.variacion_ytd_uds_pct ?? null)
     const delay       = Math.min(index * 70, 600)
 
     const pesoVal = teamTotal > 0 && (ytdActual ?? 0) > 0
@@ -781,7 +802,9 @@ Reglas:
         const cumplimientos = vendorAnalysis.filter(v => v.cumplimiento_pct != null).map(v => v.cumplimiento_pct!)
         const avgCumplimiento = cumplimientos.length > 0 ? Math.round(cumplimientos.reduce((a, b) => a + b, 0) / cumplimientos.length) : null
         const superandoCount = vendorAnalysis.filter(v => v.riesgo === 'superando').length
-        const ytdVars = vendorAnalysis.filter(v => v.variacion_ytd_pct != null).map(v => v.variacion_ytd_pct!)
+        // R56: si hay dinero, el promedio YTD representa dinero; si no, unidades
+        const pickYtdPct = (v: VendorAnalysis) => v.variacion_ytd_usd_pct ?? v.variacion_ytd_uds_pct ?? null
+        const ytdVars = vendorAnalysis.map(pickYtdPct).filter((x): x is number => x != null)
         const avgYtd = ytdVars.length > 0 ? (ytdVars.reduce((a, b) => a + b, 0) / ytdVars.length) : null
         return (
           <div className="flex flex-wrap gap-2 mb-1">
@@ -803,16 +826,19 @@ Reglas:
 
       {/* ── Mini-dashboard: 3 cards ─────────────────────────────────────────── */}
       {vendorAnalysis.length > 0 && (() => {
+        const pickYtd = (v: VendorAnalysis) => v.variacion_ytd_usd_pct ?? v.variacion_ytd_uds_pct ?? null
         const mejorDelMes = [...vendorAnalysis].sort((a, b) => {
           if (a.riesgo === 'superando' && b.riesgo !== 'superando') return -1
           if (b.riesgo === 'superando' && a.riesgo !== 'superando') return 1
-          return (b.variacion_ytd_pct ?? -Infinity) - (a.variacion_ytd_pct ?? -Infinity)
+          return (pickYtd(b) ?? -Infinity) - (pickYtd(a) ?? -Infinity)
         })[0]
         const necesitaAtencion = [...vendorAnalysis].sort((a, b) => {
           const diff = (RIESGO_ORDER[a.riesgo] ?? 99) - (RIESGO_ORDER[b.riesgo] ?? 99)
           if (diff !== 0) return diff
-          return (a.variacion_ytd_pct ?? 0) - (b.variacion_ytd_pct ?? 0)
+          return (pickYtd(a) ?? 0) - (pickYtd(b) ?? 0)
         })[0]
+        const mejorYtdPct = pickYtd(mejorDelMes)
+        const atencionYtdPct = pickYtd(necesitaAtencion)
         const totalVendedores = vendorAnalysis.length
         const criticos = vendorAnalysis.filter(v => v.riesgo === 'critico').length
         const enRiesgo = vendorAnalysis.filter(v => v.riesgo === 'riesgo').length
@@ -837,9 +863,9 @@ Reglas:
               </div>
               <p className="text-[15px] font-semibold truncate" style={{ color: 'var(--sf-t1)' }}>{mejorDelMes.vendedor}</p>
               <div className="flex items-center gap-2 mt-1">
-                {mejorDelMes.variacion_ytd_pct != null && (
-                  <span className="text-xs font-medium" style={{ color: mejorDelMes.variacion_ytd_pct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
-                    {mejorDelMes.variacion_ytd_pct >= 0 ? '+' : ''}{mejorDelMes.variacion_ytd_pct.toFixed(1)}% YTD
+                {mejorYtdPct != null && (
+                  <span className="text-xs font-medium" style={{ color: mejorYtdPct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
+                    {mejorYtdPct >= 0 ? '+' : ''}{mejorYtdPct.toFixed(1)}% YTD
                   </span>
                 )}
                 {mejorDelMes.cumplimiento_pct != null && (
@@ -864,9 +890,9 @@ Reglas:
               </div>
               <p className="text-[15px] font-semibold truncate" style={{ color: 'var(--sf-t1)' }}>{necesitaAtencion.vendedor}</p>
               <div className="flex items-center gap-2 mt-1">
-                {necesitaAtencion.variacion_ytd_pct != null && (
-                  <span className="text-xs font-medium" style={{ color: necesitaAtencion.variacion_ytd_pct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
-                    {necesitaAtencion.variacion_ytd_pct >= 0 ? '+' : ''}{necesitaAtencion.variacion_ytd_pct.toFixed(1)}% YTD
+                {atencionYtdPct != null && (
+                  <span className="text-xs font-medium" style={{ color: atencionYtdPct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
+                    {atencionYtdPct >= 0 ? '+' : ''}{atencionYtdPct.toFixed(1)}% YTD
                   </span>
                 )}
                 <span className="text-[11px]" style={{ color: 'var(--sf-t4)' }}>
@@ -1035,7 +1061,10 @@ Reglas:
             isOpen={isOpen}
             onClose={() => setExpandedVendedor(null)}
             title={drawerVendedor?.vendedor ?? ''}
-            subtitle={drawerVendedor?.variacion_ytd_pct != null ? `${drawerVendedor.variacion_ytd_pct >= 0 ? '+' : ''}${drawerVendedor.variacion_ytd_pct.toFixed(1)}% YTD` : undefined}
+            subtitle={(() => {
+              const p = drawerVendedor ? (drawerVendedor.variacion_ytd_usd_pct ?? drawerVendedor.variacion_ytd_uds_pct ?? null) : null
+              return p != null ? `${p >= 0 ? '+' : ''}${p.toFixed(1)}% YTD` : undefined
+            })()}
             badges={rc ? [{ label: rc.label, color: rc.badgeColor, bg: rc.badgeBg }] : []}
             analysisText={analysis?.text ?? null}
             onDeepen={drawerVendedor && analysis?.text ? () => handleProfundizarVendedor(drawerVendedor, analysis.text!) : undefined}

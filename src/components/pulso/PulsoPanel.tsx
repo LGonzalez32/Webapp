@@ -272,7 +272,7 @@ function MetaContent({ data }: { data: PulsoPanelData }) {
     if (clientesDormidos.length > 0 && brecha > 0) {
       const dormValMensual = clientesDormidos.reduce((a, d) => {
         const meses = new Set(sales.filter(s => s.cliente === d.cliente).map(s => { const dt = new Date(s.fecha); return `${dt.getFullYear()}-${dt.getMonth()}` })).size
-        return a + (meses > 0 ? Math.round(d.valor_historico / meses) : 0)
+        return a + (meses > 0 ? Math.round(d.valor_yoy_usd / meses) : 0)
       }, 0)
       if (dormValMensual > 0) {
         const pctBrch = Math.min(100, Math.round((dormValMensual / brecha) * 100))

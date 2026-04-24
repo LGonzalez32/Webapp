@@ -4,6 +4,13 @@ import { useDemoPath } from '../lib/useDemoPath'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
 import { salesInPeriod, periodKey } from '../lib/analysis'
+import {
+  getVentasNetaPeriodo,
+  getMatrizHistoricaVendedorMes,
+  getSupervisorMap,
+  getListaSupervisores,
+  type MatrizVendedorMesEntry,
+} from '../lib/domain-aggregations'
 import { Target, TrendingUp, TrendingDown, Upload, PenLine, ChevronDown, Users } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { callAI } from '../lib/chatService'
@@ -48,7 +55,7 @@ export default function MetasPage() {
   const [excelLoading, setExcelLoading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // Vendedores activos derivados de las ventas (para edición manual)
+  // R103: lookup UI — vendedores activos para edición manual de metas (depende de estado de carga)
   const vendedoresActivos = useMemo(() => {
     const s = new Set(sales.map(s => s.vendedor).filter(Boolean))
     return Array.from(s).sort()
@@ -122,7 +129,7 @@ export default function MetasPage() {
     setExcelError(null)
   }, [currentYear, buildDraft])
 
-  // Día máximo con datos en el período actual (para "en curso")
+  // R103: derivación local — día máximo con datos del período activo, usado para UI "en curso" y prompts IA
   const maxDayInPeriod = useMemo(() => {
     const periodSales = sales.filter(s => {
       const d = new Date(s.fecha)
@@ -157,7 +164,8 @@ Reglas: máximo 100 palabras, cada bullet con número concreto, sin instruccione
       `Vendedor: ${vendor}`,
       `Cumplimiento: ${pct != null ? `${pct.toFixed(1)}%` : 'N/A'}`,
       `Real: ${realVal.toLocaleString()} uds | Meta: ${metaVal?.toLocaleString() ?? 'N/A'} uds`,
-      va?.variacion_ytd_pct != null ? `Variación YTD: ${va.variacion_ytd_pct.toFixed(1)}%` : '',
+      va?.variacion_ytd_usd_pct != null ? `Variación YTD (dinero): ${va.variacion_ytd_usd_pct.toFixed(1)}%` : '',
+      va?.variacion_ytd_uds_pct != null ? `Variación YTD (uds): ${va.variacion_ytd_uds_pct.toFixed(1)}%` : '',
       va ? `Estado: ${va.riesgo.toUpperCase()}` : '',
       `Día ${maxDayInPeriod} de ${daysInMonth} del mes`,
     ].filter(Boolean).join('\n')
@@ -173,13 +181,13 @@ Reglas: máximo 100 palabras, cada bullet con número concreto, sin instruccione
     }
   }, [configuracion, vendorAnalysis, moneda, maxDayInPeriod, daysInMonth])
 
-  // All vendors from metas — excluir nombres vacíos/blancos
+  // R103: lookup UI — vendors desde metas (no desde ventas crudas), para renderizar filas de la tabla
   const vendors = useMemo(() => {
     const s = new Set(metas.map((m) => m.vendedor).filter(v => v && v.trim() !== ''))
     return Array.from(s).sort()
   }, [metas])
 
-  // Last 6 months (inclusive of current)
+  // R103: derivación local — últimos 6 meses como labels para encabezados de tabla (UI)
   const histMonths = useMemo(() => {
     const months: { year: number; month: number; label: string }[] = []
     for (let i = 5; i >= 0; i--) {
@@ -191,52 +199,37 @@ Reglas: máximo 100 palabras, cada bullet con número concreto, sin instruccione
     return months
   }, [currentYear, currentMonth])
 
-  // Build data matrix: vendor × month
-  const matrix = useMemo(() => {
-    return vendors.map((vendor) => {
-      const va = vendorAnalysis.find((v) => v.vendedor === vendor)
-      const monthData = histMonths.map(({ year, month }) => {
-        const key = periodKey(year, month)
-        const metaRow = metas.find((m) => m.vendedor === vendor && m.anio === year && m.mes === month + 1)
-        const metaVal = tipoMetaActivo === 'usd' ? (metaRow?.meta_usd ?? null) : (metaRow?.meta_uds ?? metaRow?.meta ?? null)
-        const ventasSales = salesInPeriod(sales, year, month).filter((s) => s.vendedor === vendor)
-        const realVal = ventasSales.reduce((a, s) => a + s.unidades, 0)
-        const realValNeto = ventasSales.reduce((a, s) => a + (s.venta_neta ?? 0), 0)
-        const activeVal = tipoMetaActivo === 'usd' ? realValNeto : realVal
-        const pct = metaVal && metaVal > 0 ? (activeVal / metaVal) * 100 : null
-        const isCurrent = year === currentYear && month === currentMonth
-        return { key, metaVal, realVal, realValNeto, pct, isCurrent }
-      })
-
-      return { vendor, va, monthData }
-    })
-    // Excluir filas donde no hay meta ni ventas reales en ningún período visible
-    .filter(row => row.monthData.some(d => (d.metaVal ?? 0) > 0 || d.realVal > 0))
-  }, [vendors, histMonths, metas, sales, vendorAnalysis, currentYear, currentMonth, tipoMetaActivo])
+  // R102/Z.1.b: migrado a domain-aggregations.getMatrizHistoricaVendedorMes
+  const matrix = useMemo<MatrizVendedorMesEntry[]>(
+    () => getMatrizHistoricaVendedorMes(
+      sales, metas, vendors, histMonths, vendorAnalysis, currentYear, currentMonth, tipoMetaActivo,
+    ),
+    [vendors, histMonths, metas, sales, vendorAnalysis, currentYear, currentMonth, tipoMetaActivo],
+  )
 
   // Team totals for current month
   const teamMeta = metas
     .filter((m) => m.anio === currentYear && m.mes === currentMonth + 1 && m.vendedor)
     .reduce((a, m) => a + (tipoMetaActivo === 'usd' ? (m.meta_usd ?? 0) : (m.meta_uds ?? m.meta ?? 0)), 0)
 
+  // R103: derivación local — periodSales es una slice de ventas para el mes activo; se usa también en teamRealUds
   const periodSales = useMemo(() => salesInPeriod(sales, currentYear, currentMonth), [sales, currentYear, currentMonth])
 
   const teamRealUds = periodSales.reduce((a, s) => a + s.unidades, 0)
-  const teamRealNeto = useMemo(() => periodSales.reduce((a, s) => a + (s.venta_neta ?? 0), 0), [periodSales])
+  // R102/Z.1.b: migrado a domain-aggregations.getVentasNetaPeriodo (R104: teamRealNeto reutilizado por MetasPage y futuras páginas)
+  const teamRealNeto = useMemo(
+    () => getVentasNetaPeriodo(sales, currentYear, currentMonth),
+    [sales, currentYear, currentMonth],
+  )
   const teamReal = tipoMetaActivo === 'usd' ? teamRealNeto : teamRealUds
 
   const teamPct = teamMeta > 0 ? (teamReal / teamMeta) * 100 : null
   const showUSD = tipoMetaActivo === 'usd'
 
-  // Supervisor grouping
-  const supervisorMap = useMemo(() => {
-    const map: Record<string, string> = {}
-    for (const row of sales) {
-      if (row.vendedor && row.supervisor) map[row.vendedor] = row.supervisor
-    }
-    return map
-  }, [sales])
-  const supervisores = useMemo(() => [...new Set(Object.values(supervisorMap))].filter(Boolean).sort(), [supervisorMap])
+  // R102/Z.1.b: migrado a domain-aggregations.getSupervisorMap (R104: reutilizado por MetasPage y VendedoresPage en Z.2)
+  const supervisorMap = useMemo(() => getSupervisorMap(sales), [sales])
+  // R102/Z.1.b: migrado a domain-aggregations.getListaSupervisores (R104: derivación canónica de supervisorMap)
+  const supervisores = useMemo(() => getListaSupervisores(supervisorMap), [supervisorMap])
   const hasSupervisores = supervisores.length > 0
 
   // Projection helpers

@@ -149,10 +149,13 @@ export default function DepartamentosPage() {
     if (noFilters) {
       if (!departamentoSummaries.length) return {}
       const res: Record<string, DeptData> = {}
+      const useUSDmetric = metricaDept === 'usd'
       for (const s of departamentoSummaries) {
         const dept = matchDept(s.nombre)
         if (!dept) continue
-        const a = s.udsCur, b = s.udsPrev
+        // R56: ytdActual/ytdAnterior representan la métrica activa (USD o UDS)
+        const a = useUSDmetric ? s.ventaCur : s.udsCur
+        const b = useUSDmetric ? s.ventaPrev : s.udsPrev
         const v = b > 0 ? Math.round(((a - b) / b) * 100) : null
         // Si dept ya existe (varios nombres mapean al mismo), agregar
         if (res[dept]) {
@@ -226,12 +229,17 @@ export default function DepartamentosPage() {
 
     const res: Record<string, DeptData> = {}
     const all = new Set([...Object.keys(ytdActual), ...Object.keys(ytdAnterior)])
+    const useUSDmetric = metricaDept === 'usd'
     all.forEach(dept => {
-      const a = ytdActual[dept] ?? 0, b = ytdAnterior[dept] ?? 0
+      const a_uds = ytdActual[dept] ?? 0, b_uds = ytdAnterior[dept] ?? 0
+      const a_usd = ytdActualNeto[dept] ?? 0, b_usd = ytdAnteriorNeto[dept] ?? 0
+      // R56: seleccionar métrica activa para variacion y orden
+      const a = useUSDmetric ? a_usd : a_uds
+      const b = useUSDmetric ? b_usd : b_uds
       const v = b > 0 ? Math.round(((a - b) / b) * 100) : null
       res[dept] = {
         ytdActual: a, ytdAnterior: b,
-        ytdActualNeto: ytdActualNeto[dept] ?? 0, ytdAnteriorNeto: ytdAnteriorNeto[dept] ?? 0,
+        ytdActualNeto: a_usd, ytdAnteriorNeto: b_usd,
         variacion_pct: v,
         status: a === 0 ? 'sin_datos' : v === null ? 'sin_base' : v >= 0 ? 'arriba' : 'abajo',
       }
@@ -274,7 +282,7 @@ export default function DepartamentosPage() {
     setInsightLoading(false)
 
     const variacionStr = data.variacion_pct !== null ? `${data.variacion_pct > 0 ? '+' : ''}${data.variacion_pct.toFixed(1)}%` : 'sin referencia'
-    const lines: string[] = [`📊 RESUMEN: ${dept} ${data.variacion_pct != null && data.variacion_pct >= 0 ? 'creció' : 'cayó'} ${variacionStr} YoY (${data.ytdActual.toLocaleString()} vs ${data.ytdAnterior.toLocaleString()} uds)`]
+    const lines: string[] = [`📊 RESUMEN: ${dept} ${data.variacion_pct != null && data.variacion_pct >= 0 ? 'creció' : 'cayó'} ${variacionStr} YoY (${fmtVal(data.ytdActual, data.ytdActualNeto)} vs ${fmtVal(data.ytdAnterior, data.ytdAnteriorNeto)})`]
 
     // Top vendor insight (same-day-range para comparación justa)
     const maxSD = sales.reduce((max, s) => { const dd = new Date(s.fecha); return dd > max ? dd : max }, new Date(0))
@@ -307,7 +315,7 @@ export default function DepartamentosPage() {
     const dormidosEnDepto = clientesDormidos.filter(d => sales.some(s => s.cliente === d.cliente && s.departamento && matchDept(s.departamento) === dept))
     if (dormidosEnDepto.length > 0) lines.push(`💡 HALLAZGO: ${dormidosEnDepto.length} cliente${dormidosEnDepto.length > 1 ? 's' : ''} dormido${dormidosEnDepto.length > 1 ? 's' : ''} operaban en ${dept}: ${dormidosEnDepto.slice(0, 2).map(d => d.cliente).join(', ')}`)
     setInsightText(lines.join('\n\n'))
-  }, [deptData, sales, year, month, clientesDormidos])
+  }, [deptData, sales, year, month, clientesDormidos, useUSD, configuracion])
 
   // ── Click en mapa — solo selecciona departamento (sin IA) ────────────────
   const handleDeptoClick = useCallback((deptKey: string, data: DeptData) => {
@@ -321,25 +329,50 @@ export default function DepartamentosPage() {
     setTimeout(() => aiPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50)
 
     const ventasDepto = sales.filter(v => v.departamento && matchDept(v.departamento) === deptKey)
-    const vendorMap: Record<string, { curr: number; prev: number }> = {}
-    const canalMap: Record<string, { curr: number; prev: number }> = {}
+
+    // Same-day-range cap (R56): mismo criterio que la tabla principal
+    const maxSD = sales.reduce((max, s) => { const dd = new Date(s.fecha); return dd > max ? dd : max }, new Date(0))
+    const isCurrMo = year === maxSD.getFullYear() && month === maxSD.getMonth()
+    const mxDay = maxSD.getDate()
+
+    // R61: acumular USD y UDS por separado para cada vendedor/canal
+    type VMap = { curr_uds: number; curr_usd: number; prev_uds: number; prev_usd: number }
+    const vendorMap: Record<string, VMap> = {}
+    const canalMap: Record<string, VMap> = {}
     ventasDepto.forEach(v => {
-      const vy = new Date(v.fecha).getFullYear(), vm = new Date(v.fecha).getMonth()
+      const vd = new Date(v.fecha)
+      const vy = vd.getFullYear(), vm = vd.getMonth(), vday = vd.getDate()
       if (vm > month) return
       const isCurr = vy === year, isPrev = vy === year - 1
       if (!isCurr && !isPrev) return
-      if (!vendorMap[v.vendedor]) vendorMap[v.vendedor] = { curr: 0, prev: 0 }
-      if (isCurr) vendorMap[v.vendedor].curr += v.unidades
-      if (isPrev) vendorMap[v.vendedor].prev += v.unidades
+      // Cap mismo día para prev en mes parcial (R56)
+      if (isPrev && isCurrMo && vm === month && vday > mxDay) return
+      const uds = v.unidades || 0
+      const usd = v.venta_neta || 0
+      if (v.vendedor) {
+        if (!vendorMap[v.vendedor]) vendorMap[v.vendedor] = { curr_uds: 0, curr_usd: 0, prev_uds: 0, prev_usd: 0 }
+        if (isCurr) { vendorMap[v.vendedor].curr_uds += uds; vendorMap[v.vendedor].curr_usd += usd }
+        if (isPrev) { vendorMap[v.vendedor].prev_uds += uds; vendorMap[v.vendedor].prev_usd += usd }
+      }
       if (v.canal) {
-        if (!canalMap[v.canal]) canalMap[v.canal] = { curr: 0, prev: 0 }
-        if (isCurr) canalMap[v.canal].curr += v.unidades
-        if (isPrev) canalMap[v.canal].prev += v.unidades
+        if (!canalMap[v.canal]) canalMap[v.canal] = { curr_uds: 0, curr_usd: 0, prev_uds: 0, prev_usd: 0 }
+        if (isCurr) { canalMap[v.canal].curr_uds += uds; canalMap[v.canal].curr_usd += usd }
+        if (isPrev) { canalMap[v.canal].prev_uds += uds; canalMap[v.canal].prev_usd += usd }
       }
     })
-    const topVend = Object.entries(vendorMap).sort((a, b) => b[1].curr - a[1].curr).slice(0, 5)
-      .map(([n, v]) => ({ nombre: n, curr: v.curr, prev: v.prev, varPct: v.prev > 0 ? Math.round(((v.curr - v.prev) / v.prev) * 100) : null, riesgo: vendorAnalysis.find(va => va.vendedor === n)?.riesgo ?? 'ok' }))
-    const canales = Object.entries(canalMap).map(([c, v]) => ({ canal: c, curr: v.curr, prev: v.prev, varPct: v.prev > 0 ? Math.round(((v.curr - v.prev) / v.prev) * 100) : null })).sort((a, b) => b.curr - a.curr)
+
+    // Selectors: R61 — subtabla lee la métrica activa de la vista padre
+    const getCurr = (m: VMap) => useUSD ? m.curr_usd : m.curr_uds
+    const getPrev = (m: VMap) => useUSD ? m.prev_usd : m.prev_uds
+    const getVar  = (m: VMap) => { const c = getCurr(m), p = getPrev(m); return p > 0 ? Math.round(((c - p) / p) * 100) : null }
+    const fmtM    = (val: number) => useUSD ? `${configuracion.moneda}${Math.round(val).toLocaleString()}` : val.toLocaleString()
+
+    const topVend = Object.entries(vendorMap)
+      .sort((a, b) => getCurr(b[1]) - getCurr(a[1])).slice(0, 5)
+      .map(([n, v]) => ({ nombre: n, curr: getCurr(v), varPct: getVar(v), riesgo: vendorAnalysis.find(va => va.vendedor === n)?.riesgo ?? 'ok' }))
+    const canales = Object.entries(canalMap)
+      .map(([c, v]) => ({ canal: c, curr: getCurr(v), varPct: getVar(v) }))
+      .sort((a, b) => b.curr - a.curr)
 
     // Dormant clients in this dept
     const clientesDepto = [...new Set(ventasDepto.map(s => s.cliente).filter(Boolean))]
@@ -349,18 +382,26 @@ export default function DepartamentosPage() {
     const vendCriticos = topVend.filter(v => v.riesgo === 'critico' || v.riesgo === 'riesgo')
     if (vendCriticos.length > 0) señales.push(`${vendCriticos.map(v => v.nombre).join(', ')} en estado ${vendCriticos[0].riesgo}`)
     if (dormidosEnDepto.length > 0) señales.push(`${dormidosEnDepto.length} cliente${dormidosEnDepto.length > 1 ? 's' : ''} dormido${dormidosEnDepto.length > 1 ? 's' : ''} en este depto: ${dormidosEnDepto.map(d => d.cliente).join(', ')}`)
-    // Top client concentration
-    const cliDepto: Record<string, number> = {}
-    ventasDepto.filter(s => new Date(s.fecha).getFullYear() === year && s.cliente).forEach(s => { cliDepto[s.cliente!] = (cliDepto[s.cliente!] ?? 0) + s.unidades })
-    const totalDepto = Object.values(cliDepto).reduce((a, b) => a + b, 0)
-    const topCli = Object.entries(cliDepto).sort((a, b) => b[1] - a[1])[0]
-    if (topCli && totalDepto > 0 && (topCli[1] / totalDepto) > 0.25) señales.push(`${topCli[0]} concentra ${Math.round((topCli[1] / totalDepto) * 100)}% de las ventas del depto`)
+
+    // Top client concentration — R61: respeta métrica activa
+    const cliDepto: Record<string, { uds: number; usd: number }> = {}
+    ventasDepto.filter(s => new Date(s.fecha).getFullYear() === year && s.cliente).forEach(s => {
+      if (!cliDepto[s.cliente!]) cliDepto[s.cliente!] = { uds: 0, usd: 0 }
+      cliDepto[s.cliente!].uds += s.unidades || 0
+      cliDepto[s.cliente!].usd += s.venta_neta || 0
+    })
+    const getCliM = (m: { uds: number; usd: number }) => useUSD ? m.usd : m.uds
+    const totalDepto = Object.values(cliDepto).reduce((a, b) => a + getCliM(b), 0)
+    const topCli = Object.entries(cliDepto).sort((a, b) => getCliM(b[1]) - getCliM(a[1]))[0]
+    if (topCli && totalDepto > 0 && (getCliM(topCli[1]) / totalDepto) > 0.25) {
+      señales.push(`${topCli[0]} concentra ${Math.round((getCliM(topCli[1]) / totalDepto) * 100)}% de las ventas del depto`)
+    }
 
     const borderColor = data.variacion_pct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)'
     const content = (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ padding: '10px 14px', borderLeft: `3px solid ${borderColor}`, background: data.variacion_pct >= 0 ? 'rgba(16,185,129,0.06)' : 'rgba(239,68,68,0.06)', borderRadius: '0 8px 8px 0', fontSize: 13, lineHeight: 1.6, color: 'var(--sf-t2)' }}>
-          <strong>{deptKey}</strong> {data.variacion_pct >= 0 ? 'creció' : 'cayó'} {Math.abs(data.variacion_pct).toFixed(1)}% YoY ({data.ytdActual.toLocaleString()} vs {data.ytdAnterior.toLocaleString()} uds).
+          <strong>{deptKey}</strong> {data.variacion_pct >= 0 ? 'creció' : 'cayó'} {Math.abs(data.variacion_pct).toFixed(1)}% YoY ({fmtVal(data.ytdActual, data.ytdActualNeto)} vs {fmtVal(data.ytdAnterior, data.ytdAnteriorNeto)}).
         </div>
         {topVend.length > 0 && (
           <div style={{ borderRadius: 8, border: '1px solid var(--sf-border)', overflow: 'hidden' }}>
@@ -370,7 +411,7 @@ export default function DepartamentosPage() {
             {topVend.map((v, i) => (
               <div key={v.nombre} style={{ display: 'grid', gridTemplateColumns: '1fr 70px 70px', padding: '6px 12px', fontSize: 12, borderTop: i ? '1px solid var(--sf-border)' : undefined }}>
                 <span style={{ color: 'var(--sf-t1)' }}>{v.nombre}</span>
-                <span style={{ textAlign: 'right', color: 'var(--sf-t3)', fontFamily: "'DM Mono', monospace" }}>{v.curr.toLocaleString()}</span>
+                <span style={{ textAlign: 'right', color: 'var(--sf-t3)', fontFamily: "'DM Mono', monospace" }}>{fmtM(v.curr)}</span>
                 <span style={{ textAlign: 'right', fontWeight: 500, color: v.varPct != null ? (v.varPct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)') : 'var(--sf-t4)', fontFamily: "'DM Mono', monospace" }}>{v.varPct != null ? `${v.varPct > 0 ? '+' : ''}${v.varPct}%` : '—'}</span>
               </div>
             ))}
@@ -384,7 +425,7 @@ export default function DepartamentosPage() {
             {canales.map((c, i) => (
               <div key={c.canal} style={{ display: 'grid', gridTemplateColumns: '1fr 70px 70px', padding: '6px 12px', fontSize: 12, borderTop: i ? '1px solid var(--sf-border)' : undefined }}>
                 <span style={{ color: 'var(--sf-t1)' }}>{c.canal}</span>
-                <span style={{ textAlign: 'right', color: 'var(--sf-t3)', fontFamily: "'DM Mono', monospace" }}>{c.curr.toLocaleString()}</span>
+                <span style={{ textAlign: 'right', color: 'var(--sf-t3)', fontFamily: "'DM Mono', monospace" }}>{fmtM(c.curr)}</span>
                 <span style={{ textAlign: 'right', fontWeight: 500, color: c.varPct != null ? (c.varPct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)') : 'var(--sf-t4)', fontFamily: "'DM Mono', monospace" }}>{c.varPct != null ? `${c.varPct > 0 ? '+' : ''}${c.varPct}%` : '—'}</span>
               </div>
             ))}
@@ -396,7 +437,7 @@ export default function DepartamentosPage() {
       </div>
     )
     setAiExplanation({ depto: deptKey, varPct: data.variacion_pct, loading: false, text: 'computed', content })
-  }, [sales, year, month, vendorAnalysis, clientesDormidos])
+  }, [sales, year, month, vendorAnalysis, clientesDormidos, useUSD, configuracion])
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto">

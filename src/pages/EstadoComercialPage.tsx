@@ -14,7 +14,8 @@ import DiagnosticBlockView from '../components/diagnostic/DiagnosticBlock'
 import EstadoGeneralEmpresa from '../components/estado-general/EstadoGeneralEmpresa'
 import { enrichDiagnosticBlocks, type EnrichedDiagnosticBlock } from '../lib/diagnostic-actions'
 import { getTopProductosPorClienteAmbosRangos, getAgregadosParaFiltro } from '../lib/domain-aggregations'
-import { buildInsightChains, buildExecutiveProblems, EXECUTIVE_COMPRESSION_ENABLED, type ExecutiveProblem } from '../lib/decision-engine'
+import { buildInsightChains, buildExecutiveProblems, EXECUTIVE_COMPRESSION_ENABLED, type ExecutiveProblem, type MaterialityContext } from '../lib/decision-engine'
+import ExecutiveProblemCard from '../components/insights/ExecutiveProblemCard'
 import { Calendar, CheckCircle, RotateCcw, ChevronDown, Users, Building2, Star, TrendingUp, TrendingDown, Bell } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAlertStatusStore } from '../store/alertStatusStore'
@@ -1462,13 +1463,60 @@ export default function EstadoComercialPage() {
   // [Z.9.5] Causal linking + compresión ejecutiva — gateado por EXECUTIVE_COMPRESSION_ENABLED
   const _insightChains = useMemo(() => {
     if (!EXECUTIVE_COMPRESSION_ENABLED || !_filteredCandidates.length) return []
-    return buildInsightChains(_filteredCandidates)
+    // allowSingletons: true → candidatos sin par (ej: stock_risk) forman cadenas de 1 nodo.
+    // El filtro de materialidad en buildExecutiveProblems descarta los de bajo impacto.
+    return buildInsightChains(_filteredCandidates, { allowSingletons: true })
   }, [_filteredCandidates])
+
+  // [R148] Denominadores de materialidad para el motor ejecutivo
+  const _materialityContext = useMemo((): MaterialityContext => {
+    const isUSD = dataAvailability.has_venta_neta && tipoMetaActivo === 'usd'
+
+    // LY mismo período — USD: suma ytd_anterior_usd; UDS: acumula monthlyTotals same-day
+    const lySamePeriodUSD = dataAvailability.has_venta_neta
+      ? vendorAnalysis.reduce((sum, v) => sum + (v.ytd_anterior_usd ?? 0), 0) : 0
+    const prevYear    = selectedPeriod.year - 1
+    const latestMonth = maxDate.getFullYear() === selectedPeriod.year ? maxDate.getMonth() : selectedPeriod.month
+    let lySamePeriodUds = 0
+    for (let m = 0; m <= selectedPeriod.month; m++) {
+      lySamePeriodUds += m === latestMonth
+        ? (monthlyTotalsSameDay[`${prevYear}-${m}`]?.uds ?? 0)
+        : (monthlyTotals[`${prevYear}-${m}`]?.uds ?? 0)
+    }
+    const salesLYRaw       = isUSD ? lySamePeriodUSD : lySamePeriodUds
+    const salesCurrentRaw  = isUSD ? estadoMes.ingreso_actual : estadoMes.actual
+    const salesYTDCurrentUSD = dataAvailability.has_venta_neta
+      ? vendorAnalysis.reduce((sum, v) => sum + (v.ytd_actual_usd ?? 0), 0) : 0
+
+    const mn = MESES_LARGO[selectedPeriod.month]
+    const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
+    return {
+      salesLYSamePeriod:  salesLYRaw > 0      ? salesLYRaw      : null,
+      salesCurrentPeriod: salesCurrentRaw > 0  ? salesCurrentRaw : null,
+      salesYTDCurrent:    salesYTDCurrentUSD > 0 ? salesYTDCurrentUSD : null,
+      metaPeriodo:        (teamStats?.meta_equipo_total ?? teamStats?.meta_equipo ?? 0) || null,
+      periodLabel:        `${cap(mn)} ${selectedPeriod.year} vs ${mn} ${selectedPeriod.year - 1}`,
+    }
+  }, [dataAvailability.has_venta_neta, tipoMetaActivo, vendorAnalysis, monthlyTotals,
+      monthlyTotalsSameDay, estadoMes, selectedPeriod, maxDate, teamStats])
 
   const _executiveProblems: ExecutiveProblem[] = useMemo(() => {
     if (!EXECUTIVE_COMPRESSION_ENABLED || !_insightChains.length) return []
-    return buildExecutiveProblems(_insightChains)
-  }, [_insightChains])
+    return buildExecutiveProblems(_insightChains, _filteredCandidates, _materialityContext)
+  }, [_insightChains, _filteredCandidates, _materialityContext])
+
+  const _execAttention   = useMemo(() => _executiveProblems.filter(p => p.problemDirection !== 'mejora'), [_executiveProblems])
+  const _execOpportunity = useMemo(() => _executiveProblems.filter(p => p.problemDirection === 'mejora'), [_executiveProblems])
+
+  // Candidatos no cubiertos por ningún ExecutiveProblem → lista residual de diagnóstico
+  const _residualCandidates = useMemo(() => {
+    if (!EXECUTIVE_COMPRESSION_ENABLED || !_executiveProblems.length) return _filteredCandidates
+    const covered = new Set(_executiveProblems.flatMap(p => p.coveredCandidates))
+    return _filteredCandidates.filter(c => {
+      const cid = `${c.insightTypeId}:${c.dimensionId}:${c.member ?? '_global'}`
+      return !covered.has(cid)
+    })
+  }, [_filteredCandidates, _executiveProblems])
 
   // [Z.4 — perf: cuello-3] legacyBlocks solo depende de insights y vendorAnalysis — no del período
   const _legacyBlocks = useMemo(() => {
@@ -1477,13 +1525,14 @@ export default function EstadoComercialPage() {
   }, [insights, vendorAnalysis])
 
   // PASO 3: Conversión a DiagnosticBlock — narrativa rica + fusión legacy (internos)
+  // Usa _residualCandidates para excluir los cubiertos por el Panel Ejecutivo.
   const diagnosticBlocks: DiagnosticBlock[] = useMemo(() => {
     if (!sales?.length || !vendorAnalysis?.length) return []
-    return candidatesToDiagnosticBlocks(_filteredCandidates, {
+    return candidatesToDiagnosticBlocks(_residualCandidates, {
       tipoMetaActivo, sales, inventory: categoriasInventario, metas,
       clientesDormidos, vendorAnalysis, insights: insights ?? [], selectedPeriod,
     }, _legacyBlocks)
-  }, [_filteredCandidates, _legacyBlocks, tipoMetaActivo, sales, categoriasInventario, metas,
+  }, [_residualCandidates, _legacyBlocks, tipoMetaActivo, sales, categoriasInventario, metas,
       clientesDormidos, vendorAnalysis, insights, selectedPeriod])
 
   // R102: migrado a domain-aggregations.getTopProductosPorClienteAmbosRangos
@@ -2334,33 +2383,36 @@ export default function EstadoComercialPage() {
       {/* ── ESTADO GENERAL DE LA EMPRESA (PR-FIX.7 — prosa convergente) ────── */}
       <EstadoGeneralEmpresa />
 
-      {/* ── PANEL EJECUTIVO [Z.9.5] — gateado por EXECUTIVE_COMPRESSION_ENABLED ── */}
-      {EXECUTIVE_COMPRESSION_ENABLED && _executiveProblems.length > 0 && (
+      {/* ── PANEL EJECUTIVO [Z.9.5] — ATENCIÓN ── */}
+      {EXECUTIVE_COMPRESSION_ENABLED && _execAttention.length > 0 && (
         <section className="intel-fade space-y-2" style={{ animationDelay: '50ms' }}>
           <div className="flex items-center gap-3 pb-1">
             <span className="text-[13px] font-semibold uppercase tracking-wider text-[var(--sf-text-muted)]">
-              PROBLEMAS EJECUTIVOS
+              HALLAZGOS EJECUTIVOS — ATENCIÓN
             </span>
             <span className="text-[12px] font-medium px-2 py-0.5 rounded-full bg-[var(--sf-bg)] border border-[var(--sf-border)] text-[var(--sf-text-muted)]">
-              {_executiveProblems.length} problemas
+              {_execAttention.length} {_execAttention.length === 1 ? 'hallazgo' : 'hallazgos'}
             </span>
           </div>
-          {_executiveProblems.map(p => (
-            <div key={p.problemId} className="rounded-xl p-4 border border-[var(--sf-border)] bg-[var(--sf-surface)]">
-              <div className="flex items-center gap-2">
-                <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
-                  p.severity === 'CRITICA' ? 'bg-red-500/15 text-red-400' :
-                  p.severity === 'ALTA'    ? 'bg-amber-500/15 text-amber-400' :
-                  'bg-[var(--sf-bg)] text-[var(--sf-text-muted)]'
-                }`}>{p.severity}</span>
-                <span className="text-[14px] font-semibold text-[var(--sf-text)]">{p.headline}</span>
-              </div>
-              {p.totalImpactUSD != null && (
-                <p className="text-[13px] text-[var(--sf-text-muted)] mt-1">
-                  Impacto acumulado: ${p.totalImpactUSD.toLocaleString('es-MX', { maximumFractionDigits: 0 })}
-                </p>
-              )}
-            </div>
+          {_execAttention.map(p => (
+            <ExecutiveProblemCard key={p.problemId} problem={p} />
+          ))}
+        </section>
+      )}
+
+      {/* ── PANEL EJECUTIVO [Z.9.5] — OPORTUNIDAD ── */}
+      {EXECUTIVE_COMPRESSION_ENABLED && _execOpportunity.length > 0 && (
+        <section className="intel-fade space-y-2" style={{ animationDelay: '75ms' }}>
+          <div className="flex items-center gap-3 pb-1">
+            <span className="text-[13px] font-semibold uppercase tracking-wider text-[var(--sf-text-muted)]">
+              HALLAZGOS EJECUTIVOS — OPORTUNIDAD
+            </span>
+            <span className="text-[12px] font-medium px-2 py-0.5 rounded-full bg-[var(--sf-bg)] border border-[var(--sf-border)] text-[var(--sf-text-muted)]">
+              {_execOpportunity.length} {_execOpportunity.length === 1 ? 'hallazgo' : 'hallazgos'}
+            </span>
+          </div>
+          {_execOpportunity.map(p => (
+            <ExecutiveProblemCard key={p.problemId} problem={p} />
           ))}
         </section>
       )}
@@ -2371,7 +2423,7 @@ export default function EstadoComercialPage() {
           {/* Encabezado */}
           <div className="flex items-center gap-3 pb-1">
             <span className="text-[13px] font-semibold uppercase tracking-wider text-[var(--sf-text-muted)]">
-              DIAGNÓSTICO DEL MES
+              {EXECUTIVE_COMPRESSION_ENABLED && _executiveProblems.length > 0 ? 'DETALLE RESIDUAL' : 'DIAGNÓSTICO DEL MES'}
             </span>
             <span className="text-[12px] font-medium px-2 py-0.5 rounded-full bg-[var(--sf-bg)] border border-[var(--sf-border)] text-[var(--sf-text-muted)]">
               {enrichedBlocks.length} hallazgos

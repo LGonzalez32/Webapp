@@ -1,77 +1,84 @@
-import { useState } from 'react'
+/**
+ * DiagnosticBlock.tsx — v1.9.1
+ * R68: collapsed = arrow · sujeto · delta (absoluto, R75) · chip [ventana · métrica]
+ * R69: expanded = QUÉ PASÓ | POR QUÉ IMPORTA | QUÉ HACER (prose, no bullets)
+ * R70: QUÉ HACER solo aparece si generarAcciones() devuelve ≥1 acción válida
+ * R72+R80: cero lenguaje robótico en el render
+ * R77: chip contraído siempre muestra delta (— si incalculable)
+ * R79: cards sin QUÉ HACER cierran con sinAccionesLabel
+ */
+import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useDemoPath } from '../../lib/useDemoPath'
-import type { DiagnosticBlock as Block, DiagnosticSeverity } from '../../lib/diagnostic-engine'
+import type { EnrichedDiagnosticBlock } from '../../lib/diagnostic-actions'
+import { fmtDeltaDisplay } from '../../lib/diagnostic-actions'
+import type { DiagnosticSeverity } from '../../types/diagnostic-types'
 
-const SEVERITY_BORDER: Record<DiagnosticSeverity, string> = {
+const BORDER_COLOR: Record<DiagnosticSeverity, string> = {
   critical: 'var(--sf-red)',
-  warning: 'var(--sf-amber)',
-  info: 'var(--sf-t3)',
+  warning:  'var(--sf-amber)',
+  info:     'var(--sf-t3)',
   positive: 'var(--sf-green)',
 }
 
-const SEVERITY_DOT: Record<DiagnosticSeverity, string> = {
-  critical: '#ef4444',
-  warning: '#f59e0b',
-  info: '#94a3b8',
-  positive: '#10b981',
-}
-
-const fmtMoney = (n: number): string => {
-  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}k`
-  return `$${Math.round(n).toLocaleString('es')}`
+const SECTION_TITLE_STYLE: React.CSSProperties = {
+  color: 'var(--sf-t4)',
+  fontSize: 10,
+  fontWeight: 600,
+  letterSpacing: '0.1em',
+  textTransform: 'uppercase' as const,
+  margin: '0 0 6px',
 }
 
 export default function DiagnosticBlockView({
   block,
   defaultExpanded = false,
 }: {
-  block: Block
+  block: EnrichedDiagnosticBlock
   defaultExpanded?: boolean
   key?: string | number
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded)
-  const navigate = useNavigate()
-  const dp = useDemoPath()
-  const borderColor = SEVERITY_BORDER[block.severity]
-  const dotColor = SEVERITY_DOT[block.severity]
+  const navigate  = useNavigate()
+  const dp        = useDemoPath()
 
-  const toggleExpand = () => setExpanded(prev => !prev)
+  // Require at least one content section to be expandable
+  const hasContent =
+    block.quePaso?.length > 0 ||
+    block.porQueImporta?.length > 0 ||
+    block.acciones?.length > 0 ||
+    block.sections.some(s => s.items.length > 0)
 
-  const handleLinkClick = (e: any, link: Block['links'][number]) => {
+  if (!block || !hasContent) return null
+
+  const borderColor = BORDER_COLOR[block.severity]
+
+  // R75: use displayDelta.sign for arrow direction; fall back to deltaSigno for legacy
+  const sign = block.displayDelta?.sign ?? block.deltaSigno
+
+  const arrowGlyph = sign === 'positivo' ? '▲' : sign === 'negativo' ? '▼' : '■'
+
+  const arrowColor = sign === 'positivo' ? 'var(--sf-green)'
+    : sign === 'negativo' ? '#ef4444'
+    : 'var(--sf-t4)'
+
+  // R77: always show a delta string (— when genuinely incalculable)
+  const deltaStr = fmtDeltaDisplay(block.displayDelta)
+
+  const handleProfundizar = (e: React.MouseEvent) => {
     e.stopPropagation()
-    if (link.type === 'vendedor') {
-      navigate(dp(`/vendedores?vendedor=${encodeURIComponent(link.target)}`))
-    } else if (link.type === 'cliente') {
-      navigate(dp('/clientes'), { state: { openCliente: link.target, source: 'diagnostic' } })
-    } else if (link.type === 'producto' || link.type === 'categoria') {
-      const q = link.target ? `?categoria=${encodeURIComponent(link.target)}` : ''
-      navigate(dp(`/rotacion${q}`))
-    }
-  }
-
-  const handleProfundizar = (e: any) => {
-    e.stopPropagation()
-    const sectionsText = block.sections
-      .map(s => `${s.label}\n${s.items.map(it => `${s.type === 'action' ? '→' : '-'} ${it}`).join('\n')}`)
-      .join('\n\n')
-    const fullContext = [
-      `Profundizar sobre: ${block.headline}`,
-      ``,
-      `Resumen: ${block.summaryShort}`,
-      block.impactoTotal !== null && block.impactoTotal > 0
-        ? `Impacto: ${fmtMoney(block.impactoTotal)} (${block.impactoLabel ?? ''})`
+    const bodyParts = [
+      block.quePaso,
+      block.porQueImporta,
+      block.acciones.length > 0
+        ? 'Acciones sugeridas:\n' + block.acciones.map((a, i) => `${i + 1}. ${a.texto}`).join('\n')
         : '',
-      ``,
-      sectionsText,
-      ``,
-      `¿Qué patrón de fondo hay detrás? ¿Qué acciones priorizarías esta semana?`,
-    ].filter(Boolean).join('\n')
+    ].filter(Boolean).join('\n\n')
+
     navigate(dp('/chat'), {
       state: {
-        prefill: fullContext,
-        displayPrefill: `Profundizar: ${block.headline}`,
+        prefill: `Profundizar sobre: ${block.headline}\n\n${bodyParts}\n\n¿Qué patrón de fondo hay detrás? ¿Qué acciones priorizarías esta semana?`,
+        displayPrefill: `Profundizar: ${block.sujeto}`,
         source: 'Diagnóstico',
       },
     })
@@ -79,136 +86,144 @@ export default function DiagnosticBlockView({
 
   return (
     <div
-      onClick={toggleExpand}
-      className="rounded-lg p-5 cursor-pointer transition-colors"
+      onClick={() => setExpanded(v => !v)}
+      className="rounded-lg px-4 py-3 cursor-pointer transition-colors"
       style={{
-        background: 'var(--sf-card)',
-        border: '1px solid var(--sf-border)',
-        borderLeft: `4px solid ${borderColor}`,
+        background:  'var(--sf-card)',
+        border:      '1px solid var(--sf-border)',
+        borderLeft:  `4px solid ${borderColor}`,
       }}
     >
-      {/* Headline row */}
-      <div className="flex items-center gap-2">
+      {/* ── R68: Collapsed row ─────────────────────────────────────────── */}
+      <div className="flex items-center gap-2 min-w-0">
+        {/* Direction arrow */}
         <span
+          aria-hidden="true"
           style={{
-            width: 8,
-            height: 8,
-            borderRadius: '50%',
-            background: dotColor,
+            color:      arrowColor,
+            fontFamily: 'ui-monospace, monospace',
+            fontSize:   11,
             flexShrink: 0,
+            lineHeight: 1,
           }}
-        />
-        <h3
-          className="text-base font-semibold uppercase tracking-wide flex-1"
-          style={{ color: 'var(--sf-t1)', margin: 0 }}
         >
-          {block.headline}
-        </h3>
+          {arrowGlyph}
+        </span>
+
+        {/* Entity name (sujeto) */}
         <span
-          className="text-xs"
-          style={{ color: 'var(--sf-t4)', flexShrink: 0, fontFamily: 'ui-monospace, monospace' }}
+          className="text-sm font-semibold flex-1 truncate"
+          style={{ color: 'var(--sf-t1)' }}
+          title={block.sujeto}
+        >
+          {block.sujeto}
+        </span>
+
+        {/* Signed delta */}
+        {deltaStr && (
+          <span
+            className="text-sm font-bold tabular-nums whitespace-nowrap shrink-0 ml-2"
+            style={{
+              color:      arrowColor,
+              fontFamily: "'DM Mono', ui-monospace, monospace",
+            }}
+          >
+            {deltaStr}
+          </span>
+        )}
+
+        {/* Chip: [ventana · métrica] */}
+        {block.chip && (
+          <span
+            className="text-[9px] font-medium px-1.5 py-0.5 rounded whitespace-nowrap shrink-0"
+            style={{
+              background:  'var(--sf-inset)',
+              color:       'var(--sf-t4)',
+              border:      '1px solid var(--sf-border-subtle)',
+              fontFamily:  'ui-monospace, monospace',
+              letterSpacing: '0.03em',
+            }}
+          >
+            {block.chip}
+          </span>
+        )}
+
+        {/* Expand caret */}
+        <span
+          className="text-xs shrink-0"
+          style={{ color: 'var(--sf-t4)', fontFamily: 'ui-monospace, monospace' }}
         >
           {expanded ? '▴' : '▾'}
         </span>
       </div>
 
-      {/* Summary short + impact (always visible) */}
-      <div className="mt-1.5 flex items-start gap-3">
-        <p className="text-sm leading-relaxed flex-1" style={{ color: 'var(--sf-t2)', margin: 0 }}>
-          {block.summaryShort}
-        </p>
-        {block.impactoTotal !== null && block.impactoTotal > 0 && (
-          <span
-            className="text-sm font-bold whitespace-nowrap"
-            style={{
-              color: borderColor,
-              fontFamily: "'DM Mono', monospace",
-              flexShrink: 0,
-            }}
-          >
-            {fmtMoney(block.impactoTotal)} <span className="text-[10px] font-normal" style={{ color: 'var(--sf-t4)' }}>{block.impactoLabel}</span>
-          </span>
-        )}
-      </div>
-
-      {/* Expanded content */}
+      {/* ── R69: Expanded — 3 prose sections ──────────────────────────── */}
       {expanded && (
-        <>
-          {/* Sections */}
-          {block.sections.length > 0 && (
-            <div className="mt-4 pt-3" style={{ borderTop: '1px solid var(--sf-border)' }}>
-              {block.sections.map((section, idx) => {
-                const isAction = section.type === 'action'
-                return (
-                  <div key={idx} className={idx > 0 ? 'mt-4' : ''}>
-                    <p
-                      className="text-xs font-semibold uppercase tracking-wide"
-                      style={{ color: 'var(--sf-t3)', margin: '0 0 6px' }}
-                    >
-                      {section.label}
-                    </p>
-                    <ul className="space-y-1.5" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-                      {section.items.map((item, i) => (
-                        <li
-                          key={i}
-                          className="text-sm leading-relaxed flex gap-2"
-                          style={{ color: 'var(--sf-t2)', paddingLeft: 4 }}
-                        >
-                          <span
-                            style={{
-                              color: isAction ? 'var(--sf-green)' : 'var(--sf-t4)',
-                              flexShrink: 0,
-                              fontWeight: isAction ? 600 : 400,
-                              minWidth: 12,
-                            }}
-                          >
-                            {isAction ? '→' : '·'}
-                          </span>
-                          <span>{item}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )
-              })}
+        <div
+          className="mt-3 pt-3 space-y-4"
+          style={{ borderTop: '1px solid var(--sf-border)' }}
+          onClick={e => e.stopPropagation()}
+        >
+          {/* QUÉ PASÓ */}
+          {block.quePaso && (
+            <div>
+              <p style={SECTION_TITLE_STYLE}>Qué pasó</p>
+              <p className="text-sm leading-relaxed" style={{ color: 'var(--sf-t2)', margin: 0 }}>
+                {block.quePaso}
+              </p>
             </div>
           )}
 
-          {/* Footer: links + profundizar */}
-          {(block.links.length > 0 || true) && (
-            <div
-              className="mt-4 pt-3 flex flex-wrap items-center gap-x-4 gap-y-2"
-              style={{ borderTop: '1px solid var(--sf-border)' }}
-            >
-              {block.links.map((link, i) => (
-                <button
-                  key={i}
-                  onClick={e => handleLinkClick(e, link)}
-                  className="text-sm font-medium cursor-pointer hover:underline"
-                  style={{
-                    color: 'var(--sf-green)',
-                    background: 'none',
-                    border: 'none',
-                    padding: 0,
-                  }}
-                >
-                  {link.label}
-                </button>
-              ))}
-              <button
-                onClick={handleProfundizar}
-                className="ml-auto px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer"
-                style={{
-                  border: '1px solid var(--sf-green-border)',
-                  background: 'var(--sf-green-bg)',
-                  color: 'var(--sf-green)',
-                }}
-              >
-                ✦ Profundizar
-              </button>
+          {/* POR QUÉ IMPORTA */}
+          {block.porQueImporta && (
+            <div>
+              <p style={SECTION_TITLE_STYLE}>Por qué importa</p>
+              <p className="text-sm leading-relaxed" style={{ color: 'var(--sf-t2)', margin: 0 }}>
+                {block.porQueImporta}
+              </p>
             </div>
           )}
-        </>
+
+          {/* QUÉ HACER — R70: solo si hay acciones con fuente válida */}
+          {block.acciones.length > 0 && (
+            <div>
+              <p style={SECTION_TITLE_STYLE}>Qué hacer</p>
+              <ol
+                className="space-y-1.5 text-sm leading-relaxed"
+                style={{ paddingLeft: '1.25rem', margin: 0, color: 'var(--sf-t2)' }}
+              >
+                {block.acciones.map((a, i) => (
+                  <li key={i}>{a.texto}</li>
+                ))}
+              </ol>
+            </div>
+          )}
+
+          {/* R79: cierre estático cuando no hay acciones */}
+          {block.acciones.length === 0 && block.sinAccionesLabel && (
+            <p
+              className="text-xs"
+              style={{ color: 'var(--sf-t4)', margin: 0, fontStyle: 'italic' }}
+            >
+              {block.sinAccionesLabel}
+            </p>
+          )}
+
+          {/* ✦ Profundizar */}
+          <div className="flex justify-end pt-1">
+            <button
+              onClick={handleProfundizar}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer"
+              style={{
+                border:     '1px solid var(--sf-green-border)',
+                background: 'var(--sf-green-bg)',
+                color:      'var(--sf-green)',
+              }}
+            >
+              ✦ Profundizar
+            </button>
+          </div>
+        </div>
       )}
     </div>
   )

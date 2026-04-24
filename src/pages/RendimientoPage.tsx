@@ -1085,12 +1085,18 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
             isOpen={isOpen}
             onClose={() => setExpandedRendVendedor(null)}
             title={expandedRendVendedor ?? ''}
-            subtitle={va?.variacion_ytd_pct != null ? `${va.variacion_ytd_pct >= 0 ? '+' : ''}${va.variacion_ytd_pct.toFixed(1)}% YTD` : undefined}
-            badges={va ? [{
-              label: va.variacion_ytd_pct != null && va.variacion_ytd_pct > 5 ? 'CRECIMIENTO' : va.variacion_ytd_pct != null && va.variacion_ytd_pct < -10 ? 'RIESGO' : 'ESTABLE',
-              color: va.variacion_ytd_pct != null && va.variacion_ytd_pct > 5 ? '#22c55e' : va.variacion_ytd_pct != null && va.variacion_ytd_pct < -10 ? '#ef4444' : '#eab308',
-              bg: va.variacion_ytd_pct != null && va.variacion_ytd_pct > 5 ? 'rgba(34,197,94,0.12)' : va.variacion_ytd_pct != null && va.variacion_ytd_pct < -10 ? 'rgba(239,68,68,0.12)' : 'rgba(234,179,8,0.12)',
-            }] : []}
+            subtitle={(() => {
+              const p = va ? (va.variacion_ytd_usd_pct ?? va.variacion_ytd_uds_pct ?? null) : null
+              return p != null ? `${p >= 0 ? '+' : ''}${p.toFixed(1)}% YTD` : undefined
+            })()}
+            badges={va ? (() => {
+              const p = va.variacion_ytd_usd_pct ?? va.variacion_ytd_uds_pct ?? null
+              return [{
+                label: p != null && p > 5 ? 'CRECIMIENTO' : p != null && p < -10 ? 'RIESGO' : 'ESTABLE',
+                color: p != null && p > 5 ? '#22c55e' : p != null && p < -10 ? '#ef4444' : '#eab308',
+                bg: p != null && p > 5 ? 'rgba(34,197,94,0.12)' : p != null && p < -10 ? 'rgba(239,68,68,0.12)' : 'rgba(234,179,8,0.12)',
+              }]
+            })() : []}
             analysisText={analysis?.text ?? null}
             onDeepen={expandedRendVendedor && analysis?.text ? () => {
               navigate(dp('/chat'), { state: {

@@ -10,19 +10,35 @@ import AnalysisDrawer from '../components/ui/AnalysisDrawer'
 import ClientePanel from '../components/cliente/ClientePanel'
 import { SFSelect } from '../components/ui/SFSelect'
 import { SFSearch } from '../components/ui/SFSearch'
+import {
+  DIAS_DORMIDO_DEFAULT,
+  DIAS_DORMIDO_MIN,
+  DIAS_DORMIDO_MAX,
+  LOCAL_STORAGE_KEY_DIAS_DORMIDO,
+  getDiasDormidoUsuario,
+  // R103: estas son constantes de configuración UI y una utilidad localStorage —
+  // no cálculos derivados de ventas. Importación directa de insightStandard es conforme a R103.
+} from '../lib/insightStandard'
+import {
+  getParetoClientes,
+  getClientesEnRiesgoTemprano,
+  getValorEnRiesgoTotal,
+  type ParetoClienteEntry,
+  type RiesgoTempranoEntry,
+} from '../lib/domain-aggregations'
 
+
+const MESES_CORTOS = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']
 
 function formatDays(d: number): string {
   if (d >= 30) return `${Math.floor(d / 30)}m ${d % 30}d`
   return `${d}d`
 }
 
-type ParetoCliente = {
-  nombre: string; totalUnidades: number; totalVenta: number
-  vendedor: string; varPct: number | null; cumulativePct: number; peso: number
-}
+// R102: alias al tipo canónico de domain-aggregations (Z.1.b)
+type ParetoCliente = ParetoClienteEntry
 
-type SortKey = 'prioridad' | 'dias_sin_actividad' | 'valor_historico' | 'compras_historicas' | 'vendedor' | 'cliente'
+type SortKey = 'prioridad' | 'dias_sin_actividad' | 'valor_yoy_usd' | 'transacciones_yoy' | 'vendedor' | 'cliente'
 type SortDir = 'asc' | 'desc'
 
 const RECOVERY_CONFIG = {
@@ -77,6 +93,44 @@ export default function ClientesPage() {
   const [expandedParetoId, setExpandedParetoId] = useState<string | null>(null)
   const [paretoAnalysisMap, setParetoAnalysisMap] = useState<Record<string, { loading: boolean; text: string | null; content?: React.ReactNode }>>({})
   const [panelCliente, setPanelCliente] = useState<string | null>(null)
+
+  // ── Fase 5B: umbral días-dormido configurable por usuario ─────────────────────
+  const initialDormidoCfg = getDiasDormidoUsuario()
+  const [diasDormidoInput, setDiasDormidoInput] = useState<number>(initialDormidoCfg.valor)
+  const [diasDormidoCustom, setDiasDormidoCustom] = useState<boolean>(!initialDormidoCfg.esDefault)
+
+  const persistDiasDormido = useCallback((valor: number) => {
+    const clamped = Math.max(DIAS_DORMIDO_MIN, Math.min(DIAS_DORMIDO_MAX, Math.round(valor)))
+    if (clamped === DIAS_DORMIDO_DEFAULT) {
+      localStorage.removeItem(LOCAL_STORAGE_KEY_DIAS_DORMIDO)
+      setDiasDormidoCustom(false)
+    } else {
+      localStorage.setItem(LOCAL_STORAGE_KEY_DIAS_DORMIDO, String(clamped))
+      setDiasDormidoCustom(true)
+    }
+    setDiasDormidoInput(clamped)
+  }, [])
+
+  const resetDiasDormido = useCallback(() => {
+    localStorage.removeItem(LOCAL_STORAGE_KEY_DIAS_DORMIDO)
+    setDiasDormidoInput(DIAS_DORMIDO_DEFAULT)
+    setDiasDormidoCustom(false)
+  }, [])
+
+  // Hash-based scroll/focus: navegación desde cintillo de Estado Comercial.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (window.location.hash !== '#dias-dormido-input') return
+    const id = window.setTimeout(() => {
+      const el = document.getElementById('dias-dormido-input') as HTMLInputElement | null
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        el.focus()
+        el.select?.()
+      }
+    }, 300)
+    return () => window.clearTimeout(id)
+  }, [])
 
   const handleAnalyzeTopCliente = useCallback((c: ParetoCliente) => {
     const id = `pareto-${c.nombre}`
@@ -167,7 +221,7 @@ export default function ClientesPage() {
 
     const clienteSales = sales.filter(s => s.cliente === c.cliente)
     const mesesSet = new Set(clienteSales.map(s => `${new Date(s.fecha).getFullYear()}-${new Date(s.fecha).getMonth()}`))
-    const promedioMensual = mesesSet.size > 0 ? Math.round(c.valor_historico / mesesSet.size) : 0
+    const promedioMensual = mesesSet.size > 0 ? Math.round(c.valor_yoy_usd / mesesSet.size) : 0
 
     // Top products
     const prodMap: Record<string, number> = {}
@@ -207,7 +261,7 @@ export default function ClientesPage() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
           {[
             { label: 'Inactivo', value: `${c.dias_sin_actividad}d` },
-            { label: 'Historial', value: `${c.valor_historico >= 1000 ? `${(c.valor_historico / 1000).toFixed(1)}k` : c.valor_historico} uds` },
+            { label: `Valor ${MESES_CORTOS[selectedPeriod.month]} ${selectedPeriod.year - 1}`, value: c.valor_yoy_usd > 0 ? `${moneda}${c.valor_yoy_usd >= 1000 ? `${(c.valor_yoy_usd / 1000).toFixed(1)}k` : c.valor_yoy_usd}` : '—' },
             { label: 'Vendedor', value: c.vendedor.split(' ')[0] },
           ].map((m, i) => (
             <div key={i} style={{ padding: '8px 10px', background: 'var(--sf-bg)', borderRadius: 8, border: '1px solid var(--sf-border)' }}>
@@ -241,6 +295,7 @@ export default function ClientesPage() {
     setAnalysisMap(prev => ({ ...prev, [id]: { loading: false, text: 'computed', content } }))
   }, [sales, categoriasInventario, vendorAnalysis, clientesDormidos, categoriaAnalysis])
 
+  // R103: lookup UI — lista de vendedores para filtro de select, depende de estado UI
   const vendedores = useMemo(
     () => {
       const set = new Set<string>()
@@ -251,56 +306,17 @@ export default function ClientesPage() {
     [clientesDormidos, clienteSummaries],
   )
 
-  // Top-20 clientes derived from pre-computed clienteSummaries (off-thread)
-  const paretoClientes = useMemo<ParetoCliente[]>(() => {
-    if (!clienteSummaries.length) return []
-    const top = clienteSummaries.slice(0, 20)
-    const totalTop = top.reduce(
-      (s, c) => s + (dataAvailability.has_venta_neta ? c.ventaCur : c.udsCur),
-      0,
-    )
-    let cum = 0
-    return top.map((c) => {
-      const cur = dataAvailability.has_venta_neta ? c.ventaCur : c.udsCur
-      cum += cur
-      const cumulativePct = totalTop > 0 ? (cum / totalTop) * 100 : 0
-      const peso = totalTop > 0 ? (cur / totalTop) * 100 : 0
-      return {
-        nombre: c.nombre,
-        totalUnidades: c.udsCur,
-        totalVenta: c.ventaCur,
-        vendedor: c.vendedor,
-        varPct: c.varPct,
-        cumulativePct,
-        peso,
-      }
-    })
-  }, [clienteSummaries, dataAvailability.has_venta_neta])
+  // R102/Z.1.b: migrado a domain-aggregations.getParetoClientes (R59: peso total universe)
+  const paretoClientes = useMemo<ParetoCliente[]>(
+    () => getParetoClientes(clienteSummaries, dataAvailability.has_venta_neta),
+    [clienteSummaries, dataAvailability.has_venta_neta],
+  )
 
-  // Riesgo temprano derived from pre-computed clienteSummaries
-  const riesgoTemprano = useMemo(() => {
-    if (!clienteSummaries.length) return []
-    const items = clienteSummaries
-      .filter((c) => c.riesgoSignal !== null)
-      .map((c) => {
-        const lastPurchase = new Date(c.lastDate)
-        return {
-          nombre: c.nombre,
-          vendedor: c.vendedor,
-          lastPurchase,
-          avgDays: c.riesgoAvgDays,
-          daysSince: c.riesgoDaysSince,
-          atraso: c.riesgoAtraso,
-          signal: c.riesgoSignal as 'en riesgo' | 'desacelerando',
-          valorHistorico: c.riesgoValorHistorico,
-        }
-      })
-    items.sort((a, b) => {
-      if (a.signal !== b.signal) return a.signal === 'en riesgo' ? -1 : 1
-      return b.valorHistorico - a.valorHistorico
-    })
-    return items
-  }, [clienteSummaries])
+  // R102/Z.1.b: migrado a domain-aggregations.getClientesEnRiesgoTemprano
+  const riesgoTemprano = useMemo<RiesgoTempranoEntry[]>(
+    () => getClientesEnRiesgoTemprano(clienteSummaries),
+    [clienteSummaries],
+  )
 
   useEffect(() => {
     if (initialPanelCliente) setPanelCliente(initialPanelCliente)
@@ -317,6 +333,7 @@ export default function ClientesPage() {
   // No puede haber hooks después del early return.
   const searchQ = searchCliente.toLowerCase()
 
+  // R103: filtro UI — depende de estado local filterVendedor y searchQ
   const filtered = useMemo(() => {
     return clientesDormidos.filter(c => {
       if (filterVendedor !== 'all' && c.vendedor !== filterVendedor) return false
@@ -325,26 +342,29 @@ export default function ClientesPage() {
     })
   }, [clientesDormidos, filterVendedor, searchQ])
 
+  // R103: orden UI — sort por criterio seleccionado por usuario
   const sortedFull = useMemo(() => {
     return filtered.slice().sort((a, b) => {
       const mul = sortDir === 'desc' ? -1 : 1
       if (sortKey === 'prioridad') return mul * (a.recovery_score - b.recovery_score)
       if (sortKey === 'dias_sin_actividad') return mul * (a.dias_sin_actividad - b.dias_sin_actividad)
-      if (sortKey === 'valor_historico') return mul * (a.valor_historico - b.valor_historico)
-      if (sortKey === 'compras_historicas') return mul * (a.compras_historicas - b.compras_historicas)
+      if (sortKey === 'valor_yoy_usd') return mul * (a.valor_yoy_usd - b.valor_yoy_usd)
+      if (sortKey === 'transacciones_yoy') return mul * (a.transacciones_yoy - b.transacciones_yoy)
       if (sortKey === 'vendedor') return mul * a.vendedor.localeCompare(b.vendedor)
       return mul * a.cliente.localeCompare(b.cliente)
     })
   }, [filtered, sortKey, sortDir])
 
+  // R103: paginación UI — slice derivado de sortedFull y visibleCount (estado local)
   const sorted = useMemo(() => sortedFull.slice(0, visibleCount), [sortedFull, visibleCount])
 
+  // R102/Z.1.b: migrado a domain-aggregations.getValorEnRiesgoTotal
   const totalValorEnRiesgo = useMemo(
-    () => clientesDormidos.reduce((a, c) => a + c.valor_historico, 0),
+    () => getValorEnRiesgoTotal(clientesDormidos),
     [clientesDormidos],
   )
 
-  // Filtered versions for pareto and riesgo (base memos stay unfiltered for badges)
+  // R103: filtro UI — versión filtrada por vendedor/búsqueda para tab pareto
   const filteredPareto = useMemo(() => {
     return paretoClientes.filter(c => {
       if (filterVendedor !== 'all' && c.vendedor !== filterVendedor) return false
@@ -353,6 +373,7 @@ export default function ClientesPage() {
     })
   }, [paretoClientes, filterVendedor, searchQ])
 
+  // R103: filtro UI — versión filtrada para tab riesgo temprano
   const filteredRiesgoFull = useMemo(() => {
     return riesgoTemprano.filter(c => {
       if (filterVendedor !== 'all' && c.vendedor !== filterVendedor) return false
@@ -361,6 +382,7 @@ export default function ClientesPage() {
     })
   }, [riesgoTemprano, filterVendedor, searchQ])
 
+  // R103: paginación UI — slice de riesgoTemprano filtrado
   const filteredRiesgo = useMemo(
     () => filteredRiesgoFull.slice(0, visibleCount),
     [filteredRiesgoFull, visibleCount],
@@ -440,6 +462,69 @@ export default function ClientesPage() {
         )}
       </div>
 
+      {/* Fase 5B — Umbral días-dormido configurable (P6) */}
+      <div className="flex flex-wrap items-center gap-2 mb-3 text-[13px]" style={{ color: 'var(--sf-t4)' }}>
+        <label htmlFor="dias-dormido-input" style={{ fontWeight: 500, color: 'var(--sf-t3)' }}>
+          Considerar dormido después de
+        </label>
+        <input
+          id="dias-dormido-input"
+          type="number"
+          min={DIAS_DORMIDO_MIN}
+          max={DIAS_DORMIDO_MAX}
+          step={1}
+          value={diasDormidoInput}
+          onChange={e => {
+            const n = parseInt(e.target.value, 10)
+            if (!Number.isNaN(n)) setDiasDormidoInput(n)
+          }}
+          onBlur={e => {
+            const n = parseInt(e.target.value, 10)
+            if (Number.isNaN(n)) {
+              setDiasDormidoInput(DIAS_DORMIDO_DEFAULT)
+              persistDiasDormido(DIAS_DORMIDO_DEFAULT)
+            } else {
+              persistDiasDormido(n)
+            }
+          }}
+          onKeyDown={e => {
+            if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur()
+          }}
+          style={{
+            width: 68,
+            padding: '4px 8px',
+            borderRadius: 6,
+            border: '1px solid var(--sf-border)',
+            background: 'var(--sf-card)',
+            color: 'var(--sf-t1)',
+            fontSize: 13,
+            textAlign: 'center',
+          }}
+        />
+        <span>días sin comprar</span>
+        <span style={{ color: 'var(--sf-t5)', marginLeft: 6 }}>
+          · {clientesDormidos.filter(d => (d.dias_sin_actividad ?? 0) >= diasDormidoInput).length} clientes clasificados con este umbral
+        </span>
+        {diasDormidoCustom && (
+          <button
+            type="button"
+            onClick={resetDiasDormido}
+            style={{
+              marginLeft: 8,
+              padding: '3px 10px',
+              borderRadius: 6,
+              border: '1px solid var(--sf-border)',
+              background: 'transparent',
+              color: 'var(--sf-t4)',
+              fontSize: 12,
+              cursor: 'pointer',
+            }}
+          >
+            Restablecer ({DIAS_DORMIDO_DEFAULT} días)
+          </button>
+        )}
+      </div>
+
       {/* Tabs */}
       <div className="flex flex-wrap items-center gap-3">
         <div style={{ display: 'inline-flex', background: 'var(--sf-inset)', borderRadius: '8px', padding: '3px', gap: '2px' }}>
@@ -483,7 +568,7 @@ export default function ClientesPage() {
               </p>
               {totalValorEnRiesgo > 0 && usaDolares && (
                 <p className="text-xs mt-0.5" style={{ color: 'var(--sf-t3)' }}>
-                  {moneda}{totalValorEnRiesgo >= 1000 ? `${(totalValorEnRiesgo / 1000).toFixed(1)}k` : totalValorEnRiesgo.toLocaleString()} en ventas históricas
+                  {moneda}{totalValorEnRiesgo >= 1000 ? `${(totalValorEnRiesgo / 1000).toFixed(1)}k` : totalValorEnRiesgo.toLocaleString()} venta YoY perdida ({MESES_CORTOS[selectedPeriod.month]} {selectedPeriod.year - 1})
                   {sorted.length > 0 ? ` · ~${moneda}${Math.round(totalValorEnRiesgo / sorted.length / 1000 * 10) / 10}k promedio por cliente` : ''}
                 </p>
               )}
@@ -506,8 +591,8 @@ export default function ClientesPage() {
                       ['cliente', 'Cliente'],
                       ['vendedor', 'Vendedor'],
                       ['dias_sin_actividad', 'Inactivo'],
-                      ['compras_historicas', 'Compras históricas'],
-                      ['valor_historico', 'Valor hist.'],
+                      ['transacciones_yoy', 'Txns YoY'],
+                      ['valor_yoy_usd', `Valor ${MESES_CORTOS[selectedPeriod.month]} ${selectedPeriod.year - 1}`],
                       ['prioridad', 'Recuperación'],
                     ] as [SortKey, string][]).map(([k, label], i) => (
                       <th
@@ -576,11 +661,11 @@ export default function ClientesPage() {
                         >
                           {formatDays(c.dias_sin_actividad)}
                         </td>
-                        <td style={{ padding: '10px 12px', color: 'var(--sf-t3)', fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace", textAlign: 'right' }}>{c.compras_historicas}</td>
+                        <td style={{ padding: '10px 12px', color: 'var(--sf-t3)', fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace", textAlign: 'right' }}>{c.transacciones_yoy || '—'}</td>
                         <td style={{ padding: '10px 12px', color: 'var(--sf-t1)', fontWeight: 500, fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace", textAlign: 'right' }}>
-                          {moneda}{c.valor_historico >= 1000
-                            ? `${(c.valor_historico / 1000).toFixed(1)}k`
-                            : c.valor_historico.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          {c.valor_yoy_usd > 0
+                            ? `${moneda}${c.valor_yoy_usd >= 1000 ? `${(c.valor_yoy_usd / 1000).toFixed(1)}k` : c.valor_yoy_usd.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+                            : '—'}
                         </td>
                         <td style={{ padding: '10px 12px', maxWidth: 180 }}>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -594,7 +679,7 @@ export default function ClientesPage() {
                             <span style={{ fontSize: '11px', color: 'var(--sf-t4)', lineHeight: 1.3 }}>
                               {c.recovery_label === 'alta' ? `Comprador frecuente, lleva ${c.dias_sin_actividad} días sin actividad`
                                 : c.recovery_label === 'recuperable' ? `Buen historial, se fue hace ${c.dias_sin_actividad} días`
-                                : c.recovery_label === 'dificil' ? (c.valor_historico > 20000 ? `Cliente de ${moneda}${(c.valor_historico / 1000).toFixed(0)}k, vale el intento` : 'Historial irregular, respuesta incierta')
+                                : c.recovery_label === 'dificil' ? (c.valor_yoy_usd > 5000 ? `Aportaba ${moneda}${(c.valor_yoy_usd / 1000).toFixed(0)}k, vale el intento` : 'Historial irregular, respuesta incierta')
                                 : `Sin señales de retorno en ${c.dias_sin_actividad} días`}
                             </span>
                             <span style={{
@@ -695,7 +780,7 @@ export default function ClientesPage() {
                                         `Profundizar sobre cliente dormido: ${c.cliente}`,
                                         `Vendedor: ${c.vendedor}`,
                                         `Días inactivo: ${c.dias_sin_actividad}`,
-                                        `Valor histórico: ${moneda}${c.valor_historico.toLocaleString()}`,
+                                        `Valor YoY (${MESES_CORTOS[selectedPeriod.month]} ${selectedPeriod.year - 1}): ${moneda}${c.valor_yoy_usd.toLocaleString()}`,
                                         `Estado: ${c.recovery_label === 'alta' ? 'Alta probabilidad de recuperación' : c.recovery_label === 'recuperable' ? 'Recuperable' : c.recovery_label === 'dificil' ? 'Difícil de recuperar' : 'Perdido'}`,
                                         analysis.text ? `\nAnálisis previo:\n${analysis.text}` : '',
                                         ``,
@@ -977,6 +1062,14 @@ export default function ClientesPage() {
                   })()}
                 </tbody>
               </table>
+              {paretoClientes.length > 0 && (() => {
+                const topCoverage = paretoClientes[paretoClientes.length - 1].cumulativePct
+                return (
+                  <p className="px-5 py-2 text-[10px] text-[var(--sf-t4)] border-t border-[var(--sf-border)]">
+                    {paretoClientes.length} clientes — {topCoverage.toFixed(1)}% del volumen total del negocio (R59)
+                  </p>
+                )
+              })()}
             </div>
           )}
         </div>
