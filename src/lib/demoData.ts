@@ -1,4 +1,5 @@
 import type { SaleRecord, MetaRecord, InventoryItem } from '../types'
+import { emitIngestSummary } from './ingestTelemetry'
 
 // ─── Los Pinos S.A. ──────────────────────────────────────────
 // Ene 2024 – Dic 2028 · 8 vendedores · 30 clientes · 20 productos
@@ -341,6 +342,14 @@ export function getDemoData(): { sales: SaleRecord[]; metas: MetaRecord[]; inven
   // ── Filtrar ventas: solo hasta hoy ─────────────────────────────────────────
   const sales = allSales.filter(s => s.fecha <= today)
 
+  // [PR-M1-fix] Poblar clientKey derivado — paridad con ruta parser de Excel.
+  //   codigo_cliente?.trim() || nombre_cliente?.trim().toUpperCase() || null
+  for (const s of sales) {
+    const codigo = typeof s.codigo_cliente === 'string' ? s.codigo_cliente.trim() : ''
+    const nombre = typeof s.cliente === 'string' ? s.cliente.trim() : ''
+    s.clientKey = codigo !== '' ? codigo : (nombre !== '' ? nombre.toUpperCase() : null)
+  }
+
   // ── METAS (Ene 2024 – Dic 2028, sin filtrar — metas futuras son válidas) ──
   const metas: MetaRecord[] = []
 
@@ -406,6 +415,9 @@ export function getDemoData(): { sales: SaleRecord[]; metas: MetaRecord[]; inven
     { producto: 'Cloro 1L',              categoria: 'Limpieza',  unidades: 3330 },
     { producto: 'Desinfectante 750ml',   categoria: 'Limpieza',  unidades: 4170 },
   ]
+
+  // [PR-M1-fix] telemetría de ingesta (demo) — fuente única con parser Excel
+  emitIngestSummary(sales)
 
   return { sales, metas, inventory }
 }

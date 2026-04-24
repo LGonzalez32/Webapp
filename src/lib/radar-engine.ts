@@ -57,7 +57,7 @@ export interface RadarInput {
   clientesDormidos: Array<{
     cliente: string
     dias_sin_actividad: number
-    valor_historico: number
+    valor_yoy_usd: number
     recovery_label: string
     vendedor: string
   }>
@@ -122,7 +122,7 @@ export function computeRadarCards(input: RadarInput): RadarCard[] {
     const worst = criticos.sort((a, b) => (a.variacion_vs_promedio_pct ?? 0) - (b.variacion_vs_promedio_pct ?? 0))[0]
     worstVendedorCrisis = worst.vendedor
     const dormidosVend = clientesDormidos.filter(c => c.vendedor === worst.vendedor)
-    const valorEnRiesgo = dormidosVend.reduce((s, c) => s + c.valor_historico, 0)
+    const valorEnRiesgo = dormidosVend.reduce((s, c) => s + c.valor_yoy_usd, 0)
     const caida = Math.abs(worst.variacion_vs_promedio_pct ?? 0)
     const nombre = worst.vendedor.split(' ')[0]
 
@@ -152,8 +152,8 @@ export function computeRadarCards(input: RadarInput): RadarCard[] {
       ? clientesDormidos.filter(c => c.vendedor !== worstVendedorCrisis)
       : clientesDormidos
     if (noCubiertos.length > 0) {
-      const totalValor = noCubiertos.reduce((s, c) => s + c.valor_historico, 0)
-      const top = noCubiertos.sort((a, b) => b.valor_historico - a.valor_historico)[0]
+      const totalValor = noCubiertos.reduce((s, c) => s + c.valor_yoy_usd, 0)
+      const top = noCubiertos.sort((a, b) => b.valor_yoy_usd - a.valor_yoy_usd)[0]
       candidates.push({
         type: 'dinero_yendose',
         priority: 85 + Math.min(noCubiertos.length, 10),
@@ -181,7 +181,7 @@ export function computeRadarCards(input: RadarInput): RadarCard[] {
         type: 'mejor_jugador',
         priority: 40,
         title: `${best.vendedor} está en racha`,
-        metric: `+${Math.round(best.variacion_ytd_pct ?? best.cumplimiento_pct ?? 0)}%`,
+        metric: `+${Math.round(best.variacion_ytd_usd_pct ?? best.variacion_ytd_uds_pct ?? best.cumplimiento_pct ?? 0)}%`,
         metricLabel: 'sobre su promedio',
         detail: `Mejor del equipo. ${best.clientes_activos ?? 0} clientes activos y superando proyección.`,
         severity: 'positive',
@@ -508,18 +508,19 @@ export function computeRadarCards(input: RadarInput): RadarCard[] {
         entityType: p.vendedor ? 'vendedor' : null,
         entityId: p.vendedor,
       })
-    } else if (teamStats.variacion_ytd_equipo != null && teamStats.variacion_ytd_equipo > 0) {
-      // Fallback: YTD growth as positive card
+    } else if (teamStats.variacion_ytd_equipo_uds_pct != null && teamStats.variacion_ytd_equipo_uds_pct > 0) {
+      // Fallback: YTD growth (uds) as positive card
+      const ytdEq = teamStats.variacion_ytd_equipo_uds_pct
       candidates.push({
         type: 'buena_noticia',
         priority: 30,
-        title: `Ventas YTD +${teamStats.variacion_ytd_equipo.toFixed(1)}% vs año anterior`,
-        metric: `+${teamStats.variacion_ytd_equipo.toFixed(1)}%`,
-        metricLabel: 'crecimiento YTD',
+        title: `Ventas YTD +${ytdEq.toFixed(1)}% vs año anterior`,
+        metric: `+${ytdEq.toFixed(1)}%`,
+        metricLabel: 'crecimiento YTD (uds)',
         detail: `El equipo acumula crecimiento positivo respecto al mismo período del año pasado.`,
         severity: 'positive',
         tag: null,
-        action: { type: 'chat', target: `Las ventas YTD crecieron ${teamStats.variacion_ytd_equipo.toFixed(1)}%. ¿Qué lo está impulsando y cómo mantenerlo?`, label: 'Analizar con IA' },
+        action: { type: 'chat', target: `Las ventas YTD crecieron ${ytdEq.toFixed(1)}% en unidades. ¿Qué lo está impulsando y cómo mantenerlo?`, label: 'Analizar con IA' },
       })
     }
   }

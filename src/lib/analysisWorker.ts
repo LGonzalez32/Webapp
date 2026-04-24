@@ -67,6 +67,8 @@ self.onmessage = (event: MessageEvent<WorkerInput | EnrichInput>) => {
       ? { ..._phase1.teamStats, proyeccion_equipo: equipoProjection }
       : _phase1.teamStats
 
+    // [PR-L1] telemetría fase 2 (rerun con proyecciones)
+    const _pr_l1_p2_t0 = performance.now()
     const insights = generateInsights(
       enrichedVendors,
       enrichedTeam,
@@ -82,6 +84,7 @@ self.onmessage = (event: MessageEvent<WorkerInput | EnrichInput>) => {
       _phase1.canalAnalysis ?? [],
       _phase1.selectedPeriod,
     )
+    console.debug(`[PR-L1] motor1_phase2_rerun_ms: ${Math.round(performance.now() - _pr_l1_p2_t0)}, insights=${insights.length}`)
 
     ;(self as unknown as Worker).postMessage({
       type: 'enriched',
@@ -113,6 +116,9 @@ self.onmessage = (event: MessageEvent<WorkerInput | EnrichInput>) => {
     has_departamento: index.has_departamento,
     has_metas:      metas.length > 0,
     has_inventario: inventory.length > 0,
+    // [PR-M1] flags para ingesta dual
+    has_unidades:        index.has_unidades,
+    has_precio_unitario: index.has_precio_unitario,
   }
 
   // Compute day range for partial-month comparisons
@@ -169,6 +175,8 @@ self.onmessage = (event: MessageEvent<WorkerInput | EnrichInput>) => {
   )
 
   post('Generando insights...')
+  // [PR-L1] telemetría revertible: medir costo + distribución de motor 1
+  const _pr_l1_t0 = performance.now()
   const insights = generateInsights(
     vendorAnalysis, teamStats, sales, metas,
     dataAvailability, configuracion,
@@ -179,6 +187,30 @@ self.onmessage = (event: MessageEvent<WorkerInput | EnrichInput>) => {
     canalAnalysis ?? [],
     selectedPeriod,
   )
+  const _pr_l1_motor1_ms = performance.now() - _pr_l1_t0
+  // [PR-L1] distribución por tipo/dimensión + sample de IDs para cruzar con render
+  const _porTipo: Record<string, number> = {}
+  const _porDim: Record<string, number> = {}
+  for (const i of insights) {
+    const tipo = (i as { tipo?: string }).tipo ?? 'unknown'
+    _porTipo[tipo] = (_porTipo[tipo] ?? 0) + 1
+    // Inferir dimensión por campos presentes (motor 1 no la declara explícita)
+    const rec = i as unknown as Record<string, unknown>
+    const dim = rec.vendedor ? 'vendedor'
+      : rec.producto ? 'producto'
+      : rec.cliente ? 'cliente'
+      : rec.departamento ? 'departamento'
+      : rec.canal ? 'canal'
+      : rec.categoria ? 'categoria'
+      : 'equipo'
+    _porDim[dim] = (_porDim[dim] ?? 0) + 1
+  }
+  console.debug('[PR-L1] motor1_insights:', {
+    total:         insights.length,
+    por_tipo:      _porTipo,
+    por_dimension: _porDim,
+    tiempo_ms:     Math.round(_pr_l1_motor1_ms),
+  })
 
   // Persist state so Phase 2 (enrich) can reuse it without re-running analysis
   _phase1 = {

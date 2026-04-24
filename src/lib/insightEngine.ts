@@ -1180,295 +1180,8 @@ function vendedorMejorMomento(
   return out
 }
 
-// Generador 5 — vendedorConcentracion
-function vendedorConcentracion(
-  cross: CrossTables,
-  metas: MetaRecord[],
-): CandidatoInterno[] {
-  const out: CandidatoInterno[] = []
 
-  // Bug 5 fix: umbral dinámico — si TODOS están concentrados, sólo alertar sobre extremos
-  // Paso 1: calcular pctTop1 de cada vendedor para obtener mediana del equipo
-  type Row = {
-    vendedor: string
-    ytd: typeof cross.vendorYTD extends Map<string, infer V> ? V : never
-    sorted: Array<[string, number]>
-    pctTop1: number
-    pctTop2: number
-  }
-  const rows: Row[] = []
-  for (const [vendedor, ytd] of cross.vendorYTD) {
-    if (ytd.clients.size === 0 || ytd.net <= 0) continue
-    const sorted = [...ytd.clients.entries()].sort((a, b) => b[1] - a[1])
-    const top1 = sorted[0]
-    const top2Sum = sorted.slice(0, 2).reduce((s, [, v]) => s + v, 0)
-    rows.push({
-      vendedor,
-      ytd,
-      sorted,
-      pctTop1: pctOf(top1[1], ytd.net),
-      pctTop2: pctOf(top2Sum, ytd.net),
-    })
-  }
-  if (rows.length === 0) return out
 
-  const pcts = rows.map(r => r.pctTop1).sort((a, b) => a - b)
-  const medianaTop1 = pcts[Math.floor(pcts.length / 2)] ?? 0
-  const p75Top1 = pcts[Math.floor(pcts.length * 0.75)] ?? 0
-
-  // Si la mediana del equipo ya está concentrada (>35%), subir umbral dinámicamente al P75
-  const umbralTop1 = medianaTop1 > 35 ? Math.max(40, p75Top1) : 40
-  const umbralTop2 = 60
-
-  for (const row of rows) {
-    const { vendedor, ytd, sorted, pctTop1, pctTop2 } = row
-    const top1 = sorted[0]
-
-    // Pre-calcular meta para regla "concentrado Y meta en riesgo"
-    const mtdEarly = cross.vendorMTD.get(vendedor)
-    const metaEarly = mtdEarly ? resolverMetaMes(vendedor, metas, cross.fechaRef, mtdEarly.net, mtdEarly.uds, cross.diaDelMes, cross.diasEnMes) : null
-    const metaEnRiesgo = metaEarly ? metaEarly.pctProyeccion < 80 : false
-
-    // Sólo si: top1 > umbralTop1 OR top2 > umbralTop2 OR (concentrado moderado Y meta en riesgo)
-    const moderado = pctTop1 >= 35 || pctTop2 >= 50
-    const cumple = pctTop1 >= umbralTop1 || pctTop2 >= umbralTop2 || (moderado && metaEnRiesgo)
-    if (!cumple) continue
-
-    const meta = metaEarly
-    const cumpleMeta = meta ? meta.pctProyeccion >= 95 : null
-    const cruces = ['ventas', 'vendedor', 'cliente']
-    if (meta) cruces.push('metas')
-
-    const concentMsg = pctTop1 >= 35
-      ? `${top1[0]} concentra ${fmtPct(pctTop1)} de su cartera`
-      : `${sorted[0][0]} y ${sorted[1][0]} concentran ${fmtPct(pctTop2)} de su cartera`
-
-    const narrativa = [
-      `${vendedor}: ${concentMsg}.`,
-      cumpleMeta === true
-        ? `Cumple su meta proyectada (${fmtPct(meta!.pctProyeccion)}), pero su negocio depende de muy pocos clientes.`
-        : cumpleMeta === false
-          ? `Además proyecta cerrar el mes en ${fmtPct(meta!.pctProyeccion)} de meta.`
-          : `Esto lo hace vulnerable a cualquier cambio de esos clientes.`,
-      `Si ${top1[0]} reduce un 30% sus compras, el vendedor pierde ${fmtImp(top1[1] * 0.3, cross.hasVentaNeta)} YTD.`,
-    ].join(' ')
-
-    const conclusion = cumpleMeta === true
-      ? `Está cumpliendo, pero un movimiento de ${top1[0]} pone en riesgo todo su año.`
-      : `La concentración amplifica cualquier caída de ${top1[0]}.`
-
-    out.push({
-      id: uid('concentracion'),
-      tipo: 'cruzado',
-      prioridad: 'ALTA',
-      emoji: '🎯',
-      titulo: `${vendedor} depende demasiado de ${top1[0]}`,
-      descripcion: narrativa,
-      vendedor,
-      cliente: top1[0],
-      valor_numerico: Math.round(pctTop1),
-      impacto_economico: {
-        valor: top1[1],
-        descripcion: `${fmtImp(top1[1], cross.hasVentaNeta)} concentrados en un solo cliente`,
-        tipo: 'riesgo',
-      },
-      conclusion,
-      accion: {
-        texto: `Identificar y abrir 2 clientes nuevos del mismo perfil que ${top1[0]} este mes para reducir dependencia.`,
-        entidades: [vendedor, top1[0]],
-        respaldo: `${fmtPct(pctTop1)} de la cartera en ${top1[0]}`,
-        ejecutableEn: 'este_mes',
-      },
-      contrastePortafolio: `${top1[0]} = ${fmtPct(pctTop1)} de la cartera del vendedor; los siguientes 2 clientes apenas suman ${fmtPct(pctOf(sorted.slice(1, 3).reduce((s, [, v]) => s + v, 0), ytd.net))}`,
-      cruces,
-      metaContext: meta ? {
-        metaMes: Math.round(meta.metaMes),
-        cumplimiento: Math.round(meta.cumplimiento),
-        gap: Math.round(meta.gap),
-        proyeccion: Math.round(meta.proyeccion),
-        tipoMeta: meta.tipoMeta,
-      } : undefined,
-      esPositivo: false,
-      esAccionable: true,
-      señalesConvergentes: 1 + (cumpleMeta === false ? 1 : 0),
-      __impactoAbs: top1[1],
-      __crucesCount: cruces.length,
-      __esAccionable: true,
-      __esPositivo: false,
-    })
-  }
-  return out
-}
-
-// Generador 6 — departamentoCaida
-function departamentoCaida(cross: CrossTables): CandidatoInterno[] {
-  const out: CandidatoInterno[] = []
-
-  // Variaciones negativas
-  const variaciones: Array<{ dept: string; ytd: number; prev: number; varPct: number; delta: number }> = []
-  for (const [dept, ytd] of cross.deptYTD) {
-    const prev = cross.deptPrevYTD.get(dept)?.net ?? 0
-    if (prev <= 0) continue
-    const varPct = ((ytd.net - prev) / prev) * 100
-    if (varPct >= 0) continue
-    variaciones.push({ dept, ytd: ytd.net, prev, varPct, delta: ytd.net - prev })
-  }
-  if (variaciones.length === 0) return out
-
-  // Percentil 75 de las caídas (las más severas)
-  variaciones.sort((a, b) => a.varPct - b.varPct)
-  const idxP75 = Math.floor(variaciones.length * 0.25)
-  const umbral = variaciones[idxP75]?.varPct ?? -100
-
-  for (const item of variaciones) {
-    if (item.varPct > umbral) continue
-    const ytd = cross.deptYTD.get(item.dept)!
-    if (ytd.vendors.size === 0) continue
-    const topVendedor = [...ytd.vendors.entries()].sort((a, b) => b[1] - a[1])[0][0]
-    const vMTD = cross.vendorMTD.get(topVendedor)
-    const vendorVarYTD = (() => {
-      const v = cross.vendorYTD.get(topVendedor)?.net ?? 0
-      const p = cross.vendorPrevYTD.get(topVendedor)?.net ?? 0
-      return p > 0 ? ((v - p) / p) * 100 : 0
-    })()
-
-    // ¿Mercado o ejecución?
-    // Si el vendedor cae más fuerte que el departamento, es ejecución; si menos, es mercado
-    const tipo = Math.abs(vendorVarYTD) > Math.abs(item.varPct) ? 'ejecución' : 'mercado'
-    const cruces = ['ventas', 'departamento', 'vendedor']
-    if (vMTD) cruces.push('cliente')
-
-    const narrativa = [
-      `${item.dept} cae ${fmtPct(Math.abs(item.varPct))} YTD (de ${fmtImp(item.prev, cross.hasVentaNeta)} a ${fmtImp(item.ytd, cross.hasVentaNeta)}).`,
-      `${topVendedor} es el principal vendedor de la zona y su variación personal es ${fmtPct(vendorVarYTD)}.`,
-      tipo === 'ejecución'
-        ? `Como cae más rápido que el departamento, la causa apunta a ejecución del vendedor.`
-        : `Como cae menos que el departamento, la causa apunta al mercado de la zona.`,
-    ].join(' ')
-
-    const conclusion = tipo === 'ejecución'
-      ? `Hay que trabajar con ${topVendedor} en su gestión, no tratar la zona como problema externo.`
-      : `Es un problema de mercado en ${item.dept}, requiere estrategia distinta a la de otras zonas.`
-
-    out.push({
-      // Bug 7 fix: NO setear vendedor (evita ser deduplicado contra insights individuales del vendedor)
-      id: uid('depto-caida'),
-      tipo: 'cruzado',
-      prioridad: 'ALTA',
-      emoji: '📉',
-      titulo: `${item.dept} cae ${fmtPct(Math.abs(item.varPct))} en el año`,
-      descripcion: narrativa,
-      valor_numerico: Math.round(Math.abs(item.varPct)),
-      impacto_economico: {
-        valor: Math.abs(item.delta),
-        descripcion: `${fmtImp(Math.abs(item.delta), cross.hasVentaNeta)} de caída anual`,
-        tipo: 'perdida',
-      },
-      conclusion,
-      accion: {
-        texto: tipo === 'ejecución'
-          ? `Acompañar a ${topVendedor} en visitas a sus 3 cuentas principales esta semana.`
-          : `Redefinir estrategia comercial para ${item.dept} con incentivos específicos.`,
-        entidades: [item.dept, topVendedor],
-        respaldo: `${fmtPct(Math.abs(item.varPct))} caída YTD`,
-        ejecutableEn: 'esta_semana',
-      },
-      contrastePortafolio: `${item.dept} pesa ${fmtPct(pctOf(item.ytd, cross.totalYTD))} del total YTD`,
-      cruces,
-      esPositivo: false,
-      esAccionable: true,
-      señalesConvergentes: 2,
-      __impactoAbs: Math.abs(item.delta),
-      __crucesCount: cruces.length,
-      __esAccionable: true,
-      __esPositivo: false,
-    })
-  }
-  return out
-}
-
-// Generador 7 — vendedorCarteraPequeña
-function vendedorCarteraPequeña(
-  cross: CrossTables,
-  metas: MetaRecord[],
-): CandidatoInterno[] {
-  const out: CandidatoInterno[] = []
-  for (const [vendedor, ytd] of cross.vendorYTD) {
-    if (ytd.clients.size >= 4) continue
-
-    // ¿Su departamento principal está en caída?
-    const topDept = [...ytd.depts.entries()].sort((a, b) => b[1] - a[1])[0]
-    const deptYTD = topDept ? cross.deptYTD.get(topDept[0])?.net ?? 0 : 0
-    const deptPrev = topDept ? cross.deptPrevYTD.get(topDept[0])?.net ?? 0 : 0
-    const deptVar = deptPrev > 0 ? ((deptYTD - deptPrev) / deptPrev) * 100 : 0
-    if (deptVar >= -2) continue // solo si la zona también cae
-
-    const mtd = cross.vendorMTD.get(vendedor)
-    const meta = mtd ? resolverMetaMes(vendedor, metas, cross.fechaRef, mtd.net, mtd.uds, cross.diaDelMes, cross.diasEnMes) : null
-
-    // Productos perdidos
-    const prev = cross.vendorPrevYTD.get(vendedor)
-    const ausentesProd = clientesAusentes(prev?.prods, ytd.prods).slice(0, 2)
-    const ausentesCli = clientesAusentes(prev?.clients, ytd.clients).slice(0, 2)
-
-    const cruces = ['ventas', 'vendedor', 'cliente', 'departamento']
-    if (meta) cruces.push('metas')
-    if (ausentesProd.length > 0) cruces.push('producto')
-
-    const narrativa = [
-      `${vendedor} trabaja con sólo ${ytd.clients.size} clientes activos${topDept ? ` en ${topDept[0]}` : ''}, una zona que también cae ${fmtPct(Math.abs(deptVar))} YTD.`,
-      ausentesCli.length > 0 ? `Perdió clientes históricos: ${ausentesCli.map(a => a.cliente).join(', ')}.` : '',
-      ausentesProd.length > 0 ? `Productos que dejó de mover: ${ausentesProd.map(a => a.cliente).join(', ')}.` : '',
-      meta ? `Su meta del mes proyecta cerrar en ${fmtPct(meta.pctProyeccion)}.` : '',
-    ].filter(Boolean).join(' ')
-
-    const conclusion = meta && meta.pctProyeccion < 80
-      ? `Cartera reducida, zona en caída y meta en riesgo: necesita expansión inmediata.`
-      : `Cartera reducida en zona estancada — cualquier baja amenaza el cierre del año.`
-
-    out.push({
-      id: uid('cartera-pequeña'),
-      tipo: 'riesgo_vendedor',
-      prioridad: 'ALTA',
-      emoji: '🔍',
-      titulo: `${vendedor} con cartera demasiado pequeña`,
-      descripcion: narrativa,
-      vendedor,
-      valor_numerico: ytd.clients.size,
-      impacto_economico: {
-        valor: ytd.net,
-        descripcion: `${fmtImp(ytd.net, cross.hasVentaNeta)} concentrados en ${ytd.clients.size} clientes`,
-        tipo: 'riesgo',
-      },
-      conclusion,
-      accion: {
-        texto: `Definir 5 prospectos concretos en ${topDept ? topDept[0] : 'su zona'} y agendar visitas de apertura este mes.`,
-        entidades: [vendedor, ...(topDept ? [topDept[0]] : [])],
-        respaldo: `${ytd.clients.size} clientes activos vs zona cayendo ${fmtPct(Math.abs(deptVar))}`,
-        ejecutableEn: 'este_mes',
-      },
-      contrastePortafolio: topDept
-        ? `${topDept[0]} cae ${fmtPct(Math.abs(deptVar))} YTD; este vendedor representa ${fmtPct(pctOf(ytd.net, deptYTD))} de la zona`
-        : undefined,
-      cruces,
-      metaContext: meta ? {
-        metaMes: Math.round(meta.metaMes),
-        cumplimiento: Math.round(meta.cumplimiento),
-        gap: Math.round(meta.gap),
-        proyeccion: Math.round(meta.proyeccion),
-        tipoMeta: meta.tipoMeta,
-      } : undefined,
-      esPositivo: false,
-      esAccionable: true,
-      señalesConvergentes: 2 + (ausentesCli.length > 0 ? 1 : 0),
-      __impactoAbs: ytd.net,
-      __crucesCount: cruces.length,
-      __esAccionable: true,
-      __esPositivo: false,
-    })
-  }
-  return out
-}
 
 // Generador 8 — productoOportunidad
 function productoOportunidad(
@@ -1666,6 +1379,17 @@ function sanitizarNarrativa(texto: string, ctx: { diaDelMes: number; diasEnMes: 
   return result;
 }
 
+// R63 — Severidad léxica acotada por magnitud
+function lexSev(pct: number): string {
+  const abs = Math.abs(pct)
+  const pos = pct >= 0
+  if (abs < 5)  return 'se mantiene'
+  if (abs < 15) return pos ? 'crece' : 'cae'
+  if (abs < 30) return pos ? 'sube notablemente' : 'retrocede'
+  if (abs < 50) return pos ? 'se dispara' : 'colapsa'
+  return pos ? 'se dispara con fuerza' : 'colapsa drásticamente'
+}
+
 // Generador 9 — equipoContexto
 function equipoContexto(
   cross: CrossTables,
@@ -1758,32 +1482,34 @@ function equipoContexto(
 
     const enRiesgo = vendorAnalysis.filter(v => v.riesgo === 'riesgo' || v.riesgo === 'critico')
 
+    // R56/R57: elegir la unidad más representativa (dinero si existe, si no unidades)
+    const pickYtdVar = (v: VendorAnalysis) => v.variacion_ytd_usd_pct ?? v.variacion_ytd_uds_pct ?? 0
     const topPerformer = vendorAnalysis.reduce((best, v) =>
-      (v.variacion_ytd_pct ?? 0) > (best.variacion_ytd_pct ?? 0) ? v : best
+      pickYtdVar(v) > pickYtdVar(best) ? v : best
     , vendorAnalysis[0])
 
     // ── Bloque 1: Apertura y equipo ──
     let bloque1: string
-    const topVar = topPerformer.variacion_ytd_pct ?? 0
+    const topVar = pickYtdVar(topPerformer)
 
     if (enRiesgo.length > 0 && topVar > 5) {
       const peorRiesgo = enRiesgo.reduce((worst, v) =>
         (v.cumplimiento_pct ?? 0) < (worst.cumplimiento_pct ?? 0) ? v : worst
       , enRiesgo[0])
       const peorRiesgoCumpl = (peorRiesgo.cumplimiento_pct ?? 0).toFixed(1)
-      const peorRiesgoVar = Math.abs(peorRiesgo.variacion_ytd_pct ?? 0).toFixed(1)
+      const peorRiesgoVar = Math.abs(pickYtdVar(peorRiesgo)).toFixed(1)
       bloque1 = `El negocio está aguantando, pero con focos claros de atención. Lo positivo: ${topPerformer.vendedor} sigue siendo motor de crecimiento del equipo. Lo preocupante: ${peorRiesgo.vendedor} no logra remontar — cerró al ${peorRiesgoCumpl}% de meta y ya acumula ${peorRiesgoVar}% de caída en el año, lo que empieza a pesar en el resultado general.`
     } else if (creciendo >= cayendo && variacion >= 0) {
       const topSorted = vendorAnalysis
         .slice()
-        .sort((a, b) => (b.variacion_ytd_pct ?? 0) - (a.variacion_ytd_pct ?? 0))
+        .sort((a, b) => pickYtdVar(b) - pickYtdVar(a))
         .slice(0, 2)
       if (topSorted.length >= 2) {
-        const v1Pct = (topSorted[0].variacion_ytd_pct ?? 0).toFixed(1)
-        const v2Pct = (topSorted[1].variacion_ytd_pct ?? 0).toFixed(1)
+        const v1Pct = pickYtdVar(topSorted[0]).toFixed(1)
+        const v2Pct = pickYtdVar(topSorted[1]).toFixed(1)
         bloque1 = `El equipo viene con buen ritmo. ${topSorted[0].vendedor} y ${topSorted[1].vendedor} están empujando el resultado con subidas de ${v1Pct}% y ${v2Pct}% respectivamente, y la mayoría está en línea con la meta.`
       } else {
-        const v1Pct = (topSorted[0].variacion_ytd_pct ?? 0).toFixed(1)
+        const v1Pct = pickYtdVar(topSorted[0]).toFixed(1)
         bloque1 = `El equipo viene con buen ritmo. ${topSorted[0].vendedor} está empujando el resultado con una subida de ${v1Pct}%, y la mayoría está en línea con la meta.`
       }
     } else {
@@ -1799,13 +1525,23 @@ function equipoContexto(
     }
 
     // Enriquecer bloque1 con contexto de supervisor si hay uno en riesgo claro
+    // R64: usar YTD UDS (ytd_actual_uds/ytd_anterior_uds) — no variacion_pct que es MTD
     if (supervisorAnalysis.length > 0 && bloque1) {
-      const supRiesgo = supervisorAnalysis
-        .filter(s => s.vendedores_criticos > 0 || s.variacion_pct < -20)
-        .sort((a, b) => a.variacion_pct - b.variacion_pct)
-      if (supRiesgo.length > 0) {
-        const sup = supRiesgo[0]
-        bloque1 += ` La zona de ${sup.supervisor} (${sup.variacion_pct >= 0 ? '+' : ''}${sup.variacion_pct.toFixed(1)}% en el año) es la que más presiona el resultado${sup.vendedores_criticos > 0 ? ` con ${sup.vendedores_criticos} vendedor${sup.vendedores_criticos > 1 ? 'es' : ''} en zona crítica` : ''}.`
+      const supConYTD = supervisorAnalysis
+        .map(s => {
+          const ytdPct = s.ytd_anterior_uds > 0
+            ? ((s.ytd_actual_uds - s.ytd_anterior_uds) / s.ytd_anterior_uds) * 100
+            : null
+          return { ...s, ytdPct }
+        })
+        .filter(s => s.vendedores_criticos > 0 || (s.ytdPct !== null && s.ytdPct < -10))
+        .sort((a, b) => (a.ytdPct ?? 0) - (b.ytdPct ?? 0))
+      if (supConYTD.length > 0) {
+        const sup = supConYTD[0]
+        const ytdLabel = sup.ytdPct !== null
+          ? ` (${sup.ytdPct >= 0 ? '+' : ''}${sup.ytdPct.toFixed(1)}% YTD)`
+          : ''
+        bloque1 += ` La zona de ${sup.supervisor}${ytdLabel} es la que más presiona el resultado${sup.vendedores_criticos > 0 ? ` con ${sup.vendedores_criticos} vendedor${sup.vendedores_criticos > 1 ? 'es' : ''} en zona crítica` : ''}.`
       }
     }
 
@@ -1817,26 +1553,32 @@ function equipoContexto(
       deptVars.push({ dept, varPct: ((dy.net - prevNet) / prevNet) * 100 })
     }
 
+    // R64: canal YTD desde cross tables (misma ventana/métrica que el resto del bloque)
+    const canalYTDVars: Array<{ canal: string; varPct: number }> = []
+    for (const [canal, cy] of cross.canalYTD) {
+      const prev = cross.canalPrevYTD.get(canal)?.net ?? 0
+      if (prev > 0) canalYTDVars.push({ canal, varPct: ((cy.net - prev) / prev) * 100 })
+    }
+    canalYTDVars.sort((a, b) => a.varPct - b.varPct)
+
     let bloque2 = ''
     if (deptVars.length >= 2) {
       const bestDept = deptVars.reduce((b, d) => d.varPct > b.varPct ? d : b)
       const worstDept = deptVars.reduce((w, d) => d.varPct < w.varPct ? d : w)
       let canalPart = ''
-      if (canalAnalysis.length >= 2) {
-        const sortedCanales = canalAnalysis.slice().sort((a, b) => a.variacion_pct - b.variacion_pct)
-        const canalCaida = sortedCanales[0]
-        const canalEstable = sortedCanales[sortedCanales.length - 1]
-        canalPart = ` En canales, ${canalCaida.canal} retrocede un ${Math.abs(canalCaida.variacion_pct).toFixed(1)}% mientras ${canalEstable.canal} se mantiene — vale la pena entender qué está pasando distinto en cada uno.`
-      } else if (canalAnalysis.length === 1) {
-        const c = canalAnalysis[0]
-        canalPart = ` El canal ${c.canal} ${c.variacion_pct >= 0 ? 'crece' : 'retrocede'} un ${Math.abs(c.variacion_pct).toFixed(1)}%.`
+      if (canalYTDVars.length >= 2) {
+        const canalCaida = canalYTDVars[0]
+        const canalEstable = canalYTDVars[canalYTDVars.length - 1]
+        canalPart = ` En canales (YTD), ${canalCaida.canal} ${lexSev(canalCaida.varPct)} un ${Math.abs(canalCaida.varPct).toFixed(1)}% mientras ${canalEstable.canal} ${lexSev(canalEstable.varPct)} — vale la pena entender qué está pasando distinto en cada uno.`
+      } else if (canalYTDVars.length === 1) {
+        const c = canalYTDVars[0]
+        canalPart = ` El canal ${c.canal} ${lexSev(c.varPct)} un ${Math.abs(c.varPct).toFixed(1)}% en el año.`
       }
       bloque2 = `Territorialmente, ${bestDept.dept} (+${bestDept.varPct.toFixed(1)}%) está compensando la caída de ${worstDept.dept} (${worstDept.varPct.toFixed(1)}%), que se ha convertido en la zona más débil.${canalPart}`
-    } else if (canalAnalysis.length >= 2) {
-      const sortedCanales = canalAnalysis.slice().sort((a, b) => a.variacion_pct - b.variacion_pct)
-      const canalCaida = sortedCanales[0]
-      const canalEstable = sortedCanales[sortedCanales.length - 1]
-      bloque2 = `En canales, ${canalCaida.canal} retrocede un ${Math.abs(canalCaida.variacion_pct).toFixed(1)}% mientras ${canalEstable.canal} se mantiene — vale la pena entender qué está pasando distinto en cada uno.`
+    } else if (canalYTDVars.length >= 2) {
+      const canalCaida = canalYTDVars[0]
+      const canalEstable = canalYTDVars[canalYTDVars.length - 1]
+      bloque2 = `En canales (YTD), ${canalCaida.canal} ${lexSev(canalCaida.varPct)} un ${Math.abs(canalCaida.varPct).toFixed(1)}% mientras ${canalEstable.canal} ${lexSev(canalEstable.varPct)} — vale la pena entender qué está pasando distinto en cada uno.`
     }
 
     // ── Bloque 3: Portafolio y clientes ──
@@ -2731,6 +2473,7 @@ const PRIO_RANK: Record<InsightPrioridad, number> = { CRITICA: 0, ALTA: 1, MEDIA
 // Se ejecuta DESPUÉS de detectarRedundancia y ANTES del sort final.
 function agruparInsightsSimilares(validados: any[]): any[] {
   // --- GRUPO 1: Concentración de cartera ---
+  // [Z.6 F2.2 — deprecation] detector desactivado; este bloque es no-op en runtime
   const concentracion = validados.filter(c => c.id.startsWith('concentracion'))
   const noConcentracion = validados.filter(c => !c.id.startsWith('concentracion'))
 
@@ -2967,6 +2710,7 @@ function pipeline(candidatos: CandidatoInterno[], cross: CrossTables): Insight[]
   // Issue 6 fix: orden de preferencia por id-prefix para resolver empates de prioridad.
   const PREF_ID: Array<{ prefix: string; rank: number }> = [
     { prefix: 'meta-riesgo', rank: 0 },
+    // [Z.6 F2.2 — deprecation] prefijos legacy, no emitidos en runtime (R126)
     { prefix: 'cartera-pequeña', rank: 1 },
     { prefix: 'concentracion', rank: 2 },
     { prefix: 'mejor-momento', rank: 3 },
@@ -3315,35 +3059,47 @@ export function generateInsights(
   // GAP 4: churn baseline por vendedor — calcular UNA vez
   const churnMap = calcularChurnVendedor(cross)
 
-  // 3) Llamar a cada generador en orden documentado
+  // 3) Llamar a cada generador — detectores eliminados/migrados:
+  //    L2a: inventarioDesabasto, equipoContexto, productoSustitucion,
+  //      productoCoDeclive, inventarioSobrestock, canalContexto, vendedorPositivoEstable.
+  //    L2b.1: productoMuerto → product_dead (motor 2, emite card propia con USD).
+  //    L2b.2: productoOportunidad → enriquecimiento prospeccion_cross_sell en
+  //      proportion_shift (motor 2). NARRATIVA únicamente, no emite impactoUSD propio.
+  //
+  // [PR-L2b.2-fix] Motor 1 productoOportunidad SIGUE llamándose como PUENTE LEGACY
+  // porque alimenta el agregado `productos` de buildRichProductSection con impactoUSD
+  // estimado (ticket × prospectos). Cuando motor 2 emita proportion_shift+prospeccion
+  // como cards propias con USD ≥ $500 de potencial, este puente se retira en PR-L4.
   const inv = categoriasInventario ?? []
   const candidatos: CandidatoInterno[] = []
   candidatos.push(...vendedorMetaRiesgo(cross, metas, clientesDormidos, churnMap))
   if (dataAvailability.has_producto) {
-    candidatos.push(...productoMuerto(cross, inv))
+    // [PR-L2b.2-fix] puente legacy — retiro programado en PR-L4
     candidatos.push(...productoOportunidad(cross, inv))
-    candidatos.push(...productoSustitucion(cross, inv))
-    // GAP 5: nuevo generador productoCoDeclive (después de sustitución, antes de inventario)
-    candidatos.push(...productoCoDeclive(cross, inv))
-  }
-  if (dataAvailability.has_inventario) {
-    candidatos.push(...inventarioDesabasto(cross, inv))
-    candidatos.push(...inventarioSobrestock(cross, inv))
   }
   candidatos.push(...vendedorMejorMomento(cross, metas))
-  if (dataAvailability.has_cliente) {
-    candidatos.push(...vendedorConcentracion(cross, metas))
-  }
   if (dataAvailability.has_departamento) {
-    candidatos.push(...departamentoCaida(cross))
-    candidatos.push(...vendedorCarteraPequeña(cross, metas))
+    // [PR-L2b.3] departamentoCaida migrado a motor 2 como enriquecimiento
+    // split_ejecucion_vs_mercado sobre candidates trend(down) + meta_gap en
+    // dimensión departamento. Gate preservado; PR-L4: evaluar consolidación
+    // si no hay otro detector que lo requiera.
   }
-  candidatos.push(...equipoContexto(cross, metas, vendorAnalysis, categoriaAnalysis, canalAnalysis, supervisorAnalysis))
   candidatos.push(...vendedorSeñalTemprana(cross, metas, churnMap))
-  candidatos.push(...vendedorPositivoEstable(cross, metas))
   candidatos.push(...vendedorEstancado(cross, metas))
-  if (dataAvailability.has_canal) {
-    candidatos.push(...canalContexto(cross))
+
+  // [PR-L2a/L2b.1/L2b.2] telemetría revertible
+  if (import.meta.env.DEV) {
+    const porTipo: Record<string, number> = {}
+    for (const c of candidatos) {
+      const t = (c as { tipo?: string }).tipo ?? 'unknown'
+      porTipo[t] = (porTipo[t] ?? 0) + 1
+    }
+    console.debug('[PR-L2a] motor1 post-eliminacion:', {
+      detectores_activos: 5,  // 4 migraciones pendientes + 1 puente legacy (productoOportunidad)
+      puente_legacy: ['productoOportunidad'],
+      candidatos_generados: candidatos.length,
+      por_tipo: porTipo,
+    })
   }
 
   // 4) Pipeline

@@ -291,7 +291,7 @@ ${(() => {
 
 EQUIPO — RESUMEN:
 Total vendedores: ${vendorAnalysis.length}
-Variación YTD: ${teamStats?.variacion_ytd_equipo != null ? teamStats.variacion_ytd_equipo.toFixed(1) + '%' : 'N/A'}
+Variación YTD (uds): ${teamStats?.variacion_ytd_equipo_uds_pct != null ? teamStats.variacion_ytd_equipo_uds_pct.toFixed(1) + '%' : 'N/A'}
 Total unidades período: ${teamStats?.total_unidades?.toLocaleString() ?? 'N/A'}
 Variación vs período anterior: ${teamStats?.variacion_pct != null ? teamStats.variacion_pct.toFixed(1) + '%' : 'N/A'}${dataAvailability.has_venta_neta && teamStats?.total_ventas ? `\nVenta neta total período: ${teamStats.total_ventas.toLocaleString()} ${mon}` : ''}`
 
@@ -302,9 +302,13 @@ Variación vs período anterior: ${teamStats?.variacion_pct != null ? teamStats.
     p += `\n\nVENDEDOR: ${v.vendedor}`
     p += `\nEstado: ${v.riesgo.toUpperCase()} | Unidades: ${v.ventas_periodo}`
     if (v.variacion_pct != null) p += `\nVariación vs período anterior: ${v.variacion_pct.toFixed(1)}%`
-    if (v.ytd_actual != null) {
-      p += `\nYTD actual: ${v.ytd_actual} | YTD anterior: ${v.ytd_anterior ?? 'N/A'}`
-      if (v.variacion_ytd_pct != null) p += ` | Var YTD: ${v.variacion_ytd_pct.toFixed(1)}%`
+    if (v.ytd_actual_uds != null) {
+      p += `\nYTD actual: ${v.ytd_actual_uds} uds | YTD anterior: ${v.ytd_anterior_uds ?? 'N/A'} uds`
+      if (v.variacion_ytd_uds_pct != null) p += ` | Var YTD (uds): ${v.variacion_ytd_uds_pct.toFixed(1)}%`
+    }
+    if (v.ytd_actual_usd != null) {
+      p += `\nYTD actual: ${mon} ${v.ytd_actual_usd.toLocaleString(undefined, { maximumFractionDigits: 0 })} | YTD anterior: ${v.ytd_anterior_usd != null ? `${mon} ${v.ytd_anterior_usd.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : 'N/A'}`
+      if (v.variacion_ytd_usd_pct != null) p += ` | Var YTD (${mon}): ${v.variacion_ytd_usd_pct.toFixed(1)}%`
     }
     if (v.meta != null) {
       p += `\nMeta: ${v.meta} | Cumplimiento: ${v.cumplimiento_pct?.toFixed(1) ?? 'N/A'}%`
@@ -320,8 +324,8 @@ Variación vs período anterior: ${teamStats?.variacion_pct != null ? teamStats.
         p += `\nClientes dormidos (${dormidos.length}):`
         for (const c of dormidos.slice(0, 2)) {
           p += `\n  - ${c.cliente} | ${c.dias_sin_actividad} días sin comprar`
-          if (dataAvailability.has_venta_neta && c.valor_historico) {
-            p += ` | Valor hist: ${c.valor_historico.toLocaleString()} ${mon}`
+          if (dataAvailability.has_venta_neta && c.valor_yoy_usd) {
+            p += ` | Valor YoY: ${c.valor_yoy_usd.toLocaleString()} ${mon}`
           }
           p += ` | Estado: ${c.recovery_label === 'alta' ? 'Alta probabilidad' : c.recovery_label === 'recuperable' ? 'Recuperable' : c.recovery_label === 'dificil' ? 'Difícil' : 'Perdido'}`
         }

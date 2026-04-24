@@ -2,6 +2,7 @@ import Papa from 'papaparse'
 import * as XLSX from 'xlsx'
 import { z } from 'zod'
 import type { SaleRecord, MetaRecord, InventoryItem, DataAvailability, ParseError, ParseResult, DiscardedRow } from '../types'
+import { emitIngestSummary } from './ingestTelemetry'
 
 // ─── NORMALIZACIÓN ───────────────────────────────────────────────────────────
 
@@ -25,6 +26,9 @@ export const SALES_MAPPINGS: Record<string, string[]> = {
   unidades: [
     'units', 'Units', 'cantidad', 'qty', 'Unidades', 'amount', 'Amount',
     'UNIDADES', 'CANTIDAD', 'QTY', 'unidades',
+    // [PR-M1] sinónimos adicionales para distribución/mayoreo con perecederos
+    'piezas', 'Piezas', 'PIEZAS', 'cajas', 'Cajas', 'CAJAS',
+    'volumen', 'Volumen', 'VOLUMEN',
   ],
   producto: [
     'product', 'Product', 'Producto', 'sku', 'SKU', 'PRODUCTO', 'item', 'Item',
@@ -37,6 +41,8 @@ export const SALES_MAPPINGS: Record<string, string[]> = {
   venta_neta: [
     'monto', 'Monto', 'venta', 'Venta', 'revenue', 'Revenue', 'importe',
     'Importe', 'total', 'Total', 'MONTO', 'venta_neta', 'net_sales',
+    // [PR-M1] sinónimo adicional
+    'ventas', 'Ventas', 'VENTAS',
   ],
   categoria: [
     'category', 'Category', 'Categoria', 'linea', 'Linea', 'CATEGORIA',
@@ -427,6 +433,25 @@ export async function parseSalesFile(file: File): Promise<ParseResult<SaleRecord
 
   const missing = ['fecha', 'vendedor', 'unidades'].filter(c => !foundKeys.includes(c))
   if (missing.length > 0) {
+    // [PR-M1] mensaje específico para unidades (métrica obligatoria del negocio)
+    if (missing.includes('unidades')) {
+      if (import.meta.env.DEV) {
+        console.debug('[PR-M1] ingest_summary', {
+          filas_total: 0, filas_invalidas: 0,
+          filas_con_unidades: 0, filas_con_venta_neta: 0, filas_con_cliente: 0,
+          has_unidades: false, has_venta_neta: false, has_cliente: false, has_precio_unitario: false,
+          metricas_disponibles: [] as string[],
+          razon: 'excel_rechazado_falta_unidades',
+        })
+      }
+      return {
+        success: false,
+        error: {
+          code: 'MISSING_REQUIRED', missing, found: foundKeys,
+          message: 'Falta columna obligatoria: unidades (sinónimos aceptados: cantidad, qty, piezas, cajas, volumen). Por favor agrégala y vuelve a subir el archivo.',
+        },
+      }
+    }
     return {
       success: false,
       error: { code: 'MISSING_REQUIRED', missing, found: foundKeys, message: `Faltan columnas obligatorias: ${missing.join(', ')}. Se detectaron: ${foundKeys.join(', ')}.` },
@@ -464,7 +489,12 @@ export async function parseSalesFile(file: File): Promise<ParseResult<SaleRecord
     const mapped = mappedRows[i]
     const r = saleSchema.safeParse(mapped)
     if (r.success) {
-      data.push(r.data as SaleRecord)
+      // [PR-M1] clientKey = codigo_cliente?.trim() || nombre_cliente?.trim().toUpperCase() || null
+      const rec = r.data as SaleRecord
+      const codigo = typeof rec.codigo_cliente === 'string' ? rec.codigo_cliente.trim() : ''
+      const nombre = typeof rec.cliente === 'string' ? rec.cliente.trim() : ''
+      rec.clientKey = codigo !== '' ? codigo : (nombre !== '' ? nombre.toUpperCase() : null)
+      data.push(rec)
     } else {
       discardedRows.push({
         rowNumber: i + 2,
@@ -477,6 +507,9 @@ export async function parseSalesFile(file: File): Promise<ParseResult<SaleRecord
   if (data.length === 0) {
     return { success: false, error: { code: 'EMPTY_FILE', message: 'Columnas encontradas pero ninguna fila pudo procesarse. Verifica que las fechas estén en formato YYYY-MM-DD y que unidades sea un número.' } }
   }
+
+  // [PR-M1] telemetría de ingesta dual — emisor centralizado (fuente única)
+  emitIngestSummary(data)
 
   return { success: true, data, columns: foundKeys, sheetName, discardedRows: discardedRows.length > 0 ? discardedRows : undefined }
 }
@@ -787,13 +820,20 @@ export function parseInventoryFileInWorker(
 // ─── DETECTAR DISPONIBILIDAD DE DATOS ────────────────────────────────────────
 
 export function detectDataAvailability(sales: SaleRecord[]): Omit<DataAvailability, 'has_metas' | 'has_inventario'> {
+  const total = sales.length
+  // [PR-M1] has_unidades: ≥80% filas con unidades>0 (métrica obligatoria del negocio)
+  const conUnidades = sales.reduce((n, s) => n + (s.unidades > 0 ? 1 : 0), 0)
+  const has_unidades   = total > 0 && conUnidades / total >= 0.8
+  const has_venta_neta = sales.some((s) => s.venta_neta != null && s.venta_neta > 0)
   return {
     has_producto: sales.some((s) => s.producto != null && s.producto !== ''),
     has_cliente: sales.some((s) => s.cliente != null && s.cliente !== ''),
-    has_venta_neta: sales.some((s) => s.venta_neta != null && s.venta_neta > 0),
+    has_venta_neta,
     has_categoria: sales.some((s) => s.categoria != null && s.categoria !== ''),
     has_canal: sales.some((s) => s.canal != null && s.canal !== ''),
     has_supervisor: sales.some((s) => s.supervisor != null && s.supervisor !== ''),
     has_departamento: sales.some((s) => s.departamento != null && s.departamento !== ''),
+    has_unidades,
+    has_precio_unitario: has_unidades && has_venta_neta,
   }
 }

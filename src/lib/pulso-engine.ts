@@ -83,7 +83,7 @@ export interface PulsoInput {
   clientesDormidos: Array<{
     cliente: string
     dias_sin_actividad: number
-    valor_historico: number
+    valor_yoy_usd: number
     recovery_label: string
     recovery_score: number
     vendedor: string
@@ -214,7 +214,7 @@ export function computePulsoCards(input: PulsoInput): { visible: PulsoCard[]; to
 
   // ── S3: CLIENTE DORMIDO DE ALTO VALOR (priority 88) ───────────────────────
   if (dataAvailability.has_cliente && clientesDormidos.length > 0) {
-    const top = [...clientesDormidos].sort((a, b) => b.valor_historico - a.valor_historico)[0]
+    const top = [...clientesDormidos].sort((a, b) => b.valor_yoy_usd - a.valor_yoy_usd)[0]
     const otros = clientesDormidos.length - 1
     candidates.push({
       type: 'cliente_dormido',
@@ -222,14 +222,14 @@ export function computePulsoCards(input: PulsoInput): { visible: PulsoCard[]; to
       title: `${top.cliente} dejó de comprar`,
       metric: `${top.dias_sin_actividad}`,
       metricLabel: 'días inactivo',
-      detail: `Historial: ${fmtK(top.valor_historico)} uds · Vendedor: ${top.vendedor}${otros > 0 ? ` · +${otros} clientes dormidos` : ''}`,
+      detail: `Historial: ${fmtK(top.valor_yoy_usd)} uds · Vendedor: ${top.vendedor}${otros > 0 ? ` · +${otros} clientes dormidos` : ''}`,
       severity: top.recovery_score < 40 ? 'critical' : top.recovery_score < 60 ? 'warning' : 'warning',
       tag: top.dias_sin_actividad <= 14 ? 'nuevo' : null,
       action: {
         type: 'pulso_panel', target: top.cliente, label: `Ver ${top.cliente}`,
         panelData: {
           panelType: 'cliente_dormido', chatQuestion: `${top.cliente} lleva ${top.dias_sin_actividad} días sin comprar. Vendedor: ${top.vendedor}. ¿Cómo recuperarlo?`,
-          cliente: top.cliente, diasInactivo: top.dias_sin_actividad, valorHistorico: top.valor_historico,
+          cliente: top.cliente, diasInactivo: top.dias_sin_actividad, valorHistorico: top.valor_yoy_usd,
           recoveryScore: top.recovery_score, recoveryLabel: top.recovery_label, vendedorAsignado: top.vendedor,
           diasTranscurridos: estadoMes.diasTranscurridos, diasTotales: estadoMes.diasTotales,
         },
@@ -378,7 +378,7 @@ export function computePulsoCards(input: PulsoInput): { visible: PulsoCard[]; to
       const metaPct = peorZona.cumplimiento_pct ?? 0
       const vendZona = vendorAnalysis
         .filter(v => peorZona.vendedores.includes(v.vendedor))
-        .map(v => ({ vendedor: v.vendedor, estado: v.riesgo, metaPct: v.cumplimiento_pct ?? null, varPct: v.variacion_ytd_pct ?? null }))
+        .map(v => ({ vendedor: v.vendedor, estado: v.riesgo, metaPct: v.cumplimiento_pct ?? null, varPct: v.variacion_ytd_usd_pct ?? v.variacion_ytd_uds_pct ?? null }))
         .sort((a, b) => {
           const order: Record<string, number> = { critico: 0, riesgo: 1, ok: 2, superando: 3 }
           return (order[a.estado] ?? 2) - (order[b.estado] ?? 2)
@@ -413,7 +413,7 @@ export function computePulsoCards(input: PulsoInput): { visible: PulsoCard[]; to
     if (lentoMov.length > 0) {
       const lentoProds = new Set(lentoMov.map(c => c.producto))
       // Find a dormido client whose historically purchased product is in slow-move inventory
-      for (const dormido of [...clientesDormidos].sort((a, b) => b.valor_historico - a.valor_historico)) {
+      for (const dormido of [...clientesDormidos].sort((a, b) => b.valor_yoy_usd - a.valor_yoy_usd)) {
         const clientSales = sales.filter(s => s.cliente === dormido.cliente && s.producto && lentoProds.has(s.producto))
         if (clientSales.length > 0) {
           const prodCounts = new Map<string, number>()

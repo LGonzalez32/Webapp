@@ -63,6 +63,9 @@ export interface SaleIndex {
   has_canal: boolean
   has_supervisor: boolean
   has_departamento: boolean
+  // [PR-M1] Flags para ingesta dual (unidades obligatoria, venta_neta opcional)
+  has_unidades: boolean
+  has_precio_unitario: boolean
 }
 
 function appendToMap<K>(map: Map<K, SaleRecord[]>, key: K, s: SaleRecord): void {
@@ -79,6 +82,8 @@ export function buildSaleIndex(sales: SaleRecord[]): SaleIndex {
   let fechaReferencia = new Date(0)
   let has_producto = false, has_cliente = false, has_venta_neta = false
   let has_categoria = false, has_canal = false, has_supervisor = false, has_departamento = false
+  // [PR-M1] has_unidades usa umbral ≥80% (métrica obligatoria); contamos aparte
+  let _filasConUnidades = 0
 
   for (const s of sales) {
     if (s.fecha > fechaReferencia) fechaReferencia = s.fecha
@@ -93,11 +98,16 @@ export function buildSaleIndex(sales: SaleRecord[]): SaleIndex {
     if (!has_canal && s.canal != null && s.canal !== '') has_canal = true
     if (!has_supervisor && s.supervisor != null && s.supervisor !== '') has_supervisor = true
     if (!has_departamento && s.departamento != null && s.departamento !== '') has_departamento = true
+    if (s.unidades > 0) _filasConUnidades++
   }
+
+  const has_unidades        = sales.length > 0 && (_filasConUnidades / sales.length) >= 0.8
+  const has_precio_unitario = has_unidades && has_venta_neta
 
   return {
     byPeriod, byVendor, byProduct, byClient, fechaReferencia,
     has_producto, has_cliente, has_venta_neta, has_categoria, has_canal, has_supervisor, has_departamento,
+    has_unidades, has_precio_unitario,
   }
 }
 
@@ -260,7 +270,14 @@ const safePct = (num: number, den: number): number => {
 function computeYTD(
   sales: SaleRecord[],
   fechaReferencia: Date
-): { ytd_actual: number; ytd_anterior: number; ytd_actual_neto?: number; ytd_anterior_neto?: number; variacion_ytd_pct: number | null } {
+): {
+  ytd_actual_uds: number
+  ytd_anterior_uds: number
+  variacion_ytd_uds_pct: number | null
+  ytd_actual_usd?: number
+  ytd_anterior_usd?: number
+  variacion_ytd_usd_pct?: number | null
+} {
   const yearActual = fechaReferencia.getFullYear()
   const startActual = new Date(yearActual, 0, 1)
   const startAnterior = new Date(yearActual - 1, 0, 1)
@@ -270,18 +287,29 @@ function computeYTD(
   const salesActual   = sales.filter((s) => s.fecha >= startActual && s.fecha <= fechaReferencia)
   const salesAnterior = sales.filter((s) => s.fecha >= startAnterior && s.fecha <= endAnterior)
 
-  const ytd_actual   = salesActual.reduce((a, s) => a + s.unidades, 0)
-  const ytd_anterior = salesAnterior.reduce((a, s) => a + s.unidades, 0)
+  const ytd_actual_uds   = salesActual.reduce((a, s) => a + s.unidades, 0)
+  const ytd_anterior_uds = salesAnterior.reduce((a, s) => a + s.unidades, 0)
 
-  const variacion_ytd_pct = ytd_anterior > 0 ? safePct(ytd_actual, ytd_anterior) : null
+  const variacion_ytd_uds_pct = ytd_anterior_uds > 0 ? safePct(ytd_actual_uds, ytd_anterior_uds) : null
 
-  // Neto: solo si hay registros con venta_neta
+  // USD: solo si hay registros con venta_neta
   const hasNetoActual   = salesActual.some((s) => s.venta_neta != null && s.venta_neta > 0)
   const hasNetoAnterior = salesAnterior.some((s) => s.venta_neta != null && s.venta_neta > 0)
-  const ytd_actual_neto   = hasNetoActual   ? salesActual.reduce((a, s) => a + (s.venta_neta ?? 0), 0)   : undefined
-  const ytd_anterior_neto = hasNetoAnterior ? salesAnterior.reduce((a, s) => a + (s.venta_neta ?? 0), 0) : undefined
+  const ytd_actual_usd   = hasNetoActual   ? salesActual.reduce((a, s) => a + (s.venta_neta ?? 0), 0)   : undefined
+  const ytd_anterior_usd = hasNetoAnterior ? salesAnterior.reduce((a, s) => a + (s.venta_neta ?? 0), 0) : undefined
+  const variacion_ytd_usd_pct =
+    ytd_actual_usd != null && ytd_anterior_usd != null && ytd_anterior_usd > 0
+      ? safePct(ytd_actual_usd, ytd_anterior_usd)
+      : null
 
-  return { ytd_actual, ytd_anterior, ytd_actual_neto, ytd_anterior_neto, variacion_ytd_pct }
+  return {
+    ytd_actual_uds,
+    ytd_anterior_uds,
+    variacion_ytd_uds_pct,
+    ytd_actual_usd,
+    ytd_anterior_usd,
+    variacion_ytd_usd_pct,
+  }
 }
 
 // Accepts pre-grouped vendor sales (only this vendor's records)
@@ -387,8 +415,8 @@ function analyzeVendor(
     else if (proyeccion_cierre < meta * 0.9) riesgo = 'riesgo'
     else if (proyeccion_cierre > meta * 1.05) riesgo = 'superando'
   } else {
-    const variacion_vs_anio = ytd.ytd_anterior > 0
-      ? ((ytd.ytd_actual - ytd.ytd_anterior) / ytd.ytd_anterior) * 100
+    const variacion_vs_anio = ytd.ytd_anterior_uds > 0
+      ? ((ytd.ytd_actual_uds - ytd.ytd_anterior_uds) / ytd.ytd_anterior_uds) * 100
       : null
     if (variacion_vs_anio !== null) {
       if (variacion_vs_anio < -20) riesgo = 'critico'
@@ -528,6 +556,7 @@ function calcFrecuenciaEsperada(sortedAsc: SaleRecord[]): number | null {
 function computeClientesDormidos(
   sales: SaleRecord[],
   threshold: number,
+  selectedPeriod: { year: number; month: number },
   byClient?: Map<string, SaleRecord[]>,
 ): ClienteDormido[] {
   const today = sales.length > 0
@@ -543,9 +572,13 @@ function computeClientesDormidos(
     return m
   })()
 
+  // YoY reference window: same month of previous year (R53/R58)
+  const yoyYear = selectedPeriod.year - 1
+  const yoyMonth = selectedPeriod.month
+
   type DormidoRaw = {
     cliente: string; vendedor: string; ultima_compra: Date; dias_sin_actividad: number
-    valor_historico: number; compras_historicas: number
+    valor_yoy_usd: number; transacciones_yoy: number; _compras_total: number
     frecuencia_promedio: number; frecuencia_esperada: number | null; threshold_efectivo: number
     meses_distintos: number; meses_historial: number
   }
@@ -571,7 +604,11 @@ function computeClientesDormidos(
       vendedorCount[r.vendedor] = (vendedorCount[r.vendedor] ?? 0) + 1
     }
     const vendedor = Object.entries(vendedorCount).sort(([, a], [, b]) => b - a)[0][0]
-    const valor_historico = records.reduce((a, s) => a + (s.venta_neta ?? s.unidades), 0)
+
+    // valor_yoy_usd: what the client bought in the same month of previous year (R58)
+    const yoyRecords = records.filter(r => r.fecha.getFullYear() === yoyYear && r.fecha.getMonth() === yoyMonth)
+    const valor_yoy_usd = yoyRecords.reduce((a, s) => a + (s.venta_neta ?? s.unidades), 0)
+    const transacciones_yoy = yoyRecords.length
 
     let frecuencia_promedio = 0
     if (sortedAsc.length >= 2) {
@@ -592,7 +629,7 @@ function computeClientesDormidos(
 
     candidates.push({
       cliente, vendedor, ultima_compra, dias_sin_actividad,
-      valor_historico, compras_historicas: records.length,
+      valor_yoy_usd, transacciones_yoy, _compras_total: records.length,
       frecuencia_promedio, frecuencia_esperada, threshold_efectivo,
       meses_distintos, meses_historial,
     })
@@ -600,13 +637,13 @@ function computeClientesDormidos(
 
   if (candidates.length === 0) return []
 
-  const maxValor = Math.max(...candidates.map(c => c.valor_historico))
+  const maxValor = Math.max(...candidates.map(c => c.valor_yoy_usd), 1)
 
   const dormidos: ClienteDormido[] = candidates.map(c => {
-    const frecuencia_score = c.frecuencia_promedio === 0 || c.compras_historicas < 2
+    const frecuencia_score = c.frecuencia_promedio === 0 || c._compras_total < 2
       ? 0.3
       : Math.max(0, 1 - (c.dias_sin_actividad / (c.frecuencia_promedio * 3)))
-    const valor_score = maxValor > 0 ? c.valor_historico / maxValor : 0
+    const valor_score = maxValor > 0 ? c.valor_yoy_usd / maxValor : 0
     // recencia_score uses dynamic threshold instead of fixed 180
     const recencia_score = Math.max(0, 1 - (c.dias_sin_actividad / (c.threshold_efectivo * 2)))
     const estabilidad_score = Math.min(1, c.meses_distintos / c.meses_historial)
@@ -621,7 +658,7 @@ function computeClientesDormidos(
       : 'perdido'
 
     let recovery_explicacion: string
-    if (c.frecuencia_promedio >= 2 && c.compras_historicas >= 2) {
+    if (c.frecuencia_promedio >= 2 && c._compras_total >= 2) {
       recovery_explicacion = `Compraba cada ${Math.round(c.frecuencia_promedio)} días, lleva ${c.dias_sin_actividad} sin comprar`
     } else if (c.meses_distintos >= 3) {
       recovery_explicacion = `Activo ${c.meses_distintos} de ${c.meses_historial} meses, ${c.dias_sin_actividad} días inactivo`
@@ -632,19 +669,19 @@ function computeClientesDormidos(
 
     return {
       cliente: c.cliente, vendedor: c.vendedor, ultima_compra: c.ultima_compra,
-      dias_sin_actividad: c.dias_sin_actividad, valor_historico: c.valor_historico,
-      compras_historicas: c.compras_historicas, recovery_score, recovery_label, recovery_explicacion,
+      dias_sin_actividad: c.dias_sin_actividad, valor_yoy_usd: c.valor_yoy_usd,
+      transacciones_yoy: c.transacciones_yoy, recovery_score, recovery_label, recovery_explicacion,
       frecuencia_esperada_dias: c.frecuencia_esperada !== null ? Math.round(c.frecuencia_esperada) : null,
       threshold_usado: c.threshold_efectivo,
     }
   })
 
-  const maxValorD = Math.max(...dormidos.map(c => c.valor_historico), 1)
+  const maxValorD = Math.max(...dormidos.map(c => c.valor_yoy_usd), 1)
 
   const scored = dormidos.map(c => ({
     ...c,
     _priority_score:
-      (c.valor_historico / maxValorD) * 0.6 +
+      (c.valor_yoy_usd / maxValorD) * 0.6 +
       (c.recovery_score / 100) * 0.4
   }))
 
@@ -821,7 +858,7 @@ export function computeCommercialAnalysis(
 
   const hasCliente = idx.byClient.size > 0
   const clientesDormidos = hasCliente
-    ? computeClientesDormidos(sales, config.dias_dormido_threshold, idx.byClient)
+    ? computeClientesDormidos(sales, config.dias_dormido_threshold, selectedPeriod, idx.byClient)
     : []
 
   const concentracionRiesgo = hasCliente
@@ -897,8 +934,12 @@ export function computeCommercialAnalysis(
     dias_totales: diasTotales,
     dias_restantes: diasRestantes,
     ...(() => {
-      const { ytd_actual, ytd_anterior, variacion_ytd_pct } = computeYTD(sales, fechaReferencia)
-      return { ytd_actual_equipo: ytd_actual, ytd_anterior_equipo: ytd_anterior, variacion_ytd_equipo: variacion_ytd_pct }
+      const { ytd_actual_uds, ytd_anterior_uds, variacion_ytd_uds_pct } = computeYTD(sales, fechaReferencia)
+      return {
+        ytd_actual_equipo_uds: ytd_actual_uds,
+        ytd_anterior_equipo_uds: ytd_anterior_uds,
+        variacion_ytd_equipo_uds_pct: variacion_ytd_uds_pct,
+      }
     })(),
     ...(metaCerradaTotal > 0 ? {
       meta_cerrada_total: metaCerradaTotal,
@@ -1114,8 +1155,8 @@ export function analyzeSupervisor(
 
     const supervisorSales = vendores.flatMap((v) => index.byVendor.get(v) ?? [])
 
-    const ytd_actual  = supervisorSales.filter((s) => s.fecha >= startYTDActual && s.fecha <= fr).reduce((a, s) => a + s.unidades, 0)
-    const ytd_anterior = supervisorSales.filter((s) => s.fecha >= startYTDAnterior && s.fecha <= endYTDAnterior).reduce((a, s) => a + s.unidades, 0)
+    const ytd_actual_uds  = supervisorSales.filter((s) => s.fecha >= startYTDActual && s.fecha <= fr).reduce((a, s) => a + s.unidades, 0)
+    const ytd_anterior_uds = supervisorSales.filter((s) => s.fecha >= startYTDAnterior && s.fecha <= endYTDAnterior).reduce((a, s) => a + s.unidades, 0)
 
     const ventas_prev = supervisorSales.filter((s) => s.fecha >= prevYearStart && s.fecha <= prevYearEnd).reduce((a, s) => a + s.unidades, 0)
     const variacion_pct = safePct(ventas_periodo, ventas_prev)
@@ -1150,7 +1191,7 @@ export function analyzeSupervisor(
       supervisor, vendedores: vendores, ventas_periodo, meta_zona, cumplimiento_pct,
       proyeccion_cierre, variacion_pct,
       vendedores_criticos, vendedores_riesgo, vendedores_ok, vendedores_superando,
-      riesgo_zona, ytd_actual, ytd_anterior,
+      riesgo_zona, ytd_actual_uds, ytd_anterior_uds,
     })
   }
 
@@ -1453,7 +1494,9 @@ export interface DepartamentoSummary {
   udsCur: number
   ventaPrev: number
   udsPrev: number
-  varPct: number | null
+  varPct: number | null     // active metric (hasVenta → usd, else uds)
+  varPct_usd: number | null // R55: always USD-based
+  varPct_uds: number | null // R55: always UDS-based
   clientesActivos: number
   vendedores: number
   productos: number
@@ -1748,9 +1791,9 @@ export function buildAggregatedSummaries(
   // --- Build departamento summaries ---
   const departamentoSummaries: DepartamentoSummary[] = []
   for (const [nombre, dp] of departamentoMap) {
-    const metricCur = hasVenta ? dp.totalCur : dp.udsCur
-    const metricPrev = hasVenta ? dp.totalPrev : dp.udsPrev
-    const varPct = metricPrev > 0 ? ((metricCur - metricPrev) / metricPrev) * 100 : null
+    const varPct_usd = dp.totalPrev > 0 ? ((dp.totalCur - dp.totalPrev) / dp.totalPrev) * 100 : null
+    const varPct_uds = dp.udsPrev > 0 ? ((dp.udsCur - dp.udsPrev) / dp.udsPrev) * 100 : null
+    const varPct = hasVenta ? varPct_usd : varPct_uds
     departamentoSummaries.push({
       nombre,
       ventaCur: dp.totalCur,
@@ -1758,6 +1801,8 @@ export function buildAggregatedSummaries(
       ventaPrev: dp.totalPrev,
       udsPrev: dp.udsPrev,
       varPct,
+      varPct_usd,
+      varPct_uds,
       clientesActivos: dp.clientes.size,
       vendedores: dp.vendedores.size,
       productos: dp.productos.size,
