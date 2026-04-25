@@ -7,8 +7,8 @@
 
 - FastAPI 0.110 sobre Python 3.11
 - Endpoints bajo `/api/v1`: `health`, `chat` (DeepSeek proxy), `forecast` (ETS/SARIMA/Ensemble con statsmodels)
-- ⚠️ **`forecast.py` rompe al arrancar** por imports faltantes (`forecast_models`, `forecast_engine`). Comentar su inclusión en `main.py` si se quiere levantar el server.
-- Última revisión: 17 abril 2026
+- Estructura: `app/models/forecast_models.py` y `app/services/forecast_engine.py` existen y exportan los símbolos esperados; el endpoint `forecast` arranca sin imports rotos.
+- El frontend no consume `forecast` todavía: las páginas de rendimiento/forecast usan datos del store, no del backend.
 
 ## Cómo levantarlo localmente (si alguien lo necesita)
 
@@ -37,11 +37,14 @@ docker run -p 8000:8000 --env-file .env salesflow-forecast
 
 ## Qué ES parte activa del proyecto
 
-Todo el motor de insights vive en `/src/lib/`:
-- `insight-engine.ts` — motor nuevo (activo)
-- `diagnostic-engine.ts` — motor viejo (en proceso de absorción por Frente Z.2)
-- `insightStandard.ts` — estándares compartidos
-- `domain-aggregations.ts` — agregaciones de ventas (R102)
-- `diagnostic-actions.ts` — sanitizadores narrativos R68–R101
+Todo el motor de insights vive en `/src/lib/`. Para el detalle ver
+`docs/MANIFIESTO-MOTOR-INSIGHTS.md` y `docs/GLOSARIO-MOTOR-INSIGHTS.md`.
+Resumen rápido:
+
+- `insight-engine.ts` — pipeline canónico (detectores → ranker/cap → gate)
+- `insightStandard.ts` — gate canónico Z.12 (`evaluateInsightCandidate`)
+- `decision-engine.ts` — chains + executive compression Z.9
+- `domain-aggregations.ts` — agregaciones de ventas
+- `narrative-builder.ts` / `diagnostic-actions.ts` — narrativa + sanitizadores
 
 Nada aquí depende del backend Python.

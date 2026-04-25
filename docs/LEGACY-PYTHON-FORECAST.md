@@ -41,7 +41,7 @@ backend/
 |---|---|---|---|
 | GET | `/api/v1/health` | routes/health.py | ✅ funcional |
 | POST | `/api/v1/chat` | routes/chat.py | ⚠️ requiere `DEEPSEEK_API_KEY` — falla con `503 CONFIG_MISSING` si falta |
-| POST | `/api/v1/forecast` | routes/forecast.py | ❌ **rompe al arrancar** — importa `...models.forecast_models` y `...services.forecast_engine` que **no existen** |
+| POST | `/api/v1/forecast` | routes/forecast.py | ⚠️ **arranca pero no consumido por el frontend.** `app/models/forecast_models.py` y `app/services/forecast_engine.py` existen y exportan los símbolos esperados. Falta validación end-to-end + integración con el frontend. |
 
 ### 1.4 Contrato `/api/v1/forecast` (según firma en routes/forecast.py)
 
@@ -80,12 +80,12 @@ Variables esperadas por `Settings`:
 
 ## 2. Qué falta para conectar al frontend
 
-### 2.1 Backend (bloqueantes)
+### 2.1 Backend (estado actual — abril 2026)
 
-1. **Crear `/backend/app/models/forecast_models.py`** con `ForecastRequest` y `ForecastResponse` Pydantic.
-2. **Crear `/backend/app/services/forecast_engine.py`** exportando `run_forecast(inventory, sales, horizon_months)` que implemente ETS/SARIMA/Ensemble vía statsmodels.
-3. **Escribir tests** en `/backend/tests/` (hoy no existe el directorio).
-4. **Persistir forecasts** (opcional): decidir si se guardan en Supabase o son stateless.
+1. ✅ `/backend/app/models/forecast_models.py` existe con los Pydantic models.
+2. ✅ `/backend/app/services/forecast_engine.py` existe con la implementación ETS/SARIMA/Ensemble vía statsmodels (más helpers en `arima_model.py`, `ets_model.py`, `ensemble.py`, `model_selector.py`, `outlier_detector.py`, `feature_engineer.py`).
+3. ⚠️ Tests: `/backend/tests/` existe pero la cobertura del path forecast es parcial. Validar manualmente con `curl POST /api/v1/forecast` antes de cualquier integración.
+4. ⏳ **Persistir forecasts** (opcional): decidir si se guardan en Supabase o son stateless.
 
 ### 2.2 Frontend (no existe nada)
 
@@ -119,8 +119,8 @@ Variables esperadas por `Settings`:
 
 ## 5. Criterios para retomar
 
-- [ ] Implementar `forecast_models.py` y `forecast_engine.py` en backend (hoy forecast.py rompe al arrancar por imports faltantes).
-- [ ] Endpoint `/api/v1/forecast` responde con SKUs pronosticados y accuracy.
+- [x] `forecast_models.py` y `forecast_engine.py` ya existen en backend (verificado abril 2026; el endpoint arranca sin imports rotos).
+- [ ] Validar end-to-end que `/api/v1/forecast` responde con SKUs pronosticados y accuracy contra dataset de prueba.
 - [ ] Backend deployado y accesible (dev: `localhost:8000`, prod: dominio con CORS correcto).
 - [ ] Decisión UX: ¿forecast Python reemplaza al local o convive como opción de mayor precisión?
 - [ ] Presupuesto de latencia definido (máximo aceptable por card, estrategia de skeleton).
@@ -141,11 +141,11 @@ Variables esperadas por `Settings`:
 
 ## 7. Riesgos conocidos
 
-1. **`forecast.py` rompe al arrancar el backend** — imports `forecast_models` y `forecast_engine` no existen. Quien arranque `uvicorn main:app` hoy verá ImportError. Solución inmediata si alguien necesita que arranque: comentar `app.include_router(forecast.router, ...)` en `main.py`.
+1. **Cobertura de tests parcial** — `/backend/tests/` existe pero no garantiza que `forecast` esté validado contra inputs realistas. Cualquier retoma debe empezar por escribir tests de contrato y golden-master del response.
 2. **`chat.py` depende de DeepSeek** — vendor lock-in con una API externa. Revisar si se quiere abstraer a interfaz neutral antes de conectarlo.
 3. **Supabase service_key en `Settings`** — si se filtra, compromiso total de la BD. No commitear `.env`, no exponer en logs.
 4. **Divergencia de versiones:** statsmodels 0.14.1 es de inicios 2024. Revisar CVEs y actualizaciones antes de reactivar.
-5. **Sin tests:** `pytest` está en requirements pero `/backend/tests/` no existe. Cualquier retoma debe empezar por escribir tests de contrato.
+5. **Sin contrato OpenAPI/Zod compartido** — el frontend y backend no comparten una fuente de verdad de tipos. Antes de conectar, idealmente generar tipos TS desde el OpenAPI del FastAPI.
 
 ---
 
