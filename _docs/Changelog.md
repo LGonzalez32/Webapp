@@ -1,7 +1,15 @@
 ---
 title: Changelog
-tags: [changelog]
+tags: [changelog, deprecated]
 updated: 2026-03-29
+deprecated: true
+---
+
+> ⚠️ **DEPRECATED. Última entrada: v2.5 (29 marzo 2026).**
+> El historial post-Z.5 (Z.6, Z.7, Z.9, Z.10, Z.11, Z.12, Z.13 y refactor Fases 0–7 del motor) vive en:
+> - [`docs/historico/MANIFIESTO-MOTOR-INSIGHTS-Z9-Z13-HISTORICO.md`](../docs/historico/MANIFIESTO-MOTOR-INSIGHTS-Z9-Z13-HISTORICO.md) — historial detallado del motor.
+> - `git log --oneline` — historial de commits.
+
 ---
 
 # Changelog

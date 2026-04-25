@@ -1,3 +1,12 @@
+> ⚠️ **ARCHIVO HISTÓRICO. No es fuente de verdad.**
+> Para el contrato vigente del motor de insights ver:
+> - [`docs/MANIFIESTO-MOTOR-INSIGHTS.md`](../MANIFIESTO-MOTOR-INSIGHTS.md) — pipeline + reglas vigentes (v3.0.0+).
+> - [`docs/GLOSARIO-MOTOR-INSIGHTS.md`](../GLOSARIO-MOTOR-INSIGHTS.md) — "dónde va cada cosa".
+>
+> Este archivo se preserva como referencia consultable de la evolución del motor entre fases Z.0 y Z.13. Algunas afirmaciones aquí son obsoletas (ej. `EXECUTIVE_COMPRESSION_ENABLED=false`, `diagnostic-engine.ts` como archivo activo, `forecast.py rompe al arrancar`); ya están corregidas en las fuentes vigentes.
+
+---
+
 # 📘 MANIFIESTO DEL MOTOR DE INSIGHTS — SalesFlow
 
 **Versión:** 2.6.0 (Fase Z.8 — Motor 2: detectores estadísticos Metric × Dimension × InsightType)

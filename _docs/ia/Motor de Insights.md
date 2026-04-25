@@ -1,7 +1,19 @@
 ---
 title: Motor de Insights
-tags: [ia, insights, analisis]
+tags: [ia, insights, analisis, deprecated]
 updated: 2026-03-29
+deprecated: true
+---
+
+> ⚠️ **DEPRECATED. No es fuente de verdad.**
+> Este archivo describe el motor en estado pre-Z.5 (22 detectores, archivo `insightEngine.ts` camelCase).
+> El motor vigente vive en `src/lib/insight-engine.ts` (con guión) con ~26 detectores agrupados en 7 categorías.
+>
+> Fuentes canónicas:
+> - [`docs/MANIFIESTO-MOTOR-INSIGHTS.md`](../../docs/MANIFIESTO-MOTOR-INSIGHTS.md) — pipeline + reglas + baseline operacional.
+> - [`docs/GLOSARIO-MOTOR-INSIGHTS.md`](../../docs/GLOSARIO-MOTOR-INSIGHTS.md) — "dónde va cada cosa".
+> - `src/lib/insightStandard.ts` — gate canónico pass/fail (Fase 6A en adelante).
+
 ---
 
 # Motor de Insights — 22 Detectores

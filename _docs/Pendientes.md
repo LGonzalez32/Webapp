@@ -1,7 +1,14 @@
 ---
 title: Pendientes
-tags: [roadmap, pendientes]
+tags: [roadmap, pendientes, deprecated]
 updated: 2026-03-29
+deprecated: true
+---
+
+> ⚠️ **DEPRECATED. Estancado en marzo 2026.**
+> Roadmap vivo del motor de insights y reglas de desarrollo: [`CLAUDE.md`](../CLAUDE.md).
+> Item "Rotar API key DeepSeek" sigue siendo válido al 2026-04-24 (pendiente de cierre por el owner del proyecto). El resto de items refleja estado pre-Z.5 y puede estar superado.
+
 ---
 
 # Pendientes — Roadmap Técnico
