@@ -688,6 +688,10 @@ export interface ClienteContexto {
   varPct: number
   varAbs: number
   topProductosCaida: Array<{ producto: string; caidaAbs: number }>
+  /** [Fase 7.4] Simétrico a topProductosCaida: productos donde el delta es positivo.
+   *  Usado por enriquecerCandidate para narrar candidatos con dirección 'up' sin
+   *  contradecirse ("El crecimiento se concentra en X y Y"). */
+  topProductosCrecimiento: Array<{ producto: string; crecimientoAbs: number }>
   vendedorPrincipal: string | null
   departamento: string | null
 }
@@ -711,6 +715,12 @@ export function buildClienteContexto(cliente: string, cross: CrossTables): Clien
     .sort((a, b) => a.delta - b.delta)
     .slice(0, 5)
     .map((d) => ({ producto: d.key, caidaAbs: Math.abs(d.delta) }))
+  // [Fase 7.4] Simétrico para candidatos con dirección 'up'.
+  const topProductosCrecimiento = deltasProd
+    .filter((d) => d.delta > 0)
+    .sort((a, b) => b.delta - a.delta)
+    .slice(0, 5)
+    .map((d) => ({ producto: d.key, crecimientoAbs: d.delta }))
 
   let vendedorPrincipal: string | null = null
   if (actual && actual.vendors.size > 0) {
@@ -734,6 +744,7 @@ export function buildClienteContexto(cliente: string, cross: CrossTables): Clien
     varPct,
     varAbs,
     topProductosCaida,
+    topProductosCrecimiento,
     vendedorPrincipal,
     departamento,
   }
@@ -756,6 +767,10 @@ export interface EnrichInput {
   member: string
   descripcion: string
   baseDetail: Record<string, unknown>
+  /** [Fase 7.4] Dirección del candidato (estadístico Z.9.2: 'up'/'down'/'neutral').
+   *  Usada para elegir la fraseología auxiliar coherente con el título. Cuando
+   *  ausente, omitimos la frase direction-sensitive para evitar contradicciones. */
+  direction?: 'up' | 'down' | 'neutral'
 }
 
 export interface EnrichOutput {
@@ -828,13 +843,31 @@ export function enriquecerCandidate(
         parts.push(`El departamento ${ctx.departamentoMasAfectado.nombre} es el más afectado.`)
       }
     } else if (dimensionId === 'cliente') {
-      if (ctx.topProductosCaida && ctx.topProductosCaida.length > 0) {
-        const top = ctx.topProductosCaida
-          .slice(0, 2)
-          .map((p: any) => p.producto)
-          .join(' y ')
-        parts.push(`La caída se concentra en ${top}.`)
+      // [Fase 7.4] Direction-aware: la frase auxiliar debe coincidir con la
+      // dirección del CANDIDATO, no con la variación de venta del cliente
+      // (varPct). El cliente puede estar creciendo overall mientras el
+      // candidato describe un detalle negativo (frecuencia baja, churn) y
+      // viceversa. Cuando direction está ausente, omitimos la frase para
+      // evitar reintroducir la contradicción que motivó este fix.
+      const direction = candidate.direction
+      if (direction === 'up') {
+        if (ctx.topProductosCrecimiento && ctx.topProductosCrecimiento.length > 0) {
+          const top = ctx.topProductosCrecimiento
+            .slice(0, 2)
+            .map((p: any) => p.producto)
+            .join(' y ')
+          parts.push(`El crecimiento se concentra en ${top}.`)
+        }
+      } else if (direction === 'down') {
+        if (ctx.topProductosCaida && ctx.topProductosCaida.length > 0) {
+          const top = ctx.topProductosCaida
+            .slice(0, 2)
+            .map((p: any) => p.producto)
+            .join(' y ')
+          parts.push(`La caída se concentra en ${top}.`)
+        }
       }
+      // direction ausente o 'neutral': omitir frase auxiliar.
       if (ctx.departamento && ctx.vendedorPrincipal) {
         parts.push(`Cliente atendido por ${ctx.vendedorPrincipal} en ${ctx.departamento}.`)
       }

@@ -54,7 +54,7 @@ function makeDownVendedor(member: string, impacto: number): InsightCandidate {
     time_scope:          'ytd',
     impacto_valor:       -impacto,
     impacto_pct:         -12,
-    root_problem_key:    'down:vendedor:ytd',
+    root_problem_key:    'down:vendedor:longitudinal',
     render_priority_score: impacto / 10_000,
     description: `${member} registró una caída de $${impacto.toLocaleString()} en YTD.`,
   })
@@ -68,9 +68,34 @@ describe('buildRootProblemKey', () => {
     expect(buildRootProblemKey(c)).toBe('neutral:vendedor:unknown')
   })
 
-  it('genera clave correcta con campos hidratados', () => {
+  // [Z.9.6] time_scope crudo se proyecta a familia temporal:
+  //   mtd / monthly  → current
+  //   ytd / rolling  → longitudinal
+  //   seasonal       → seasonal
+  //   default        → unknown
+  it('mtd → current', () => {
+    const c = makeCandidate({ direction: 'down', time_scope: 'mtd' })
+    expect(buildRootProblemKey(c)).toBe('down:vendedor:current')
+  })
+
+  it('monthly → current', () => {
+    const c = makeCandidate({ direction: 'down', time_scope: 'monthly' })
+    expect(buildRootProblemKey(c)).toBe('down:vendedor:current')
+  })
+
+  it('ytd → longitudinal', () => {
     const c = makeCandidate({ direction: 'down', time_scope: 'ytd' })
-    expect(buildRootProblemKey(c)).toBe('down:vendedor:ytd')
+    expect(buildRootProblemKey(c)).toBe('down:vendedor:longitudinal')
+  })
+
+  it('rolling → longitudinal', () => {
+    const c = makeCandidate({ direction: 'down', time_scope: 'rolling' })
+    expect(buildRootProblemKey(c)).toBe('down:vendedor:longitudinal')
+  })
+
+  it('seasonal → seasonal', () => {
+    const c = makeCandidate({ direction: 'up', time_scope: 'seasonal' })
+    expect(buildRootProblemKey(c)).toBe('up:vendedor:seasonal')
   })
 })
 
@@ -78,13 +103,13 @@ describe('buildRootProblemKey', () => {
 
 describe('sonInsightsRelacionables', () => {
   it('retorna false para el mismo objeto', () => {
-    const c = makeCandidate({ root_problem_key: 'down:vendedor:ytd' })
+    const c = makeCandidate({ root_problem_key: 'down:vendedor:longitudinal' })
     expect(sonInsightsRelacionables(c, c)).toBe(false)
   })
 
   it('retorna true si comparten root_problem_key', () => {
-    const a = makeCandidate({ root_problem_key: 'down:vendedor:ytd' })
-    const b = makeCandidate({ root_problem_key: 'down:vendedor:ytd', member: 'Otro' })
+    const a = makeCandidate({ root_problem_key: 'down:vendedor:longitudinal' })
+    const b = makeCandidate({ root_problem_key: 'down:vendedor:longitudinal', member: 'Otro' })
     expect(sonInsightsRelacionables(a, b)).toBe(true)
   })
 
@@ -95,8 +120,8 @@ describe('sonInsightsRelacionables', () => {
   })
 
   it('retorna false si difieren en dirección y key', () => {
-    const a = makeCandidate({ direction: 'down', root_problem_key: 'down:vendedor:ytd' })
-    const b = makeCandidate({ direction: 'up',   root_problem_key: 'up:vendedor:ytd', member: 'Otro' })
+    const a = makeCandidate({ direction: 'down', root_problem_key: 'down:vendedor:longitudinal' })
+    const b = makeCandidate({ direction: 'up',   root_problem_key: 'up:vendedor:longitudinal', member: 'Otro' })
     expect(sonInsightsRelacionables(a, b)).toBe(false)
   })
 })
@@ -132,8 +157,8 @@ describe('buildInsightChains', () => {
 
   it('no conecta candidatos con root_problem_key diferentes', () => {
     const candidates = [
-      makeCandidate({ member: 'A', root_problem_key: 'down:vendedor:ytd', direction: 'down' }),
-      makeCandidate({ member: 'B', root_problem_key: 'up:producto:mtd',   direction: 'up' }),
+      makeCandidate({ member: 'A', root_problem_key: 'down:vendedor:longitudinal', direction: 'down' }),
+      makeCandidate({ member: 'B', root_problem_key: 'up:producto:current', direction: 'up' }),
     ]
     const chains = buildInsightChains(candidates)
     // Dos keys distintas → grupos separados de 1 → ninguna chain
@@ -213,8 +238,8 @@ describe('buildExecutiveProblems', () => {
 
   it('no rompe cuando impacto_valor es null en todos los candidatos', () => {
     const candidates = [
-      makeCandidate({ member: 'A', root_problem_key: 'down:vendedor:ytd', direction: 'down', impacto_valor: null }),
-      makeCandidate({ member: 'B', root_problem_key: 'down:vendedor:ytd', direction: 'down', impacto_valor: null }),
+      makeCandidate({ member: 'A', root_problem_key: 'down:vendedor:longitudinal', direction: 'down', impacto_valor: null }),
+      makeCandidate({ member: 'B', root_problem_key: 'down:vendedor:longitudinal', direction: 'down', impacto_valor: null }),
     ]
     const chains = buildInsightChains(candidates)
     expect(() => buildExecutiveProblems(chains, candidates)).not.toThrow()
@@ -299,11 +324,11 @@ describe('buildExecutiveProblems', () => {
     const sharedText = 'La venta cayó 15% respecto al período anterior.'
     const pool = [
       makeCandidate({ member: 'A', direction: 'down', time_scope: 'ytd', impacto_valor: -20_000,
-        root_problem_key: 'down:vendedor:ytd', render_priority_score: 2.0,
+        root_problem_key: 'down:vendedor:longitudinal', render_priority_score: 2.0,
         description: sharedText,
         supporting_evidence: [sharedText, 'Otro dato relevante distinto.'] }),
       makeCandidate({ member: 'B', direction: 'down', time_scope: 'ytd', impacto_valor: -10_000,
-        root_problem_key: 'down:vendedor:ytd', render_priority_score: 1.0,
+        root_problem_key: 'down:vendedor:longitudinal', render_priority_score: 1.0,
         description: 'B cayó en clientes clave.', supporting_evidence: [] }),
     ]
     const chains   = buildInsightChains(pool)
@@ -321,10 +346,10 @@ describe('buildExecutiveProblems', () => {
     // impacto $133 vs base $155k = 0.086% → below_floor → debe ser filtrado
     const pool = [
       makeCandidate({ member: 'A', direction: 'down', time_scope: 'ytd', impacto_valor: -100,
-        root_problem_key: 'down:vendedor:ytd', render_priority_score: 0.3,
+        root_problem_key: 'down:vendedor:longitudinal', render_priority_score: 0.3,
         score: 0.3, description: 'Caída menor detectada.' }),
       makeCandidate({ member: 'B', direction: 'down', time_scope: 'ytd', impacto_valor: -33,
-        root_problem_key: 'down:vendedor:ytd', render_priority_score: 0.2,
+        root_problem_key: 'down:vendedor:longitudinal', render_priority_score: 0.2,
         score: 0.2, description: 'Reducción pequeña.' }),
     ]
     const ctx: MaterialityContext = {
@@ -344,10 +369,10 @@ describe('buildExecutiveProblems', () => {
   it('[R149-A] statistical_anomaly sola NO califica como ejecutivo', () => {
     const pool = [
       makeCandidate({ member: 'A', direction: 'down', time_scope: 'ytd', impacto_valor: -100,
-        root_problem_key: 'down:vendedor:ytd', render_priority_score: 0.9,
+        root_problem_key: 'down:vendedor:longitudinal', render_priority_score: 0.9,
         score: 0.9, description: 'Anomalía puntual detectada.' }),
       makeCandidate({ member: 'B', direction: 'down', time_scope: 'ytd', impacto_valor: -33,
-        root_problem_key: 'down:vendedor:ytd', render_priority_score: 0.85,
+        root_problem_key: 'down:vendedor:longitudinal', render_priority_score: 0.85,
         score: 0.85, description: 'Señal estadística alta.' }),
     ]
     const ctx: MaterialityContext = {
@@ -364,10 +389,10 @@ describe('buildExecutiveProblems', () => {
     // score alto Y impacto material (>2% del período)
     const pool = [
       makeCandidate({ member: 'A', direction: 'down', time_scope: 'ytd', impacto_valor: -8_000,
-        root_problem_key: 'down:vendedor:ytd', render_priority_score: 0.9,
+        root_problem_key: 'down:vendedor:longitudinal', render_priority_score: 0.9,
         score: 0.9, description: 'Caída con señal estadística alta.' }),
       makeCandidate({ member: 'B', direction: 'down', time_scope: 'ytd', impacto_valor: -3_000,
-        root_problem_key: 'down:vendedor:ytd', render_priority_score: 0.5,
+        root_problem_key: 'down:vendedor:longitudinal', render_priority_score: 0.5,
         score: 0.5, description: 'Caída secundaria.' }),
     ]
     const ctx: MaterialityContext = {

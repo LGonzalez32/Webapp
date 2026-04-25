@@ -2452,3 +2452,231 @@ export const ENTIDADES_NO_CANONICAS: readonly string[] = [
   'N/A',
   'n/a',
 ] as const
+
+// ─── Fase 6A — gate canónico pass/fail ────────────────────────────────────────
+// Movido desde insight-engine.ts:filtrarConEstandar (bloque Z.12).
+// Sin cambio funcional. La mutación `_z122_relaxed` y el push a `_Z12_suppressed`
+// (telemetría DEV) siguen viviendo en filtrarConEstandar — esta función es pura.
+//
+// crossCount se recibe pre-computado para no introducir dependencia circular
+// hacia _z11ContarCrossConcreto en insight-engine.ts.
+
+/**
+ * Forma estructural mínima de un candidato para el gate canónico.
+ * `InsightCandidate` (insight-engine.ts) la satisface por duck typing —
+ * importarlo desde acá causaría dependencia circular.
+ */
+export interface InsightGateCandidate {
+  insightTypeId: string
+  member:        string
+  title?:        string
+  description?:  string
+  accion?:       { texto?: string } | string | null
+  detail?:       Record<string, unknown>
+  impacto_usd_normalizado?: number | null
+  impacto_usd_source?: string | null
+  // [Fase 7.5-B] Campos requeridos por la excepción contribution-up.
+  // Aditivos: si están ausentes la excepción no aplica (fail-safe).
+  direction?:    'up' | 'down' | 'neutral'
+  score?:        number
+  severity?:     'CRITICA' | 'ALTA' | 'MEDIA' | 'BAJA'
+}
+
+export interface InsightGateContext {
+  /** Venta total del negocio en el período. Usado como denominador de materialidad. */
+  ventaTotalNegocio: number
+  /** Lista de entidades Pareto (80/20) calculada por el orquestador. */
+  paretoList: string[]
+  /** Cuenta de evidencia cruzada concreta del candidato. Pre-computado por el orquestador. */
+  crossCount: number
+}
+
+export type InsightGateRuleId =
+  | 'materiality'
+  | 'pareto'
+  | 'monetaryCoherence'
+  | 'narrativeCoherence'
+
+export interface InsightGateDecision {
+  passes: boolean
+  /** Razón sintética del fallo o del modo relajado. Útil para telemetría DEV. */
+  reason?: string
+  mode: 'strict' | 'relaxed' | 'fail'
+  rules: {
+    materiality:        boolean
+    pareto:             boolean
+    monetaryCoherence:  boolean
+    narrativeCoherence: boolean
+  }
+  /**
+   * [Fase 7.2] Lista de reglas que fallaron, en orden estable
+   * (materiality, pareto, monetaryCoherence, narrativeCoherence).
+   * Vacía si `passes === true`. Aditiva — `passes/mode/rules/reason` no cambian.
+   */
+  failedRules: InsightGateRuleId[]
+}
+
+// [Z.12] Tipos cuyo emisor garantiza estructura suficiente para pasar el gate
+// con menos del 1% de impacto USD (ver bi-nivel en evaluateInsightCandidate).
+const Z12_ROOT_STRONG_TYPES: ReadonlySet<string> = new Set([
+  'meta_gap_temporal',
+  'product_dead',
+  'migration',
+])
+
+// [Z.12] Sources de impacto_usd_normalizado considerados monetariamente coherentes.
+// `non_monetary` y `unavailable` quedan fuera por diseño.
+const Z12_VALID_USD_SOURCES: ReadonlySet<string> = new Set([
+  'gap_meta',
+  'cross_varAbs',
+  'recuperable',
+  'detail_monto',
+  'detail_magnitud',
+  'detail_totalCaida',
+  'cross_delta_yoy',
+])
+
+// [Z.11/Z.12] Frases que indican narrativa genérica — invalidan coherencia.
+const Z12_GENERIC_ACTION_RE =
+  /identificar\s+qu[eé]\s+cambi[oó]|comparar\s+con\s+el\s+per[ií]odo|aislar\s+la\s+causa|validar\s+patr[oó]n\s+detectado|monitorear\s+tendencia|revisar\s+el\s+comportamiento/i
+const Z12_GENERIC_DESC_RE =
+  /sugiere\s+mejora|podr[ií]a\s+indicar|posible\s+oportunidad|parece\s+haber/i
+
+/**
+ * Evaluación canónica pass/fail de un candidato bajo Z.12.
+ *
+ * Cuatro reglas en AND con puerta relajada (Z.12.2) cuando título+descripción
+ * son concretos y r1+r2+r3 están en verde — entonces se acepta acción vacía.
+ *
+ * Excepciones por diseño (root-strong + cross ≥ 2):
+ *   - tipos en Z12_ROOT_STRONG_TYPES con crossCount ≥ 2 pasan r1/r2/r3 con menor impacto.
+ *
+ * Pura — no muta candidato ni contexto.
+ */
+export function evaluateInsightCandidate(
+  c: InsightGateCandidate,
+  ctx: InsightGateContext,
+): InsightGateDecision {
+  const usdAbs = Math.abs(Number(c.impacto_usd_normalizado) || 0)
+  const ventaTotal = ctx.ventaTotalNegocio > 0 ? ctx.ventaTotalNegocio : 1
+  const floorAbsAlto = ventaTotal * MATERIALITY_FLOOR_EXECUTIVE             // 2%
+  const floorAbsBajo = ventaTotal * (MATERIALITY_FLOOR_EXECUTIVE / 2)       // 1%
+
+  const isRootStrong = Z12_ROOT_STRONG_TYPES.has(c.insightTypeId) && ctx.crossCount >= 2
+  const esParetoReal = !!c.member && esEntidadPareto(c.member, ctx.paretoList)
+
+  // Regla 1 — materialidad bi-nivel
+  //   ≥ 2% del negocio: pasa directo.
+  //   1–2%: pasa si además es Pareto real o root-strong.
+  //   < 1%: solo pasa si es root-strong.
+  const materiality =
+    usdAbs >= floorAbsAlto ||
+    (usdAbs >= floorAbsBajo && (esParetoReal || isRootStrong)) ||
+    isRootStrong
+
+  // Regla 2 — Pareto real del negocio. Si paretoList vacía, no bloqueamos.
+  const pareto =
+    esParetoReal ||
+    isRootStrong ||
+    ctx.paretoList.length === 0
+
+  // Regla 3 — coherencia monetaria (USD presente y source válido) o root-strong.
+  const hasUsd =
+    c.impacto_usd_normalizado != null && Number(c.impacto_usd_normalizado) !== 0
+  const validSource =
+    !!c.impacto_usd_source && Z12_VALID_USD_SOURCES.has(c.impacto_usd_source)
+  const monetaryCoherence = (hasUsd && validSource) || isRootStrong
+
+  // Regla 4 — coherencia narrativa.
+  //   estricto: título + descripción + acción concretos.
+  //   relajado: r1+r2+r3 verdes + título + descripción concretos → acepta acción vacía.
+  //   "+ Profundizar" en UI genera la acción manualmente cuando entra por relajado.
+  const tituloOk =
+    typeof c.title === 'string' && c.title.trim().length >= 6
+  const descOk =
+    typeof c.description === 'string' &&
+    c.description.trim().length >= 20 &&
+    esConclusionValida(c.description) &&
+    !Z12_GENERIC_DESC_RE.test(c.description)
+  const accionTxt = (
+    typeof c.accion === 'object' && c.accion !== null
+      ? (c.accion as { texto?: string }).texto ?? ''
+      : typeof c.accion === 'string'
+        ? c.accion
+        : ''
+  ).toString()
+  const accionOk = accionTxt.trim().length >= 10 && !Z12_GENERIC_ACTION_RE.test(accionTxt)
+
+  // [Fase 7.5-B] Excepción contribution+: rescata r2 (pareto) cuando un
+  // crecimiento positivo, material, de alta confianza y narrativa concreta
+  // falla solo por no ser entidad Pareto del pool. No relaja Pareto
+  // globalmente — la excepción es estrecha por construcción.
+  // Criterios (todos requeridos):
+  //   - insightTypeId === 'contribution'
+  //   - direction === 'up'
+  //   - score ≥ 0.95
+  //   - severity ∈ {ALTA, CRITICA}
+  //   - usd / ventaTotalNegocio ≥ 1%
+  //   - impacto_usd_source válido (mismas que r3)
+  //   - tituloOk + descOk (la narrativa básica debe ser concreta)
+  //   - accion puede ser null — entra por modo relaxed
+  const usdShareForException =
+    ctx.ventaTotalNegocio > 0 ? Math.abs(Number(c.impacto_usd_normalizado) || 0) / ctx.ventaTotalNegocio : 0
+  const _meetsContributionUpException =
+    !pareto && // sólo aplica si la única que falla es r2
+    materiality && monetaryCoherence &&
+    tituloOk && descOk &&
+    c.insightTypeId === 'contribution' &&
+    c.direction === 'up' &&
+    typeof c.score === 'number' && c.score >= 0.95 &&
+    (c.severity === 'ALTA' || c.severity === 'CRITICA') &&
+    usdShareForException >= 0.01
+
+  const paretoEffective = pareto || _meetsContributionUpException
+
+  const strictNarrative = tituloOk && descOk && accionOk
+  const relaxedNarrative =
+    materiality && paretoEffective && monetaryCoherence &&
+    tituloOk && descOk &&
+    !accionOk // sólo activa relaxed cuando accion falla
+
+  const narrativeCoherence = strictNarrative || relaxedNarrative
+
+  const passes = materiality && paretoEffective && monetaryCoherence && narrativeCoherence
+  const mode: InsightGateDecision['mode'] =
+    !passes ? 'fail' : (strictNarrative ? 'strict' : 'relaxed')
+
+  let reason: string | undefined
+  // [Fase 7.2] failedRules en orden estable. Refleja resultado EFECTIVO post-excepción
+  // (si la excepción rescató pareto, no aparece en failedRules).
+  // [Fase 7.5-B] rules.pareto sigue exponiendo el valor RAW para observabilidad.
+  const failedRules: InsightGateRuleId[] = []
+  if (!materiality)        failedRules.push('materiality')
+  if (!paretoEffective)    failedRules.push('pareto')
+  if (!monetaryCoherence)  failedRules.push('monetaryCoherence')
+  if (!narrativeCoherence) failedRules.push('narrativeCoherence')
+
+  if (!passes) {
+    reason = `failed:${failedRules.join(',')}`
+  } else if (_meetsContributionUpException) {
+    reason = 'relaxed:exception_contribution_up'
+  } else if (mode === 'relaxed') {
+    reason = 'relaxed:accion_vacia'
+  }
+
+  return {
+    passes,
+    reason,
+    mode,
+    rules: { materiality, pareto, monetaryCoherence, narrativeCoherence },
+    failedRules,
+  }
+}
+
+/** Shorthand de `evaluateInsightCandidate(c, ctx).passes`. */
+export function shouldInsightPass(
+  c: InsightGateCandidate,
+  ctx: InsightGateContext,
+): boolean {
+  return evaluateInsightCandidate(c, ctx).passes
+}

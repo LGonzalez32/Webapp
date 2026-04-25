@@ -110,6 +110,9 @@ import {
   // [Z.12] Tabla de la verdad ejecutiva
   MATERIALITY_FLOOR_EXECUTIVE,
   EXECUTIVE_TOP_N,
+  // [Fase 6A] Gate canónico pass/fail
+  evaluateInsightCandidate,
+  type InsightGateDecision,
 } from './insightStandard'
 import { getAgregadosParaFiltro, type AgregadosFiltro } from './domain-aggregations' // [Z.4 — perf: cuello-2]
 import { buildTransactionOutlierBlocks } from './builders/buildTransactionOutlierBlocks' // [PR-M7d]
@@ -4074,21 +4077,10 @@ export function filtrarConEstandar(
   }
 
   // === Z.12: Tabla de la verdad ejecutiva ===
-  // Cuatro reglas en AND con excepciones por diseño (root-strong + cross>=2).
-  // Se apoya en la infraestructura de insightStandard.ts sin umbrales fijos en USD.
-  const _Z12_ROOT_STRONG = new Set(['meta_gap_temporal', 'product_dead', 'migration'])
-  const _Z12_VALID_USD_SOURCES = /* @__PURE__ */ new Set([
-    'gap_meta',
-    'cross_varAbs',
-    'recuperable',
-    'detail_monto',
-    'detail_magnitud',
-    'detail_totalCaida',
-    'cross_delta_yoy',
-  ])
-  const _Z12_GENERIC_ACTION_RE = /identificar\s+qu[eé]\s+cambi[oó]|comparar\s+con\s+el\s+per[ií]odo|aislar\s+la\s+causa|validar\s+patr[oó]n\s+detectado|monitorear\s+tendencia|revisar\s+el\s+comportamiento/i
-  const _Z12_GENERIC_DESC_RE   = /sugiere\s+mejora|podr[ií]a\s+indicar|posible\s+oportunidad|parece\s+haber/i
-
+  // [Fase 6A] Gate canónico delegado a insightStandard.ts:evaluateInsightCandidate.
+  // Acá vive solo el orquestador array-level: precompute crossCount, llamar al
+  // gate, aplicar mutación `_z122_relaxed` y telemetría DEV.
+  // Reglas, regex y umbrales ahora son fuente única en insightStandard.ts.
   const _Z12_ventaTotal = ventaTotalNegocio > 0 ? ventaTotalNegocio : 1
   const _Z12_floorAbs   = _Z12_ventaTotal * MATERIALITY_FLOOR_EXECUTIVE
 
@@ -4098,112 +4090,46 @@ export function filtrarConEstandar(
     usdAbs: number
     pctSobreVenta: number
     cross: number
-    reglas: { r1_materialidad: boolean; r2_pareto: boolean; r3_coherencia_monetaria: boolean; r4_coherencia_narrativa: boolean }
-    r4_mode: 'strict' | 'relaxed' | 'fail'
-    accionOk: boolean
-    tituloOk: boolean
-    descOk: boolean
+    reglas: InsightGateDecision['rules']
+    r4_mode: InsightGateDecision['mode']
     isRootStrong: boolean
     esParetoReal: boolean
     usdSource: string | null
+    reason?: string
   }> = []
 
   result = result.filter((c) => {
     try {
-      const cAny = c as unknown as {
-        impacto_usd_normalizado?: number | null
-        impacto_usd_source?: string
-        detail?: Record<string, unknown>
-        title?: string
-        description?: string
-        accion?: { texto?: string } | string
-      }
-      const usdAbs = Math.abs(Number(cAny.impacto_usd_normalizado) || 0)
-      // [Z.12.1] usar el contador de cross concreto (objeto, no array).
-      const cross = _z11ContarCrossConcreto(c)
-      const isRootStrong = _Z12_ROOT_STRONG.has(c.insightTypeId) && cross >= 2
+      const crossCount = _z11ContarCrossConcreto(c)
+      const decision = evaluateInsightCandidate(c, {
+        ventaTotalNegocio: _Z12_ventaTotal,
+        paretoList,
+        crossCount,
+      })
 
-      // [Z.12.1] Regla 1 bi-nivel:
-      //   >= 2% del negocio: pasa directo.
-      //   entre 1% y 2%: pasa si además es Pareto real o root-strong.
-      //   < 1%: solo pasa si es root-strong.
-      const _Z12_floorAbsAlto = _Z12_floorAbs                                        // 2%
-      const _Z12_floorAbsBajo = _Z12_ventaTotal * (MATERIALITY_FLOOR_EXECUTIVE / 2)  // 1%
-      const esParetoReal      = !!c.member && esEntidadPareto(c.member, paretoList)
-      const r1_materialidad =
-        usdAbs >= _Z12_floorAbsAlto ||
-        (usdAbs >= _Z12_floorAbsBajo && (esParetoReal || isRootStrong)) ||
-        isRootStrong
-
-      // Regla 2: Pareto real del negocio; si no hay paretoList, no bloqueamos
-      const r2_pareto =
-        (!!c.member && esEntidadPareto(c.member, paretoList)) ||
-        isRootStrong ||
-        paretoList.length === 0
-
-      // Regla 3: Coherencia monetaria (USD != null/0 y source válido) o root-strong
-      const hasUsd =
-        cAny.impacto_usd_normalizado != null && Number(cAny.impacto_usd_normalizado) !== 0
-      const validSource =
-        !!cAny.impacto_usd_source && _Z12_VALID_USD_SOURCES.has(cAny.impacto_usd_source)
-      const r3_coherencia_monetaria = (hasUsd && validSource) || isRootStrong
-
-      // Regla 4: Coherencia narrativa (título + descripción + acción no genéricas)
-      const tituloOk =
-        typeof cAny.title === 'string' && cAny.title.trim().length >= 6
-      const descOk =
-        typeof cAny.description === 'string' &&
-        cAny.description.trim().length >= 20 &&
-        esConclusionValida(cAny.description) &&
-        !_Z12_GENERIC_DESC_RE.test(cAny.description)
-      const accionTxt =
-        (typeof cAny.accion === 'object' && cAny.accion !== null
-          ? (cAny.accion as { texto?: string }).texto ?? ''
-          : typeof cAny.accion === 'string'
-            ? cAny.accion
-            : '').toString()
-      const accionOk = accionTxt.trim().length >= 10 && !_Z12_GENERIC_ACTION_RE.test(accionTxt)
-
-      // [Z.12.2] r4 bi-nivel:
-      //   - estricto: título + descripción + acción concretos.
-      //   - relajado: si r1 + r2 + r3 están en verde y título + descripción son
-      //     concretos, se acepta acción vacía. El usuario la genera vía "+ Profundizar".
-      // NO se inventan acciones genéricas. La narrativa textual sigue siendo
-      // obligatoria y se valida con esConclusionValida() + regex anti-genéricas.
-      const _Z122_estricto = tituloOk && descOk && accionOk
-      const _Z122_relajado =
-        r1_materialidad &&
-        r2_pareto &&
-        r3_coherencia_monetaria &&
-        tituloOk &&
-        descOk &&
-        !accionOk // sólo activa la puerta relajada cuando accion falla
-      const r4_coherencia_narrativa = _Z122_estricto || _Z122_relajado
-
-      const pasa =
-        r1_materialidad && r2_pareto && r3_coherencia_monetaria && r4_coherencia_narrativa
-
-      if (!pasa) {
+      if (!decision.passes) {
+        const usdAbs = Math.abs(Number(c.impacto_usd_normalizado) || 0)
+        const isRootStrong =
+          (new Set(['meta_gap_temporal', 'product_dead', 'migration'])).has(c.insightTypeId) &&
+          crossCount >= 2
         _Z12_suppressed.push({
           member:        c.member,
           insightTypeId: c.insightTypeId,
           usdAbs,
           pctSobreVenta: _Z12_ventaTotal > 0 ? usdAbs / _Z12_ventaTotal : 0,
-          cross,
-          reglas:        { r1_materialidad, r2_pareto, r3_coherencia_monetaria, r4_coherencia_narrativa },
-          r4_mode:       _Z122_estricto ? 'strict' : (_Z122_relajado ? 'relaxed' : 'fail'),
-          accionOk,
-          tituloOk,
-          descOk,
+          cross:         crossCount,
+          reglas:        decision.rules,
+          r4_mode:       decision.mode,
           isRootStrong,
-          esParetoReal,
-          usdSource:     cAny.impacto_usd_source ?? null,
+          esParetoReal:  !!c.member && esEntidadPareto(c.member, paretoList),
+          usdSource:     (c as { impacto_usd_source?: string }).impacto_usd_source ?? null,
+          reason:        decision.reason,
         })
-      } else if (_Z122_relajado) {
-        // [Z.12.2] Marcar candidato salvado por puerta relajada para auditar downstream.
-        ;(cAny as { _z122_relaxed?: boolean })._z122_relaxed = true
+      } else if (decision.mode === 'relaxed') {
+        // [Z.12.2] Marca candidato salvado por puerta relajada para auditar downstream.
+        ;(c as unknown as { _z122_relaxed?: boolean })._z122_relaxed = true
       }
-      return pasa
+      return decision.passes
     } catch (e) {
       console.warn('[Z.12 exec_gate] evaluación falló, conservando candidato:', e)
       return true
@@ -4871,6 +4797,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
             member: c.member,
             descripcion: c.description,
             baseDetail: c.detail,
+            direction: c.direction,
           },
           _enrichCtx,
         )
