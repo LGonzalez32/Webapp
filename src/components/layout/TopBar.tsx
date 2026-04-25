@@ -115,26 +115,31 @@ export default function TopBar() {
           </div>
         )}
 
-        <button
-          onClick={() => {
-            const isDemo = location.pathname.startsWith('/demo')
-            const chatPath = isDemo ? '/demo/chat' : '/chat'
-            const targetState = {
-              prefill: '¿Qué debo hacer hoy?',
-              systemOverride: 'El usuario quiere saber las 3 acciones prioritarias para hoy. Responde con exactamente 3 acciones concretas en formato numerado. Cada acción debe incluir: el nombre real de la persona o área responsable, la acción específica en máximo 10 palabras, y debajo "Por qué hoy:" con la razón en máximo 10 palabras. Sin introducción ni conclusión, solo los 3 items.',
-            }
-            if (location.pathname === '/chat' || location.pathname === '/demo/chat') {
-              window.dispatchEvent(new CustomEvent('sf-header-action', { detail: targetState }))
-            } else {
-              navigate(chatPath, { state: targetState })
-            }
-          }}
-          className="sf-no-print bg-[var(--sf-green)] hover:opacity-90 font-semibold text-xs px-3 py-1.5 rounded-lg transition-opacity"
-          style={{ color: tema === 'dark' ? '#020C18' : '#fff' }}
-        >
-          <span className="hidden md:inline">✦ ¿Qué hago hoy?</span>
-          <span className="md:hidden">✦ Hoy</span>
-        </button>
+        {/* [Ω.1.2] Ocultar "¿Qué hago hoy?" en /cargar mientras no haya
+            datos cargados: el botón pide insights y sin datos no hay nada
+            que recomendar. */}
+        {!(location.pathname === '/cargar' && dataSource === 'none') && (
+          <button
+            onClick={() => {
+              const isDemo = location.pathname.startsWith('/demo')
+              const chatPath = isDemo ? '/demo/chat' : '/chat'
+              const targetState = {
+                prefill: '¿Qué debo hacer hoy?',
+                systemOverride: 'El usuario quiere saber las 3 acciones prioritarias para hoy. Responde con exactamente 3 acciones concretas en formato numerado. Cada acción debe incluir: el nombre real de la persona o área responsable, la acción específica en máximo 10 palabras, y debajo "Por qué hoy:" con la razón en máximo 10 palabras. Sin introducción ni conclusión, solo los 3 items.',
+              }
+              if (location.pathname === '/chat' || location.pathname === '/demo/chat') {
+                window.dispatchEvent(new CustomEvent('sf-header-action', { detail: targetState }))
+              } else {
+                navigate(chatPath, { state: targetState })
+              }
+            }}
+            className="sf-no-print bg-[var(--sf-green)] hover:opacity-90 font-semibold text-xs px-3 py-1.5 rounded-lg transition-opacity"
+            style={{ color: tema === 'dark' ? '#020C18' : '#fff' }}
+          >
+            <span className="hidden md:inline">✦ ¿Qué hago hoy?</span>
+            <span className="md:hidden">✦ Hoy</span>
+          </button>
+        )}
         {/* Currency toggle — only when venta_neta data is available */}
         {dataAvailability.has_venta_neta && (
           <div

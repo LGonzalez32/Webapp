@@ -7,3 +7,7 @@ dist/
 backend/.env
 backend/__pycache__/
 *.pyc
+
+# Local editor / agent state — no versionar
+.claude/settings.local.json
+.obsidian/

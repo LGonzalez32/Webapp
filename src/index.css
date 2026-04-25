@@ -37,19 +37,23 @@
 /* ── SalesFlow theme semantic tokens ─────────────────────── */
 
 :root {
-  /* Backgrounds — cool professional blues */
-  --sf-page: #f8f9fc;
-  --sf-sidebar: #f1f3f8;
-  --sf-card: #ffffff;
+  /* Backgrounds — warm-neutral cálido (Z.P1.11.a/V1).
+     Alineados con la escala zinc-* redefinida arriba para que body
+     (bg-zinc-950 = #fdfaf6) y shell (var(--sf-sidebar)) sean misma familia.
+     Antes: cool blue-gray (#f8f9fc / #f1f3f8 / #e2e6ef). Disonancia
+     warm/cool resuelta. */
+  --sf-page: #fdfaf6;          /* = zinc-950, base */
+  --sf-sidebar: #f7f3ed;       /* = zinc-900, 1 step más oscuro que body */
+  --sf-card: #ffffff;          /* card elevada se mantiene blanco puro */
   --sf-elevated: #ffffff;
-  --sf-inset: #f0f2f8;
-  --sf-hover: #eceef5;
-  --sf-hover-card: #eceef5;
+  --sf-inset: #f7f3ed;         /* = zinc-900, igual al sidebar */
+  --sf-hover: #ede8df;         /* = zinc-800, hover marcado */
+  --sf-hover-card: #ede8df;
 
-  /* Borders */
-  --sf-border: #e2e6ef;
-  --sf-border-subtle: #ebeef5;
-  --sf-border-active: #c8d0e4;
+  /* Borders — warm equivalentes (mismas luminancias que cool anteriores) */
+  --sf-border: #e8e1d6;
+  --sf-border-subtle: #f0eae0;
+  --sf-border-active: #d4c8b4;
 
   /* Text hierarchy (dark on light) */
   --sf-t1: #1a1816;
@@ -67,9 +71,9 @@
   --sf-overlay-medium: rgba(0,0,0,0.05);
   --sf-overlay-strong: rgba(0,0,0,0.08);
 
-  /* Public pages */
-  --sf-bg: #f8f9fc;
-  --sf-bg-rgb: 248,249,252;
+  /* Public pages — alineados con --sf-page */
+  --sf-bg: #fdfaf6;
+  --sf-bg-rgb: 253,250,246;
   --sf-footer-bg: #1e293b;
   --sf-footer-text: #94a3b8;
   --sf-footer-heading: #e2e8f0;

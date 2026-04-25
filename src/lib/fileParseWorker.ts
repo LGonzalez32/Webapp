@@ -244,7 +244,7 @@ self.onmessage = (event: MessageEvent<ParseWorkerInput>) => {
             found: foundKeys,
             unrecognizedHeaders: ignoredColumns,
             suggestions,
-            message: "Se requiere al menos una columna de métrica: 'unidades' o 'venta_neta' (sinónimos aceptados: cantidad, qty, piezas, cajas, monto, importe, total, ventas).",
+            message: "Se requiere al menos una columna de métrica: 'unidades' o 'venta_neta'.",
           },
         })
         return
@@ -346,7 +346,7 @@ self.onmessage = (event: MessageEvent<ParseWorkerInput>) => {
             missing: ['periodo (mes_periodo, mes, o period)'],
             found: foundKeys,
             message:
-              'No se encontró columna de período. Se aceptan: mes_periodo (YYYY-MM), mes + año separados, periodo, period, fecha.',
+              `No se encontró columna de período. Esperamos 'mes_periodo' (YYYY-MM) o 'mes' + 'anio' separados.`,
           },
         })
         return
@@ -359,7 +359,7 @@ self.onmessage = (event: MessageEvent<ParseWorkerInput>) => {
             code: 'MISSING_REQUIRED',
             missing: ['meta'],
             found: foundKeys,
-            message: 'No se encontró columna de meta/objetivo. Se aceptan: meta, target, budget, objetivo, cuota.',
+            message: `No se encontró columna de meta/objetivo. Esperamos una columna 'meta'.`,
           },
         })
         return

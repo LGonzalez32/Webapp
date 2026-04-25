@@ -53,10 +53,13 @@ VITE_BACKEND_URL=https://webapp-0yx8.onrender.com
 
 ### `backend/.env` — API key del backend local
 ```
-DEEPSEEK_API_KEY=sk-be7fa627e4a04ca6a0d0be9bdb3fc29c
+DEEPSEEK_API_KEY=<tu-key-de-deepseek>
 ```
 - Solo para desarrollo local
-- El backend de Render tiene su propia key en el dashboard de Render
+- La key real **NUNCA** va en este archivo ni en git. Se obtiene desde el dashboard de DeepSeek y se guarda en `backend/.env` (gitignored).
+- El backend de Render tiene su propia key configurada en el dashboard de Render.
+
+> ⚠️ Histórico: este archivo contuvo una key real expuesta hasta el commit que removió esta línea. La key fue rotada. Si encontrás credenciales en cualquier `.md`, reportalo y rotalas inmediatamente.
 
 ### `backend/main.py` — CORS
 ```python

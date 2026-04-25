@@ -36,6 +36,22 @@ export default function FileDropzone({ step, onFileSelect, onSkip, isProcessing,
   const isLoaded = step.status === 'loaded';
   const isError = step.status === 'error';
 
+  // [Z.P1.10.c.fix-mini/C3] Texto de error discriminado por código.
+  // Si el archivo se leyó pero falló validación, "no pudimos leer" miente.
+  const errorMessage = (() => {
+    if (!isError || !step.parseError) return 'No pudimos leer este archivo';
+    const code = step.parseError.code;
+    // Códigos donde el archivo SÍ se leyó pero algo más falló:
+    if (code === 'MISSING_REQUIRED' || code === 'EMPTY_FILE' || code === 'INVALID_DATES') {
+      return 'El archivo se leyó, pero faltan datos obligatorios';
+    }
+    if (code === 'NO_VALID_COLUMNS') {
+      return 'El archivo se leyó, pero no reconocimos las columnas';
+    }
+    // Códigos de IO/encoding/formato real:
+    return 'No pudimos leer este archivo';
+  })();
+
   return (
     <div className="space-y-3">
       <div
@@ -44,14 +60,18 @@ export default function FileDropzone({ step, onFileSelect, onSkip, isProcessing,
         onDragLeave={() => setIsDragOver(false)}
         onDrop={handleDrop}
         className={cn(
-          'relative border-2 border-dashed rounded-2xl transition-all cursor-pointer group min-h-[280px] flex flex-col items-center justify-center',
+          'relative border-2 border-dashed rounded-2xl transition-all cursor-pointer group flex flex-col items-center justify-center',
           isProcessing && 'cursor-not-allowed opacity-60',
+          // [Z.P1.10.c.fix-mini/C1] min-h-[280px] solo en estado vacío.
+          // En loaded/error el contenido es chico — forzar 280px de alto crea
+          // whitespace que parece overlap visual.
+          (isLoaded || isError) ? 'min-h-0' : 'min-h-[280px]',
           isDragOver
             ? 'border-emerald-500 bg-emerald-500/[0.03] p-8'
             : isLoaded
-            ? 'border-[var(--sf-green-border)] bg-[var(--sf-green-bg)] p-6'
+            ? 'border-[var(--sf-green-border)] bg-[var(--sf-green-bg)] p-4'
             : isError
-            ? 'border-red-400/40 bg-red-500/[0.03] p-6'
+            ? 'border-red-400/40 bg-red-500/[0.03] p-4'
             : 'border-[var(--sf-border)] p-6 hover:border-[var(--sf-border-active)] hover:bg-emerald-500/[0.01]'
         )}
       >
@@ -83,31 +103,30 @@ export default function FileDropzone({ step, onFileSelect, onSkip, isProcessing,
             </p>
           </div>
         ) : isLoaded ? (
-          <div className="flex items-center gap-4 w-full">
+          // [Z.P1.10.c.fix-mini/C1 + primera-impresion] Stack vertical compacto.
+          // El detalle de filas/columnas vive en el banner verde "Archivo listo"
+          // de la página, no se duplica acá. Acá solo: ícono + filename + acción.
+          <div className="flex items-center gap-2.5 w-full">
             <style>{`@keyframes checkPop{0%{transform:scale(0.8)}60%{transform:scale(1.15)}100%{transform:scale(1)}}`}</style>
             <CheckCircle2
-              className="w-8 h-8 text-emerald-500 shrink-0"
+              className="w-5 h-5 text-emerald-500 shrink-0"
               style={{ animation: 'checkPop 0.4s ease-out forwards' }}
             />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-[var(--sf-t1)]">{step.file?.name}</p>
-              <p className="text-xs text-emerald-600 mt-0.5">Archivo cargado correctamente</p>
-              {step.parsedData && step.parsedData.length > 0 && (
-                <p className="text-xs text-[var(--sf-t4)] mt-0.5">
-                  {step.parsedData.length.toLocaleString()} {step.parsedData.length === 1 ? 'registro listo' : 'registros listos'}
-                </p>
-              )}
-            </div>
+            <p className="text-sm font-semibold text-[var(--sf-t1)] truncate flex-1 min-w-0">{step.file?.name}</p>
             <span className="text-xs text-[var(--sf-t4)] underline underline-offset-2 shrink-0">Cambiar archivo</span>
           </div>
         ) : isError ? (
-          <div className="flex items-center gap-4 w-full">
-            <XCircle className="w-8 h-8 text-red-500 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-[var(--sf-t1)]">{step.file?.name ?? 'Archivo con errores'}</p>
-              <p className="text-xs text-red-500 mt-0.5">No pudimos leer este archivo</p>
+          <div className="flex flex-col gap-2 w-full">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <XCircle className="w-5 h-5 text-red-500 shrink-0" />
+              <p className="text-sm font-semibold text-[var(--sf-t1)] truncate">
+                {step.file?.name ?? 'Archivo con errores'}
+              </p>
             </div>
-            <span className="text-xs text-[var(--sf-t4)] underline underline-offset-2 shrink-0">Intentar con otro</span>
+            <div className="flex items-center justify-between gap-3 pl-7">
+              <p className="text-xs text-red-500 min-w-0 truncate">{errorMessage}</p>
+              <span className="text-xs text-[var(--sf-t4)] underline underline-offset-2 shrink-0">Intentar con otro</span>
+            </div>
           </div>
         ) : (
           <div className="flex flex-col items-center text-center w-full">

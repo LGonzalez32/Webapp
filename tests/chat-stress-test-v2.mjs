@@ -4,7 +4,11 @@
  * Builds on v1 (97% pass rate) with harder manipulation, numeric verification, and multi-turn.
  */
 
-const DEEPSEEK_API_KEY = 'sk-be7fa627e4a04ca6a0d0be9bdb3fc29c'
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY
+if (!DEEPSEEK_API_KEY) {
+  console.error('Falta DEEPSEEK_API_KEY. Exportá la variable antes de correr este test:\n  export DEEPSEEK_API_KEY=tu-key-aqui')
+  process.exit(1)
+}
 const DEEPSEEK_URL = 'https://api.deepseek.com/chat/completions'
 
 // ─── Ground truth data (from system prompt / demo data) ──────────────────────

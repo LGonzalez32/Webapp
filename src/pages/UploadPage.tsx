@@ -13,7 +13,7 @@ import StepIndicator from '../components/upload/StepIndicator'
 import FileDropzone from '../components/upload/FileDropzone'
 import DataPreview from '../components/upload/DataPreview'
 import { cn } from '../lib/utils'
-import { Trash2, ChevronRight, ChevronLeft, ShieldOff, Check, Plus, AlertTriangle, Info, X, Lock } from 'lucide-react'
+import { Trash2, ChevronRight, ChevronLeft, ShieldOff, Check, AlertTriangle, Info, Lock } from 'lucide-react'
 import type { UploadStep, ParseResult, ParseError, DiscardedRow } from '../types'
 import { useUserRole } from '../lib/useUserRole'
 
@@ -113,79 +113,15 @@ const INVENTARIO_ROWS = [
   ['SUAVITEL 850ML','156','LIMPIEZA','COLGATE'],
 ]
 
-// ── Validación de columnas ───────────────────────────────────────────────────
-
-const REQUIRED_COLS: Record<string, string[]> = {
-  // ventas: solo 'fecha' es condición universal. El resto (metrica + dimensión)
-  // se valida en los 3 grupos UX (VentasRequirementsBlock).
-  ventas:     ['fecha'],
-  metas:      ['mes_periodo', 'meta'],
-  inventario: ['producto', 'unidades'],
-}
-
-const OPTIONAL_COLS: Record<string, string[]> = {
-  ventas: [
-    'unidades', 'venta_neta',
-    'vendedor', 'cliente', 'producto',
-    'categoria', 'subcategoria', 'canal', 'departamento',
-    'supervisor', 'proveedor', 'codigo_producto', 'codigo_cliente',
-    'costo_unitario',
-  ],
-  metas: [
-    'vendedor', 'cliente', 'producto',
-    'categoria', 'subcategoria', 'canal',
-    'departamento', 'supervisor',
-  ],
-  inventario: ['categoria', 'subcategoria', 'proveedor', 'codigo_producto'],
-}
-
-const COL_FEATURES: Record<string, string> = {
-  unidades:         'Análisis por cantidad de unidades vendidas',
-  venta_neta:       'Análisis en dólares y proyecciones en $',
-  vendedor:         'Ranking y desempeño por vendedor',
-  cliente:          'Clientes dormidos, recurrentes y en riesgo',
-  producto:         'Rotación y productos ganadores',
-  categoria:        'Análisis por categoría de producto',
-  subcategoria:     'Jerarquía de productos nivel detalle',
-  canal:            'Comparativa entre canales de venta',
-  departamento:     'Mapa geográfico por zona',
-  supervisor:       'Rendimiento por equipo o zona',
-  proveedor:        'Análisis por proveedor',
-  codigo_producto:  'Cruce exacto con tu inventario',
-  codigo_cliente:   'Identificación única de clientes',
-  costo_unitario:   'Márgenes y rentabilidad por venta',
-}
-
-// ── Reglas de ventas expresadas como 3 grupos visuales ───────────────────────
-// [Z.P1.10.a] Tipografía, sin cajas ni hints de alias. Sub-tiers para QUÉ AGRUPAR.
-const VENTAS_GROUPS = {
-  g1_fecha: {
-    titulo: 'FECHA',
-    subtitulo: 'requerida',
-    keys: ['fecha'],
-  },
-  g2_metrica: {
-    titulo: 'CUÁNTO VENDISTE Y CUÁNTO TE COSTÓ',
-    subtitulo: 'al menos una',
-    keys: ['unidades', 'venta_neta'],
-  },
-  g3_dimension: {
-    titulo: 'QUÉ AGRUPAR',
-    subtitulo: 'al menos una',
-    tiers: {
-      principales: ['vendedor', 'cliente', 'producto', 'categoria'] as string[],
-      secundarias: ['subcategoria', 'proveedor', 'canal', 'departamento', 'supervisor'] as string[],
-      codigos:     ['codigo_producto', 'codigo_cliente'] as string[],
-    },
-  },
-}
-
-
-// ── Tabla de ejemplo ──────────────────────────────────────────────────────────
-
+// ── Tabla de ejemplo (usada dentro del DataGuide colapsable) ─────────────────
 function TablaEjemplo({ headers, rows }: { headers: { col: string; req: boolean }[]; rows: string[][] }) {
   return (
-    <div className="overflow-x-auto mt-3 rounded-lg border border-[var(--sf-border)]">
+    // [primera-impresion] Fade gradient en el borde derecho indica que la tabla
+    // tiene contenido que se corta por overflow horizontal. Antes el scroll era
+    // visible solo al hover y los usuarios no se daban cuenta de que faltaban
+    // columnas.
+    <div className="relative">
+      <div className="overflow-x-auto rounded-lg border border-[var(--sf-border-subtle)]">
       <table className="w-full text-[0.72rem] border-collapse">
         <thead>
           <tr>
@@ -210,135 +146,17 @@ function TablaEjemplo({ headers, rows }: { headers: { col: string; req: boolean 
         </tbody>
       </table>
       <p className="text-[0.6875rem] text-[var(--sf-t4)] px-2.5 py-1.5 border-t border-[var(--sf-border)]" style={{ background: 'var(--sf-inset)' }}>
-        <span className="text-emerald-500">*</span> Requerido — las demás columnas son opcionales y activan funciones adicionales.
+        <span className="text-emerald-500">*</span> Requerido — el resto son opcionales y enriquecen el análisis.
       </p>
-    </div>
-  )
-}
-
-// ── Bloque de requisitos de Ventas (3 grupos, tipografía sin cajas) ──────────
-// [Z.P1.10.a] Chip con 3 estados unificados: detectado / disponible / advertido
-
-type ChipState = 'detected' | 'available' | 'warned'
-
-// [Z.P1.10.c/K3] Aliases mostrados como tooltip nativo al hover sobre "ⓘ"
-const ALIAS_TOOLTIPS: Record<string, string> = {
-  fecha:           'También: Date, fecha_venta, F.Venta, Order Date, Transaction Date…',
-  unidades:        'También: cantidad, qty, piezas, cajas, units, Quantity…',
-  venta_neta:      'También: monto, importe, total, Total, Revenue, Net Sales, Order Total…',
-  costo_unitario:  'También: unit_cost, precio_costo, Costo de Ventas, COGS, Cost of Sales…',
-  vendedor:        'También: nombre_vendedor, asesor, rep, Team Member, Salesperson…',
-  cliente:         'También: customer, Customer, razon_social, buyer_name…',
-  producto:        'También: nombre_producto, product, item, Product Name, Item Name…',
-  categoria:       'También: category, linea, familia, Category…',
-  subcategoria:    'También: subcategory, sub_linea, Sub Category…',
-  proveedor:       'También: supplier, vendor, Proveedor, Supplier…',
-  canal:           'También: channel, canal_venta, Channel, Sales Channel…',
-  departamento:    'También: dept, zona, region, Department, Region…',
-  supervisor:      'También: jefe, gerente, manager, Supervisor, Manager…',
-  codigo_producto: 'También: SKU, cod_producto, item_code, Product Code…',
-  codigo_cliente:  'También: customer_code, id_cliente, Customer ID…',
-}
-
-const Chip: React.FC<{ label: string; state: ChipState; prefix?: string; aliasHint?: string; dashed?: boolean }> = ({ label, state, prefix, aliasHint, dashed }) => {
-  const baseClasses = cn(
-    'inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-medium border transition-colors duration-150',
-    dashed ? 'border-dashed' : 'border-solid'
-  )
-  const stateClasses =
-    state === 'detected'
-      ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
-      : state === 'warned'
-      ? 'border-amber-400 bg-amber-50 text-amber-700'
-      : 'border-gray-200 bg-white text-gray-700'
-  const hint = aliasHint ?? ALIAS_TOOLTIPS[label]
-  return (
-    <span className={cn(baseClasses, stateClasses)}>
-      {state === 'detected' && <Check className="w-3.5 h-3.5 shrink-0" />}
-      {state === 'warned' && <AlertTriangle className="w-3.5 h-3.5 shrink-0" />}
-      <span>{prefix ? `${prefix} ${label}` : label}</span>
-      {hint && (
-        <span title={hint} className="inline-flex cursor-help" aria-label={hint}>
-          <Info className="w-3 h-3 shrink-0 text-gray-300 hover:text-gray-500 transition-colors" />
-        </span>
-      )}
-    </span>
-  )
-}
-
-function GroupHeader({ titulo, subtitulo }: { titulo: string; subtitulo: string }) {
-  return (
-    <>
-      <header className="flex items-baseline justify-between">
-        <h3 className="text-sm font-semibold tracking-wide uppercase text-[var(--sf-t1)]">{titulo}</h3>
-        <span className="text-xs font-normal text-[var(--sf-t4)]">· {subtitulo}</span>
-      </header>
-      <hr className="border-t border-[var(--sf-border)] mt-2 mb-4" />
-    </>
-  )
-}
-
-function VentasRequirementsBlock({
-  detectedCols,
-  hasData,
-  warnedCols = [],
-}: {
-  detectedCols: string[]
-  hasData: boolean
-  warnedCols?: string[]
-}) {
-  const chipState = (col: string): ChipState => {
-    if (warnedCols.includes(col)) return 'warned'
-    if (hasData && detectedCols.includes(col)) return 'detected'
-    return 'available'
-  }
-
-  const { principales, secundarias, codigos } = VENTAS_GROUPS.g3_dimension.tiers
-
-  return (
-    <div className="space-y-10 mt-6">
-      {/* GRUPO 1: FECHA */}
-      <section>
-        <GroupHeader titulo={VENTAS_GROUPS.g1_fecha.titulo} subtitulo={VENTAS_GROUPS.g1_fecha.subtitulo} />
-        <div className="flex flex-wrap gap-2">
-          <Chip label="fecha" state={chipState('fecha')} />
-        </div>
-      </section>
-
-      {/* GRUPO 2: CUÁNTO VENDISTE Y CUÁNTO TE COSTÓ */}
-      <section>
-        <GroupHeader titulo={VENTAS_GROUPS.g2_metrica.titulo} subtitulo={VENTAS_GROUPS.g2_metrica.subtitulo} />
-        <div className="flex flex-wrap gap-2 items-center">
-          <Chip label="unidades" state={chipState('unidades')} prefix="#" />
-          <Chip label="venta_neta" state={chipState('venta_neta')} prefix="$" />
-        </div>
-        <p className="text-[11px] font-medium tracking-widest text-[var(--sf-t4)] uppercase mt-5 mb-2">
-          Opcional <span className="text-gray-300 normal-case tracking-normal font-normal">· análisis de margen</span>
-        </p>
-        <div className="flex flex-wrap gap-2 items-center">
-          <Chip label="costo_unitario" state={chipState('costo_unitario')} prefix="$" dashed />
-          <span className="text-xs text-[var(--sf-t4)]">necesita columna producto para activar</span>
-        </div>
-      </section>
-
-      {/* GRUPO 3: QUÉ AGRUPAR — 3 sub-tiers */}
-      <section>
-        <GroupHeader titulo={VENTAS_GROUPS.g3_dimension.titulo} subtitulo={VENTAS_GROUPS.g3_dimension.subtitulo} />
-        <p className="text-[11px] font-medium tracking-widest text-[var(--sf-t4)] uppercase mb-2">Principales</p>
-        <div className="flex flex-wrap gap-2">
-          {principales.map((col) => <Chip key={col} label={col} state={chipState(col)} />)}
-        </div>
-        <p className="text-[11px] font-medium tracking-widest text-[var(--sf-t4)] uppercase mt-5 mb-2">Secundarias</p>
-        <div className="flex flex-wrap gap-2">
-          {secundarias.map((col) => <Chip key={col} label={col} state={chipState(col)} />)}
-        </div>
-        <p className="text-[11px] font-medium tracking-widest text-[var(--sf-t4)] uppercase mt-5 mb-2">
-          Códigos <span className="text-gray-300 normal-case tracking-normal font-normal">· si tu archivo los trae</span>
-        </p>
-        <div className="flex flex-wrap gap-2">
-          {codigos.map((col) => <Chip key={col} label={col} state={chipState(col)} />)}
-        </div>
-      </section>
+      </div>
+      {/* [primera-impresion-v2] Sombra suave universal: visible sobre cualquier
+          fondo (blanco, warm-beige, alternado). El gradient anterior iba a
+          var(--sf-card)=blanco, invisible sobre filas blancas. */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute top-0 right-0 bottom-0 w-10 rounded-r-lg"
+        style={{ background: 'linear-gradient(to right, rgba(0,0,0,0) 0%, rgba(0,0,0,0.08) 100%)' }}
+      />
     </div>
   )
 }
@@ -357,7 +175,6 @@ export default function UploadPage() {
   const [parseDetail, setParseDetail] = useState('')
   const [loading, setLoading] = useState<{ title: string; subtitle: string; progress: number } | null>(null)
   const [detectedCols, setDetectedCols] = useState<Record<string, string[]>>({})
-  const [showExample, setShowExample] = useState(true)
   const [discardedRowsMap, setDiscardedRowsMap] = useState<Record<string, DiscardedRow[]>>({})
   const [ignoredColumnsMap, setIgnoredColumnsMap] = useState<Record<string, string[]>>({})
   const [showIgnoredColumns, setShowIgnoredColumns] = useState<Record<string, boolean>>({})
@@ -366,14 +183,25 @@ export default function UploadPage() {
   const [showDiscarded, setShowDiscarded] = useState(false)
   const [showSuccess, setShowSuccess] = useState(false)
   const [showMetasConfirm, setShowMetasConfirm] = useState(false)
-  // [Z.P1.7] Paso 2 "+ ver más" para dimensiones opcionales de metas
-  const [showMoreMetasDims, setShowMoreMetasDims] = useState(false)
+  // [primera-impresion] Confirmación al limpiar para no descartar trabajo por error
+  const [showLimpiarConfirm, setShowLimpiarConfirm] = useState(false)
 
   const currentStepStatus = steps[currentStep]?.status
   useEffect(() => {
-    setShowExample(true)
     setShowDiscarded(false)
   }, [currentStep])
+
+  // [Ω.1.0] Reset dataSource al entrar a /cargar si el wizard está pristine.
+  // dataSource se persiste en localStorage; si una sesión previa cargó demo
+  // y el usuario hizo "Limpiar" (que solo limpia store de datos, no dataSource)
+  // o navegó fuera, al volver vería el badge "Datos demo" mintiendo sobre un
+  // wizard vacío. Anclamos dataSource al estado visible inicial.
+  useEffect(() => {
+    if (steps[0].status === 'pending' && !steps[0].file && dataSource !== 'none') {
+      setDataSource('none')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   type StorageFiles = {
     ventas:     { exists: boolean; name: string | null; updated_at: string | null }
@@ -391,17 +219,22 @@ export default function UploadPage() {
     setSteps((prev) => prev.map((s, i) => (i === idx ? { ...s, ...partial } : s)))
 
   const handleFileSelect = async (idx: number, file: File) => {
+    const stepId = steps[idx].id
     setProcessingStep(idx)
     setParseProgress(0)
     setParseDetail('Iniciando...')
     updateStep(idx, { file, status: 'pending', parsedData: undefined, parseError: undefined })
+    setDetectedCols(prev => { const next = { ...prev }; delete next[stepId]; return next })
+    setDiscardedRowsMap(prev => { const next = { ...prev }; delete next[stepId]; return next })
+    setIgnoredColumnsMap(prev => { const next = { ...prev }; delete next[stepId]; return next })
+    setDateAmbiguityMap(prev => { const next = { ...prev }; delete next[stepId]; return next })
+    setWarningsMap(prev => { const next = { ...prev }; delete next[stepId]; return next })
 
     const onProgress = (percent: number, detail: string) => {
       setParseProgress(percent)
       setParseDetail(detail)
     }
 
-    const stepId = steps[idx].id
     try {
       if (stepId === 'ventas') {
         const r = await parseSalesFileInWorker(file, onProgress)
@@ -451,11 +284,14 @@ export default function UploadPage() {
 
   const allRequiredDone = () => steps.filter((s) => s.required).every((s) => s.status === 'loaded')
 
-  // [Z.P1.10.d/L6 + d.1/M1] Limpiar solo habilitado si hay algo que limpiar.
-  // dataSource es 'none' | 'demo' | 'real' (string, nunca null) → comparar contra 'none'.
+  // [Z.P1.10.d/L6 + d.1/M1 + primera-impresion] Limpiar habilitado solo si hay
+  // algo VISIBLE en el wizard que limpiar. dataSource queda fuera porque se
+  // persiste en localStorage: si una sesión previa cargó demo, dataSource
+  // queda 'demo' aunque el wizard se vea pristine al recargar — y entonces
+  // el botón quedaría habilitado mintiendo. La acción "Limpiar" se ata a lo
+  // que el usuario está viendo, no al estado persistido del store.
   const hasAnythingToClear =
     processingStep !== null ||
-    dataSource !== 'none' ||
     steps.some((s) => s.status === 'loaded' || s.status === 'error' || s.file !== undefined)
 
   // Build detected items for the success screen
@@ -680,7 +516,7 @@ export default function UploadPage() {
 
           {/* Headline */}
           <h2
-            className="text-2xl font-bold text-[var(--sf-t1)] mb-1 opacity-0"
+            className="text-xl font-semibold text-[var(--sf-t1)] mb-1 opacity-0"
             style={{ animation: 'fadeInUp 0.3s ease 0.1s forwards' }}
           >
             {totalRegistros.toLocaleString()} {totalRegistros === 1 ? 'registro cargado' : 'registros cargados'}
@@ -736,6 +572,13 @@ export default function UploadPage() {
 
   const step = steps[currentStep]
   const isLastStep = currentStep === steps.length - 1
+  const wizardStatusCopy =
+    processingStep === currentStep ? 'Leyendo archivo y validando columnas.'
+    : step.status === 'loaded' ? 'Listo para continuar.'
+    : step.status === 'error' ? 'Revisa el mensaje y prueba con otro archivo.'
+    : step.status === 'skipped' ? 'Paso omitido.'
+    : step.required ? 'Sube un archivo o carga el demo para continuar.'
+    : 'Puedes subir este archivo u omitir el paso.'
 
   // Viewer restriction: show message if user is viewer in an org
   if (org && !canUpload) {
@@ -752,13 +595,8 @@ export default function UploadPage() {
     )
   }
 
-  // [Z.P1.10.a] Warned cols: si hay warning COSTO_SIN_PRODUCTO, marcamos costo_unitario en ámbar
-  const warnedColsForStep = (warningsMap[step.id] ?? [])
-    .map(w => w.field)
-    .filter((f): f is string => !!f)
-
   return (
-    <div className="max-w-7xl mx-auto px-6 lg:px-8 space-y-8 pb-20 animate-in fade-in duration-700">
+    <div className="min-h-screen px-4 sm:px-6 lg:px-8 pb-20 animate-in fade-in duration-700">
       <LoadingOverlay
         isVisible={loading !== null}
         title={loading?.title ?? ''}
@@ -766,6 +604,21 @@ export default function UploadPage() {
         progress={loading?.progress}
       />
 
+      <div className="mx-auto grid w-full max-w-6xl gap-6 lg:grid-cols-[14.5rem_minmax(0,1fr)] lg:items-start">
+        <aside className="hidden lg:block sticky top-16 py-6">
+          <div className="flex min-h-[33rem] flex-col rounded-2xl border border-[var(--sf-border)] bg-[var(--sf-card)] px-4 py-5 shadow-sm">
+            <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-[var(--sf-t4)]">Carga guiada</p>
+            <StepIndicator
+              steps={steps}
+              currentStepIndex={currentStep}
+              onStepClick={(idx) => setCurrentStep(idx)}
+              orientation="vertical"
+              className="mt-5 flex-1 justify-between"
+            />
+          </div>
+        </aside>
+
+        <main className="min-w-0 max-w-4xl space-y-8 lg:py-6">
       {/* Header */}
       <div className="flex items-start justify-between gap-6">
         <div className="min-w-0">
@@ -776,7 +629,7 @@ export default function UploadPage() {
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <button
-            onClick={handleLimpiar}
+            onClick={() => { if (hasAnythingToClear) setShowLimpiarConfirm(true) }}
             disabled={!hasAnythingToClear}
             className={cn(
               'flex items-center gap-1.5 text-xs font-medium transition-colors',
@@ -791,8 +644,31 @@ export default function UploadPage() {
         </div>
       </div>
 
-      {/* Step indicator */}
-      <div className="flex justify-center">
+      {/* [Ω.1.4] Banner demo: solo en estado verdaderamente pristine.
+          Antes mostraba con dataSource !== 'demo', lo que lo dejaba visible
+          después de cargar un archivo real — ruido. */}
+      {step.id === 'ventas' && dataSource === 'none' && step.status === 'pending' && !step.file && (
+        <section className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--sf-green-border)] bg-[var(--sf-green-bg)] px-5 py-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-white/70 border border-[var(--sf-green-border)] flex items-center justify-center shrink-0">
+              <span className="text-[var(--sf-green)] text-sm">✣</span>
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-[var(--sf-t1)]">¿Primera vez? Probá con datos demo</p>
+              <p className="text-xs text-[var(--sf-t3)] mt-0.5">50,012 registros · 3 vendedores · 6 meses de historial</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleLoadDemo}
+            className="shrink-0 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 transition-colors"
+          >
+            Cargar demo
+          </button>
+        </section>
+      )}
+
+      <div className="flex justify-center overflow-x-auto pb-1 lg:hidden">
         <StepIndicator
           steps={steps}
           currentStepIndex={currentStep}
@@ -800,140 +676,207 @@ export default function UploadPage() {
         />
       </div>
 
-      {/* Grid 2 col: contenido izq + dropzone sticky derecha */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Panel izquierdo: contenido */}
-        <div className="lg:col-span-2 space-y-6 min-w-0">
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-2xl font-bold text-[var(--sf-t1)]">{step.label}</h2>
-              {!step.required && (
-                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold text-[var(--sf-t4)] uppercase tracking-wider" style={{ background: 'var(--sf-inset)' }}>opcional</span>
-              )}
-            </div>
+      <div className="space-y-5">
+        <section className="rounded-2xl border border-[var(--sf-border)] bg-[var(--sf-card)] p-6">
+          <FileDropzone
+            step={step}
+            onFileSelect={(file) => handleFileSelect(currentStep, file)}
+            onSkip={!step.required ? () => handleSkip(currentStep) : undefined}
+            isProcessing={processingStep === currentStep}
+            progressPercent={processingStep === currentStep ? parseProgress : 0}
+            progressDetail={processingStep === currentStep ? parseDetail : ''}
+          />
+        </section>
+
+        <section className="rounded-2xl border border-[var(--sf-border)] bg-[var(--sf-card)] p-6">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--sf-t4)]">Paso {currentStep + 1} de {steps.length}</span>
           </div>
+          <div className="mt-1">
+            <h2 className="text-xl font-semibold text-[var(--sf-t1)]">{step.label}</h2>
+            {!step.required && (
+              <span
+                className="ml-2 align-middle px-1.5 py-0.5 rounded text-[9px] font-bold text-[var(--sf-t4)] uppercase tracking-wide cursor-help"
+                style={{ background: 'var(--sf-inset)' }}
+                title={
+                  step.id === 'metas'
+                    ? 'Sin metas no podemos evaluar cumplimiento ni proyectar resultados contra objetivo.'
+                    : step.id === 'inventario'
+                    ? 'Sin inventario no detectamos riesgos de ruptura ni exceso de stock.'
+                    : 'Este paso es opcional.'
+                }
+              >opcional</span>
+            )}
+          </div>
+          <p className="text-sm text-[var(--sf-t4)] mt-1">{step.description}</p>
 
-          {step.id === 'ventas' ? (
-            <>
-              <VentasRequirementsBlock
-                detectedCols={detectedCols[step.id] ?? []}
-                hasData={step.status === 'loaded' && !!detectedCols[step.id]}
-                warnedCols={warnedColsForStep}
-              />
-              {step.status === 'loaded' && detectedCols[step.id] && (
-                <p className="text-[0.6875rem] text-[var(--sf-t4)] pt-3 mt-4 border-t border-[var(--sf-border)]">
-                  {detectedCols[step.id].length} columnas en total · {step.file?.name}
-                </p>
-              )}
-            </>
-          ) : (
-            <div className="flex flex-col gap-4 mt-4">
-              {/* Obligatorias */}
-              <div>
-                <p className="text-xs font-semibold text-[var(--sf-green)] mb-2 flex items-center gap-1.5">
-                  <Check className="w-3.5 h-3.5" />
-                  OBLIGATORIAS
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {REQUIRED_COLS[step.id]?.map(col => {
-                    const hasData = step.status === 'loaded' && !!detectedCols[step.id]
-                    const found = hasData ? detectedCols[step.id].includes(col) : null
-                    return (
-                      <span key={col} className={cn(
-                        'inline-flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg border transition-all',
-                        hasData
-                          ? found
-                            ? 'bg-[var(--sf-green-bg)] text-emerald-600 border-[var(--sf-green-border)]'
-                            : 'bg-red-50 text-red-600 border-red-200'
-                          : 'bg-[var(--sf-green-bg)] text-[var(--sf-green)] border-[var(--sf-green-border)]'
-                      )}>
-                        {hasData && (found
-                          ? <Check className="w-3.5 h-3.5 shrink-0" />
-                          : <X className="w-3.5 h-3.5 shrink-0" />
-                        )}
-                        {col}
-                      </span>
-                    )
-                  })}
-                </div>
-              </div>
-
-              {/* Opcionales */}
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <p className="text-xs font-semibold text-[var(--sf-t3)] flex items-center gap-1.5">
-                    <Plus className="w-3.5 h-3.5" />
-                    OPCIONALES
-                  </p>
-                  {step.status === 'loaded' && detectedCols[step.id] && (
-                    <span className="text-xs text-[var(--sf-t4)]">
-                      — {OPTIONAL_COLS[step.id]?.filter(c => detectedCols[step.id].includes(c)).length ?? 0} de {OPTIONAL_COLS[step.id]?.length ?? 0} detectadas
-                    </span>
-                  )}
-                </div>
-                <p className="text-xs text-[var(--sf-t4)] mb-3">
-                  Mientras más columnas subas, más profundo es el análisis
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {(() => {
-                    const all = OPTIONAL_COLS[step.id] ?? []
-                    // [Z.P1.7] Paso 2 (metas): mostrar 4 visibles + "ver más". Paso 3 (inventario): mostrar todas.
-                    const splitMetas = step.id === 'metas'
-                    const visibles = splitMetas ? all.slice(0, 4) : all
-                    const ocultas = splitMetas ? all.slice(4) : []
-                    const keysToRender = splitMetas && !showMoreMetasDims ? visibles : all
-                    return (
-                      <>
-                        {keysToRender.map(col => {
-                          const hasData = step.status === 'loaded' && !!detectedCols[step.id]
-                          const found = hasData ? detectedCols[step.id].includes(col) : null
-                          return (
-                            <span key={col} className={cn(
-                              'group relative inline-flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg border cursor-default transition-all',
-                              hasData
-                                ? found
-                                  ? 'bg-indigo-50 text-indigo-600 border-indigo-200'
-                                  : 'text-[var(--sf-t4)] border-[var(--sf-border)]'
-                                : 'text-[var(--sf-t2)] border-[var(--sf-border)] hover:bg-[var(--sf-elevated)] hover:border-[var(--sf-border-active)]'
-                            )} style={!hasData ? { background: 'var(--sf-inset)' } : hasData && !found ? { background: 'var(--sf-inset)' } : undefined}>
-                              {hasData && found && <Check className="w-3 h-3 shrink-0" />}
-                              {hasData && !found && <Plus className="w-3 h-3 shrink-0 opacity-40" />}
-                              {col}
-                              {/* Tooltip */}
-                              {COL_FEATURES[col] && (
-                                <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 rounded-lg bg-[var(--sf-t1)] text-white text-xs font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-10">
-                                  Activa: {COL_FEATURES[col]}
-                                  <span className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-[var(--sf-t1)]" />
-                                </span>
-                              )}
-                            </span>
-                          )
-                        })}
-                        {splitMetas && ocultas.length > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => setShowMoreMetasDims(v => !v)}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-[var(--sf-green)] hover:underline px-2 py-1.5"
-                          >
-                            {showMoreMetasDims ? '— ocultar' : `+ ver ${ocultas.length} más`}
-                          </button>
-                        )}
-                      </>
-                    )
-                  })()}
-                </div>
-              </div>
-
-              {/* Resumen cuando cargado */}
-              {step.status === 'loaded' && detectedCols[step.id] && (
-                <p className="text-[0.6875rem] text-[var(--sf-t4)] pt-1 border-t border-[var(--sf-border)]">
-                  {detectedCols[step.id].length} columnas en total · {step.file?.name}
-                </p>
-              )}
+          {/* [Ω.1.3] Aviso de mapeo automático: solo relevante antes de cargar.
+              Una vez status='loaded' o 'error' el archivo ya pasó por el mapeo
+              y la nota es ruido. */}
+          {step.status !== 'loaded' && step.status !== 'error' && (
+            <div className="mt-5 rounded-xl border border-amber-300/70 bg-amber-50/70 px-3.5 py-3">
+              <p className="text-xs leading-relaxed text-amber-800">
+                <span className="font-semibold">Mapeamos tus columnas automáticamente.</span>{' '}
+                No importa cómo se llamen: buscamos fecha, métricas de venta y dimensiones para agrupar.
+              </p>
             </div>
           )}
 
-        {/* Filas descartadas */}
+          <div className="mt-5 grid gap-5">
+            {(step.id === 'ventas' ? [
+              {
+                number: 1,
+                tone: 'amber',
+                title: 'Fecha',
+                tag: 'Requerido',
+                copy: 'Cuándo ocurrió la venta. Aceptamos nombres comunes en español e inglés.',
+                chips: ['fecha'],
+              },
+              {
+                number: 2,
+                tone: 'sky',
+                title: 'Cantidad vendida',
+                tag: 'Al menos uno',
+                copy: 'Pueden ser unidades, dinero, o ambos. Mejor si es ambos.',
+                chips: ['# unidades', '$ venta_neta'],
+              },
+              {
+                number: 3,
+                tone: 'neutral',
+                title: 'Dimensiones',
+                tag: 'Mejoran el análisis',
+                copy: 'Cada columna extra activa un análisis más profundo.',
+                chips: [
+                  'vendedor',
+                  'cliente',
+                  'producto',
+                  'categoria',
+                  'subcategoria',
+                  'canal',
+                  'departamento',
+                  'supervisor',
+                  'proveedor',
+                  'codigo_producto',
+                  'codigo_cliente',
+                  'costo_unitario',
+                ],
+              },
+            ] : step.id === 'metas' ? [
+              {
+                number: 1,
+                tone: 'amber',
+                title: 'Período',
+                tag: 'Requerido',
+                copy: 'El mes o período al que pertenece la meta.',
+                chips: ['mes_periodo'],
+              },
+              {
+                number: 2,
+                tone: 'amber',
+                title: 'Meta',
+                tag: 'Requerido',
+                copy: 'El objetivo que querés comparar contra ventas reales.',
+                chips: ['meta'],
+              },
+              {
+                number: 3,
+                tone: 'neutral',
+                title: 'Dimensiones',
+                tag: 'Al menos una',
+                copy: 'Define si la meta aplica a vendedor, cliente, producto o categoría.',
+                chips: ['vendedor', 'cliente', 'producto', 'categoria', 'subcategoria', 'canal', 'departamento', 'supervisor'],
+              },
+            ] : [
+              {
+                number: 1,
+                tone: 'amber',
+                title: 'Producto',
+                tag: 'Requerido',
+                copy: 'El producto o código que conecta inventario con ventas.',
+                chips: ['producto'],
+              },
+              {
+                number: 2,
+                tone: 'amber',
+                title: 'Unidades en stock',
+                tag: 'Requerido',
+                copy: 'Cantidad disponible para estimar riesgo de ruptura.',
+                chips: ['unidades'],
+              },
+              {
+                number: 3,
+                tone: 'neutral',
+                title: 'Clasificación',
+                tag: 'Opcional',
+                copy: 'Categoría, proveedor o código ayudan a segmentar el riesgo.',
+                chips: ['categoria', 'subcategoria', 'proveedor', 'codigo_producto'],
+              },
+            ]).map((item, index, arr) => (
+              <div key={item.title} className="relative grid grid-cols-[2rem_minmax(0,1fr)] gap-4">
+                {index < arr.length - 1 && (
+                  <div className="absolute left-4 top-9 bottom-[-1.25rem] w-px bg-[var(--sf-border-subtle)]" />
+                )}
+                <div className={cn(
+                  'relative z-10 w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold bg-[var(--sf-card)] border',
+                  item.tone === 'amber' ? 'border-amber-400 text-amber-600'
+                    : item.tone === 'sky' ? 'border-sky-400 text-sky-700'
+                    : 'border-emerald-500 text-emerald-700'
+                )}>
+                  {item.number}
+                </div>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-baseline gap-1.5">
+                    <h3 className="text-sm font-semibold uppercase text-[var(--sf-t1)]">{item.title}</h3>
+                    <span className={cn(
+                      'text-[11px] font-semibold uppercase',
+                      item.tone === 'amber' ? 'text-amber-600'
+                        : item.tone === 'sky' ? 'text-sky-700'
+                        : 'text-[var(--sf-t4)]'
+                    )}>· {item.tag}</span>
+                  </div>
+                  <p className="text-xs text-[var(--sf-t4)] mt-1">{item.copy}</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {item.chips.map((chip) => (
+                      <span
+                        key={chip}
+                        className={cn(
+                          'inline-flex items-center rounded-md border px-2.5 py-1 text-xs font-mono',
+                          item.tone === 'amber' ? 'border-amber-200 bg-amber-50 text-amber-700'
+                            : item.tone === 'sky' ? 'border-sky-200 bg-sky-50 text-sky-700'
+                            : 'border-slate-200 bg-slate-100 text-slate-700'
+                        )}
+                      >
+                        {chip}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-[var(--sf-border)] bg-[var(--sf-card)] p-6">
+          <div className="flex items-start justify-between gap-4 mb-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--sf-t4)]">Ejemplo de formato</p>
+              <p className="text-xs text-[var(--sf-t4)] mt-0.5">Los encabezados pueden estar en cualquier idioma.</p>
+            </div>
+            <button
+              type="button"
+              onClick={downloadTemplate}
+              className="shrink-0 rounded-lg border border-[var(--sf-border)] px-3 py-2 text-xs font-semibold text-[var(--sf-t2)] hover:bg-[var(--sf-hover)] transition-colors"
+            >
+              Descargar plantilla
+            </button>
+          </div>
+          <TablaEjemplo
+            headers={step.id === 'ventas' ? VENTAS_HEADERS : step.id === 'metas' ? METAS_HEADERS : INVENTARIO_HEADERS}
+            rows={step.id === 'ventas' ? VENTAS_ROWS : step.id === 'metas' ? METAS_ROWS : INVENTARIO_ROWS}
+          />
+        </section>
+
+        {/* Filas descartadas (post-upload) */}
         {step.status === 'loaded' && discardedRowsMap[step.id]?.length > 0 && (() => {
           const discarded = discardedRowsMap[step.id]
           return (
@@ -986,13 +929,13 @@ export default function UploadPage() {
                 Se detectaron {ignoredColumnsMap[step.id].length} {ignoredColumnsMap[step.id].length === 1 ? 'columna' : 'columnas'} no reconocidas — ver detalle
               </span>
               <span className="text-xs text-blue-500/60">
-                {showIgnoredColumns[step.id] ? '▲ Ocultar' : '▼ Ver'}
+                {showIgnoredColumns[step.id] ? '\u25B2 Ocultar' : '\u25BC Ver'}
               </span>
             </button>
             {showIgnoredColumns[step.id] && (
               <div className="px-3.5 pb-3 border-t border-blue-400/20 pt-2.5">
                 <p className="text-xs text-[var(--sf-t3)] mb-2">
-                  Estas columnas se detectaron en el archivo pero no corresponden a ningún campo reconocido. Se conservarán como metadato pero no participarán en el análisis actual. Si alguna debería analizarse, avísanos qué representa.
+                  Estas columnas se detectaron en el archivo pero no corresponden a ningún campo reconocido. Se conservarán como metadato pero no participarán en el análisis actual.
                 </p>
                 <div className="flex flex-wrap gap-1.5">
                   {ignoredColumnsMap[step.id].map((col) => (
@@ -1045,7 +988,6 @@ export default function UploadPage() {
                   :                                                     'Error al leer el archivo'}
                 </p>
                 <p className="text-xs text-[var(--sf-t3)] leading-relaxed">{step.parseError.message}</p>
-
                 {step.parseError.code === 'MULTIPLE_SHEETS' && (
                   <div className="flex flex-wrap gap-1.5 pt-1">
                     {step.parseError.sheets.map(s => (
@@ -1055,7 +997,6 @@ export default function UploadPage() {
                     ))}
                   </div>
                 )}
-
                 {step.parseError.code === 'MISSING_REQUIRED' && (
                   <div className="space-y-2 pt-1">
                     <div className="flex flex-wrap gap-1.5">
@@ -1065,62 +1006,24 @@ export default function UploadPage() {
                         </span>
                       ))}
                     </div>
-                    {/* [Z.P1.7/Z.P1.7.1] Sugerencias propositivas (top-3 keys con candidatos, top-2 candidatos c/u) */}
-                    {step.parseError.suggestions && step.parseError.suggestions.some(s => s.candidateHeaders.length > 0) && (
-                      <div className="space-y-1.5 pt-1">
-                        {step.parseError.suggestions
-                          .filter(s => s.candidateHeaders.length > 0)
-                          .slice(0, 3)
-                          .map(s => (
-                            <div key={s.missingKey} className="text-xs">
-                              <span className="text-[var(--sf-t3)]">
-                                ¿Quizás{' '}
-                                {s.candidateHeaders.slice(0, 2).map((h, i) => (
-                                  <span key={h}>
-                                    {i > 0 ? ' o ' : ''}
-                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-300/40 font-mono mx-0.5">
-                                      {h}
-                                    </span>
-                                  </span>
-                                ))}
-                                {' '}sea <span className="font-semibold">{s.missingKey}</span>?
-                              </span>
-                            </div>
-                          ))}
-                        <p className="text-[11px] text-[var(--sf-t4)] italic">
-                          Renómbrala a uno de los nombres aceptados en tu archivo y vuelve a subirlo.
-                        </p>
-                      </div>
-                    )}
-                    {step.parseError.unrecognizedHeaders && step.parseError.unrecognizedHeaders.length > 0 && (!step.parseError.suggestions || step.parseError.suggestions.every(s => s.candidateHeaders.length === 0)) && (
-                      <p className="text-[11px] text-[var(--sf-t4)]">
-                        Columnas no reconocidas en tu archivo: {step.parseError.unrecognizedHeaders.slice(0, 6).join(', ')}{step.parseError.unrecognizedHeaders.length > 6 ? '\u2026' : ''}
-                      </p>
-                    )}
                   </div>
                 )}
-
                 {step.parseError.code === 'INVALID_DATES' && (
                   <div className="pt-1 space-y-1">
                     <p className="text-[0.6875rem] text-[var(--sf-t4)]">Fechas encontradas en el archivo:</p>
                     <div className="flex flex-wrap gap-1.5">
                       {step.parseError.sample.map((s, i) => (
-                        <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-600 font-medium">
-                          {s}
-                        </span>
+                        <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-600 font-medium">{s}</span>
                       ))}
                     </div>
                   </div>
                 )}
-
                 {step.parseError.code === 'ENCODING_ISSUE' && step.parseError.sample.length > 0 && (
                   <div className="pt-1 space-y-1">
                     <p className="text-[0.6875rem] text-[var(--sf-t4)]">Columnas con caracteres incorrectos:</p>
                     <div className="flex flex-wrap gap-1.5">
                       {step.parseError.sample.map((s, i) => (
-                        <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-600 font-medium">
-                          {s}
-                        </span>
+                        <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-600 font-medium">{s}</span>
                       ))}
                     </div>
                   </div>
@@ -1131,26 +1034,34 @@ export default function UploadPage() {
         )}
 
         {/* Banner CTA — ventas cargado */}
+        {/* [primera-impresion] Banner único de éxito post-upload.
+            Reemplaza la triple confirmación previa: ahora archivo + filas + columnas
+            viven en un solo bloque, no en 3 lugares distintos de la pantalla. */}
         {step.id === 'ventas' && step.status === 'loaded' && step.parsedData && (
-          <div className="flex items-center justify-between gap-4 px-4 py-3.5 rounded-lg bg-[var(--sf-green-bg)] border border-[var(--sf-green-border)]">
+          <div className="flex items-start gap-3 px-4 py-3.5 rounded-lg bg-[var(--sf-green-bg)] border border-[var(--sf-green-border)]">
+            <Check className="w-4 h-4 mt-0.5 shrink-0 text-emerald-600" />
             <div className="min-w-0">
               <p className="text-sm font-semibold text-emerald-600">
-                {'\u2713'} Archivo listo — {step.parsedData.length.toLocaleString()} {step.parsedData.length === 1 ? 'registro cargado' : 'registros cargados'}
+                Archivo listo — {step.parsedData.length.toLocaleString()} {step.parsedData.length === 1 ? 'registro cargado' : 'registros cargados'}
+                {detectedCols[step.id] && (
+                  <span className="font-normal text-[var(--sf-t3)]"> · {detectedCols[step.id].length} columnas detectadas</span>
+                )}
               </p>
               <p className="text-xs text-[var(--sf-t3)] mt-0.5">
-                Puedes continuar ahora o agregar metas e inventario para activar más análisis.
+                Usa Siguiente para agregar metas o inventario opcional antes de analizar.
               </p>
             </div>
-            <button
-              onClick={() => setCurrentStep(c => c + 1)}
-              className="shrink-0 px-5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-semibold text-sm transition-colors whitespace-nowrap"
-            >
-              Continuar →
-            </button>
           </div>
         )}
 
-        {/* Vista previa de datos */}
+        {/* Resumen post-upload (steps no-ventas: solo conteo de columnas) */}
+        {step.id !== 'ventas' && step.status === 'loaded' && detectedCols[step.id] && (
+          <p className="text-[0.6875rem] text-[var(--sf-t4)] pt-1 border-t border-[var(--sf-border)]">
+            {detectedCols[step.id].length} columnas detectadas · {step.file?.name}
+          </p>
+        )}
+
+        {/* Vista previa post-upload */}
         {step.parsedData && step.parsedData.length > 0 && step.status === 'loaded' && (
           <div className="space-y-2">
             <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--sf-t4)]">
@@ -1159,56 +1070,10 @@ export default function UploadPage() {
             <DataPreview data={step.parsedData} maxRows={5} />
           </div>
         )}
-        </div>
-        {/* /panel izquierdo */}
-
-        {/* Panel derecho: dropzone sticky */}
-        <div className="lg:col-span-1">
-          <div className="lg:sticky lg:top-6">
-            <FileDropzone
-              step={step}
-              onFileSelect={(file) => handleFileSelect(currentStep, file)}
-              onSkip={!step.required ? () => handleSkip(currentStep) : undefined}
-              isProcessing={processingStep === currentStep}
-              progressPercent={processingStep === currentStep ? parseProgress : 0}
-              progressDetail={processingStep === currentStep ? parseDetail : ''}
-              onLoadDemo={step.id === 'ventas' && dataSource !== 'demo' ? handleLoadDemo : undefined}
-              onDownloadTemplate={step.id === 'ventas' ? downloadTemplate : undefined}
-            />
-          </div>
-        </div>
       </div>
-      {/* /grid */}
-
-      {/* Ejemplo full-width */}
-      <section className="mt-12">
-        <p className="text-sm text-[var(--sf-t4)] mb-3">
-          Este es un ejemplo con nombres en español, pero aceptamos archivos en inglés, con códigos, o como vengan. La app entiende muchos formatos.
-        </p>
-        <button
-          onClick={() => setShowExample(prev => !prev)}
-          className="flex items-center justify-between w-full text-left px-3.5 py-2.5 rounded-xl border border-[var(--sf-border)] hover:border-[var(--sf-green-border)] hover:bg-[var(--sf-green-bg)] transition-all cursor-pointer group"
-          style={{ background: 'var(--sf-elevated)' }}
-        >
-          <p className="text-xs font-semibold text-[var(--sf-t3)] uppercase tracking-widest group-hover:text-[var(--sf-green)] transition-colors">
-            Ejemplo de formato
-          </p>
-          <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--sf-green)]">
-            {showExample ? '▲ Ocultar' : '▼ Ver'}
-          </span>
-        </button>
-        {showExample && (
-          <>
-            <TablaEjemplo
-              headers={step.id === 'ventas' ? VENTAS_HEADERS : step.id === 'metas' ? METAS_HEADERS : INVENTARIO_HEADERS}
-              rows={step.id === 'ventas' ? VENTAS_ROWS : step.id === 'metas' ? METAS_ROWS : INVENTARIO_ROWS}
-            />
-          </>
-        )}
-      </section>
 
       {/* Navigation */}
-      <div className="flex items-center justify-between">
+      <div className="grid grid-cols-[auto_1fr_auto] items-center gap-4 pt-1 border-t border-[var(--sf-border-subtle)]">
         <button
           onClick={() => setCurrentStep((c) => c - 1)}
           disabled={currentStep === 0}
@@ -1223,6 +1088,10 @@ export default function UploadPage() {
           <ChevronLeft className="w-4 h-4" />
           Anterior
         </button>
+
+        <p className="text-center text-xs text-[var(--sf-t4)] min-w-0">
+          Paso {currentStep + 1} de {steps.length} · {wizardStatusCopy}
+        </p>
 
         <div className="flex items-center gap-3">
           {isLastStep ? (
@@ -1244,6 +1113,15 @@ export default function UploadPage() {
               <button
                 onClick={() => setCurrentStep((c) => c + 1)}
                 disabled={!canGoNext()}
+                aria-disabled={!canGoNext()}
+                title={!canGoNext()
+                  ? (step.status === 'error'
+                      ? 'El archivo tiene errores. Sub\u00ed uno v\u00e1lido o intentalo con otro antes de continuar.'
+                      : step.required
+                        ? 'Sub\u00ed un archivo o carg\u00e1 la demo para continuar.'
+                        : 'Sub\u00ed un archivo o presion\u00e1 Omitir este paso (es opcional).')
+                  : undefined
+                }
                 className={cn(
                   'flex items-center gap-2 rounded-xl text-sm font-semibold transition-all duration-300',
                   canGoNext()
@@ -1262,6 +1140,8 @@ export default function UploadPage() {
             </div>
           )}
         </div>
+      </div>
+        </main>
       </div>
 
       {/* Modal: confirmar sobreescritura de metas */}
@@ -1285,6 +1165,31 @@ export default function UploadPage() {
           </div>
         </div>
       )}
+
+      {/* [primera-impresion] Modal: confirmar Limpiar (no descartar archivo cargado por error) */}
+      {showLimpiarConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.5)' }} onClick={() => setShowLimpiarConfirm(false)}>
+          <div className="rounded-xl p-6 shadow-2xl mx-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', maxWidth: 400 }} onClick={e => e.stopPropagation()}>
+            <p className="text-sm font-medium mb-1" style={{ color: 'var(--sf-t1)' }}>¿Descartar lo cargado?</p>
+            <p className="text-sm mb-5" style={{ color: 'var(--sf-t3)' }}>
+              Vas a perder el archivo y los pasos completados de este wizard. Esta acción no se puede deshacer.
+            </p>
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => setShowLimpiarConfirm(false)}
+                className="px-4 py-2 rounded-lg text-sm transition-colors cursor-pointer"
+                style={{ color: 'var(--sf-t3)' }}
+              >Cancelar</button>
+              <button
+                onClick={() => { setShowLimpiarConfirm(false); handleLimpiar() }}
+                className="px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer"
+                style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171', border: '1px solid rgba(239,68,68,0.3)' }}
+              >Sí, descartar</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
+
