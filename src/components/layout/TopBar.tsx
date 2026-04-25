@@ -4,7 +4,7 @@ import { useAppStore } from '../../store/appStore'
 import { Sun, Moon, DollarSign, Hash } from 'lucide-react'
 
 const PAGE_TITLES: Record<string, { title: string; sub: string }> = {
-  '/cargar':        { title: 'Cargar Datos',        sub: 'Sube tus ventas y activa el monitor comercial' },
+  '/cargar':        { title: 'Cargar Datos',        sub: 'Paso 1 · Datos de ventas' },
   '/dashboard':     { title: 'Estado Comercial',    sub: 'Alertas, semáforo de riesgo y KPIs del equipo' },
   '/vendedores':    { title: 'Vendedores',          sub: 'Desempeño individual y alertas por vendedor' },
   '/rendimiento':   { title: 'Rendimiento Anual',   sub: 'Comparativa año actual vs año anterior' },

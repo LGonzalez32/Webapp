@@ -14,6 +14,11 @@ export interface SaleRecord {
   supervisor?: string
   codigo_producto?: string
   codigo_cliente?: string
+  // [Z.P1.9.2] costo_unitario puede venir directo (unit_cost, precio_costo...)
+  // o derivado por el parser si el header era un "total de línea" (Costo de
+  // Ventas, COGS...). Se requiere columna producto para que el valor sea
+  // conservado (ver warning COSTO_SIN_PRODUCTO).
+  costo_unitario?: number
   // [PR-M1] Clave canónica de cliente derivada por el parser:
   //   codigo_cliente?.trim() || nombre_cliente?.trim().toUpperCase() || null
   // Útil para agregaciones cuando conviven códigos y nombres entre filas.
@@ -33,6 +38,7 @@ export interface MetaRecord {
   cliente?:      string
   producto?:     string
   categoria?:    string
+  subcategoria?: string
   departamento?: string
   supervisor?:   string
   canal?:        string
@@ -240,7 +246,18 @@ export type ParseError =
   | { code: 'FORMAT_NOT_SUPPORTED'; message: string }
   | { code: 'MULTIPLE_SHEETS'; sheets: string[]; message: string }
   | { code: 'NO_VALID_COLUMNS'; found: string[]; message: string }
-  | { code: 'MISSING_REQUIRED'; missing: string[]; found: string[]; message: string }
+  | {
+      code: 'MISSING_REQUIRED'
+      missing: string[]
+      found: string[]
+      message: string
+      unrecognizedHeaders?: string[]
+      suggestions?: Array<{
+        missingKey: string
+        candidateHeaders: string[]
+        acceptedAliases: string[]
+      }>
+    }
   | { code: 'EMPTY_FILE'; message: string }
   | { code: 'INVALID_DATES'; sample: string[]; message: string }
   | { code: 'FILE_PROTECTED_OR_CORRUPT'; message: string }
@@ -253,8 +270,54 @@ export interface DiscardedRow {
   reason: string
 }
 
+/**
+ * [Z.P1.10.b.1] Campos canónicos que el parser puede mapear desde headers crudos.
+ * Coincide 1:1 con las keys de SALES_MAPPINGS en src/lib/fileParser.ts.
+ */
+export type CanonicalField =
+  | 'fecha'
+  | 'unidades'
+  | 'venta_neta'
+  | 'costo_unitario'
+  | 'vendedor'
+  | 'cliente'
+  | 'producto'
+  | 'categoria'
+  | 'subcategoria'
+  | 'proveedor'
+  | 'canal'
+  | 'departamento'
+  | 'supervisor'
+  | 'codigo_producto'
+  | 'codigo_cliente'
+
+/**
+ * [Z.P1.10.b.1] Override del mapeo automático del parser.
+ *
+ * Para cada campo canónico (CanonicalField):
+ * - `string` (header del archivo) → forzar mapeo: usar este header como el campo canónico,
+ *   ignorando la detección automática.
+ * - `null` → ignorar explícitamente este campo (no mapear nada a él aunque haya sido detectable).
+ * - `undefined` / ausente → usar la detección automática normal.
+ *
+ * Si un override fuerza un header que no existe en el archivo, el parser emite un warning
+ * `OVERRIDE_HEADER_NOT_FOUND` y cae a la detección automática para ese campo.
+ */
+export type MappingOverride = Partial<Record<CanonicalField, string | null>>
+
 export type ParseResult<T> =
-  | { success: true; data: T[]; columns: string[]; sheetName?: string; discardedRows?: DiscardedRow[] }
+  | {
+      success: true
+      data: T[]
+      columns: string[]
+      sheetName?: string
+      discardedRows?: DiscardedRow[]
+      ignoredColumns?: string[]
+      dateAmbiguity?: { convention: 'dmy' | 'mdy' | 'ymd' | 'unknown'; evidence: string }
+      warnings?: Array<{ code: string; message: string; field?: string }>
+      /** [Z.P1.10.b.1] Trace de mapeo: canónico → header crudo del archivo que se asignó. */
+      mapping?: Partial<Record<CanonicalField, string>>
+    }
   | { success: false; error: ParseError }
 
 // ─── UPLOAD / SESIÓN ──────────────────────────────────────────────────────────
