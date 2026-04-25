@@ -50,7 +50,7 @@ interface ResultMessage {
   sheetName?: string
   discardedRows?: unknown[]
   ignoredColumns?: string[]
-  dateAmbiguity?: { convention: 'dmy' | 'mdy' | 'ymd' | 'unknown'; evidence: string }
+  dateAmbiguity?: { convention: 'dmy' | 'mdy' | 'ymd' | 'unknown'; evidence: string; ambiguous: boolean }
   warnings?: Array<{ code: string; message: string; field?: string }>
   /** [Z.P1.10.b.1] Trace de mapeo (canónico → header crudo). Solo en type='sales'. */
   mapping?: Record<string, string>
@@ -526,10 +526,18 @@ self.onmessage = (event: MessageEvent<ParseWorkerInput>) => {
       sheetName,
       discardedRows: discardedRows.length > 0 ? discardedRows : undefined,
       ignoredColumns: ignoredColumns.length > 0 ? ignoredColumns : undefined,
-      dateAmbiguity: dateConv && dateConv.ambiguous ? { convention: dateConv.convention, evidence: dateConv.evidence } : undefined,
+      // [P2] Emitir siempre que la convención sea dmy/mdy (no solo cuando
+      // ambiguous=true). Antes el caso `12/13/2026` con secondOver12 fijaba
+      // mdy con ambiguous=false → no warning → usuario no veía la asunción.
+      // El flag `ambiguous` se pasa para que la UI diferencie el copy entre
+      // "ambiguo (asumimos X)" vs "detectamos formato X".
+      dateAmbiguity: dateConv && (dateConv.convention === 'dmy' || dateConv.convention === 'mdy')
+        ? { convention: dateConv.convention, evidence: dateConv.evidence, ambiguous: dateConv.ambiguous }
+        : undefined,
       warnings: salesWarnings.length > 0 ? salesWarnings : undefined,
-      // [Z.P1.10.b.1] Trace de mapeo (solo aplica para sales; metas/inventory no lo necesitan)
-      mapping: type === 'sales' ? computeMappingTrace(rawHeaders, MAPPINGS) : undefined,
+      // [P4] Trace de mapeo para los 3 tipos. Antes solo se emitía para sales;
+      // el panel "Mapeo detectado" lo necesita también en metas/inventario.
+      mapping: computeMappingTrace(rawHeaders, MAPPINGS),
       tipoMeta,
     })
   } catch (err: unknown) {

@@ -36,20 +36,36 @@ export default function FileDropzone({ step, onFileSelect, onSkip, isProcessing,
   const isLoaded = step.status === 'loaded';
   const isError = step.status === 'error';
 
-  // [Z.P1.10.c.fix-mini/C3] Texto de error discriminado por código.
-  // Si el archivo se leyó pero falló validación, "no pudimos leer" miente.
+  // [Z.P1.10.c.fix-mini/C3 + P5] Texto de error discriminado por código.
+  // El banner principal del dropzone debe ser específico para cada código —
+  // antes colapsaba >50MB, .pdf y .xlsx corruptos al mismo "No pudimos leer
+  // este archivo". El usuario solo ve este banner si no scrollea al detalle
+  // de abajo, así que tiene que hablar por sí mismo.
   const errorMessage = (() => {
     if (!isError || !step.parseError) return 'No pudimos leer este archivo';
-    const code = step.parseError.code;
-    // Códigos donde el archivo SÍ se leyó pero algo más falló:
-    if (code === 'MISSING_REQUIRED' || code === 'EMPTY_FILE' || code === 'INVALID_DATES') {
-      return 'El archivo se leyó, pero faltan datos obligatorios';
+    const pe = step.parseError;
+    switch (pe.code) {
+      case 'FILE_TOO_LARGE':
+        return `Archivo muy pesado (${pe.sizeMB}MB > ${pe.limitMB}MB)`;
+      case 'FORMAT_NOT_SUPPORTED':
+        return 'Formato no soportado — usá .xlsx, .xls o .csv';
+      case 'FILE_PROTECTED_OR_CORRUPT':
+        return 'Archivo protegido o corrupto';
+      case 'EMPTY_FILE':
+        return 'El archivo no tiene datos procesables';
+      case 'MULTIPLE_SHEETS':
+        return 'El Excel tiene varias pestañas — dejá una sola';
+      case 'MISSING_REQUIRED':
+        return 'Faltan columnas obligatorias';
+      case 'NO_VALID_COLUMNS':
+        return 'No reconocimos las columnas del archivo';
+      case 'INVALID_DATES':
+        return 'No pudimos interpretar las fechas';
+      case 'ENCODING_ISSUE':
+        return 'Problema de codificación de texto';
+      default:
+        return 'No pudimos leer este archivo';
     }
-    if (code === 'NO_VALID_COLUMNS') {
-      return 'El archivo se leyó, pero no reconocimos las columnas';
-    }
-    // Códigos de IO/encoding/formato real:
-    return 'No pudimos leer este archivo';
   })();
 
   return (

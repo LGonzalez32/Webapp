@@ -106,6 +106,26 @@ interface AppState {
   comparisonEnabled: boolean
   comparisonPeriod: { year: number; month: number } | null
 
+  // [B1] Borrador del wizard de carga (in-memory, no persistido).
+  // Sobrevive a navegaciones intra-app entre sidebar/dashboard/upload así que
+  // un usuario que sube un archivo y navega antes de "Analizar ventas" no
+  // pierde el archivo al volver a /cargar. Se limpia en doAnalyze() y
+  // resetAll().
+  wizardDraft: null | {
+    ventas?: SaleRecord[]
+    metas?: MetaRecord[]
+    inventario?: InventoryItem[]
+    detectedCols?: Record<string, string[]>
+    ignoredColumns?: Record<string, string[]>
+    discardedRows?: Record<string, unknown[]>
+    dateAmbiguity?: Record<string, { convention: string; evidence: string; ambiguous: boolean }>
+    warnings?: Record<string, Array<{ code: string; message: string; field?: string }>>
+    mapping?: Record<string, Record<string, string>>
+    files?: Record<string, File>
+    currentStep?: number
+    stepStatus?: Record<string, 'pending' | 'loaded' | 'skipped' | 'error'>
+  }
+
   // Configuración
   configuracion: Configuracion
 
@@ -157,6 +177,10 @@ interface AppState {
   toggleComparison: () => void
   setComparisonPeriod: (period: { year: number; month: number } | null) => void
 
+  // [B1] Borrador del wizard de carga
+  setWizardDraft: (draft: AppState['wizardDraft']) => void
+  clearWizardDraft: () => void
+
   resetAll: () => void
 }
 
@@ -189,6 +213,7 @@ export const useAppStore = create<AppState>()(
       chatContextVendedor: null,
       chatContextCliente: null,
       chatMessages: [],
+      wizardDraft: null,
       forecastData: null,
       forecastLoading: false,
       forecastChartLoading: false,
@@ -296,6 +321,10 @@ export const useAppStore = create<AppState>()(
       })),
       setComparisonPeriod: (comparisonPeriod) => set({ comparisonPeriod }),
 
+      // [B1] Borrador del wizard
+      setWizardDraft: (wizardDraft) => set({ wizardDraft }),
+      clearWizardDraft: () => set({ wizardDraft: null }),
+
       resetAll: () => {
         localStorage.removeItem('salesflow-storage')
         set({
@@ -330,6 +359,7 @@ export const useAppStore = create<AppState>()(
           dataSource: 'none',
           comparisonEnabled: false,
           comparisonPeriod: null,
+          wizardDraft: null,
           isProcessed: false,
           isLoading: false,
           selectedPeriod: {

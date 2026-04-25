@@ -162,7 +162,7 @@ function TablaEjemplo({ headers, rows }: { headers: { col: string; req: boolean 
 }
 
 export default function UploadPage() {
-  const { setSales, setMetas, setInventory, setIsProcessed, setSelectedPeriod, setDataSource, resetAll, configuracion, setConfiguracion, dataSource, metas: existingMetas } = useAppStore()
+  const { setSales, setMetas, setInventory, setIsProcessed, setSelectedPeriod, setDataSource, resetAll, configuracion, setConfiguracion, dataSource, metas: existingMetas, sales: existingSales, inventory: existingInventory, wizardDraft, setWizardDraft, clearWizardDraft } = useAppStore()
   const { org } = useOrgStore()
   const canEdit = useOrgStore(s => s.canEdit())
   const { canUpload } = useUserRole()
@@ -178,30 +178,108 @@ export default function UploadPage() {
   const [discardedRowsMap, setDiscardedRowsMap] = useState<Record<string, DiscardedRow[]>>({})
   const [ignoredColumnsMap, setIgnoredColumnsMap] = useState<Record<string, string[]>>({})
   const [showIgnoredColumns, setShowIgnoredColumns] = useState<Record<string, boolean>>({})
-  const [dateAmbiguityMap, setDateAmbiguityMap] = useState<Record<string, { convention: string; evidence: string }>>({})
+  const [dateAmbiguityMap, setDateAmbiguityMap] = useState<Record<string, { convention: string; evidence: string; ambiguous: boolean }>>({})
   const [warningsMap, setWarningsMap] = useState<Record<string, Array<{ code: string; message: string; field?: string }>>>({})
+  // [P4] Mapping detectado por step: { headerOriginal: campoCanónico }
+  const [mappingMap, setMappingMap] = useState<Record<string, Record<string, string>>>({})
+  const [showMapping, setShowMapping] = useState<Record<string, boolean>>({})
   const [showDiscarded, setShowDiscarded] = useState(false)
   const [showSuccess, setShowSuccess] = useState(false)
   const [showMetasConfirm, setShowMetasConfirm] = useState(false)
-  // [primera-impresion] Confirmación al limpiar para no descartar trabajo por error
-  const [showLimpiarConfirm, setShowLimpiarConfirm] = useState(false)
+  // [primera-impresion] Confirmación al limpiar para no descartar trabajo por error.
+  // [A1] El modal cubre 2 intents: "Limpiar" (botón corner) y "Reemplazar datos"
+  // (banner re-entrada). Copy diferente según intent — el botón "Reemplazar" no
+  // debe mostrar "¿Descartar?" porque rompe la promesa.
+  const [limpiarIntent, setLimpiarIntent] = useState<'limpiar' | 'reemplazar' | null>(null)
+  const showLimpiarConfirm = limpiarIntent !== null
+  const setShowLimpiarConfirm = (show: boolean) => setLimpiarIntent(show ? 'limpiar' : null)
 
   const currentStepStatus = steps[currentStep]?.status
   useEffect(() => {
     setShowDiscarded(false)
   }, [currentStep])
 
-  // [Ω.1.0] Reset dataSource al entrar a /cargar si el wizard está pristine.
-  // dataSource se persiste en localStorage; si una sesión previa cargó demo
-  // y el usuario hizo "Limpiar" (que solo limpia store de datos, no dataSource)
-  // o navegó fuera, al volver vería el badge "Datos demo" mintiendo sobre un
-  // wizard vacío. Anclamos dataSource al estado visible inicial.
+  // [P1 + B1] Hidratar el wizard al montarse. Tres fuentes en orden de prioridad:
+  // 1. existingSales (post-análisis): el store tiene datos analizados → reflejar steps
+  //    como loaded con parsedData de cada dataset. Esto resuelve P1/Ω.1.0:
+  //    el usuario vuelve a /cargar tras dashboard y ve sus datos, no wizard pristine.
+  // 2. wizardDraft (mid-wizard, B1): el usuario subió archivos pero no analizó, y
+  //    navegó fuera/volvió. El draft in-memory restaura todo (parsedData, mappings,
+  //    discardedRows, dateAmbiguity, files, currentStep). Resuelve B1 (P12.A):
+  //    antes el archivo se perdía silenciosamente al ir al sidebar pre-análisis.
+  // 3. Si no hay nada, mantener INITIAL_STEPS (pristine real).
   useEffect(() => {
-    if (steps[0].status === 'pending' && !steps[0].file && dataSource !== 'none') {
-      setDataSource('none')
+    const wizardPristine = steps.every((s) => s.status === 'pending' && !s.file)
+    if (!wizardPristine) return
+
+    // Fuente 1: datos analizados en store
+    if (existingSales.length > 0) {
+      setSteps((prev) => prev.map((s) => {
+        if (s.id === 'ventas')                                       return { ...s, status: 'loaded', parsedData: existingSales as any }
+        if (s.id === 'metas'      && existingMetas.length > 0)       return { ...s, status: 'loaded', parsedData: existingMetas as any }
+        if (s.id === 'inventario' && existingInventory.length > 0)   return { ...s, status: 'loaded', parsedData: existingInventory as any }
+        return s
+      }))
+      return
+    }
+
+    // Fuente 2: borrador del wizard (B1)
+    if (wizardDraft && (wizardDraft.ventas?.length || wizardDraft.metas?.length || wizardDraft.inventario?.length)) {
+      setSteps((prev) => prev.map((s) => {
+        const status = wizardDraft.stepStatus?.[s.id] ?? 'pending'
+        const file = wizardDraft.files?.[s.id]
+        const parsedData =
+          s.id === 'ventas'     ? wizardDraft.ventas :
+          s.id === 'metas'      ? wizardDraft.metas :
+          s.id === 'inventario' ? wizardDraft.inventario :
+          undefined
+        if (status === 'loaded' && parsedData && parsedData.length > 0) {
+          return { ...s, status: 'loaded', parsedData: parsedData as any, file }
+        }
+        if (status === 'skipped') return { ...s, status: 'skipped' }
+        return s
+      }))
+      if (wizardDraft.detectedCols)   setDetectedCols(wizardDraft.detectedCols)
+      if (wizardDraft.ignoredColumns) setIgnoredColumnsMap(wizardDraft.ignoredColumns)
+      if (wizardDraft.discardedRows)  setDiscardedRowsMap(wizardDraft.discardedRows as any)
+      if (wizardDraft.dateAmbiguity)  setDateAmbiguityMap(wizardDraft.dateAmbiguity as any)
+      if (wizardDraft.warnings)       setWarningsMap(wizardDraft.warnings)
+      if (wizardDraft.mapping)        setMappingMap(wizardDraft.mapping)
+      if (typeof wizardDraft.currentStep === 'number') setCurrentStep(wizardDraft.currentStep)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [existingSales.length, existingMetas.length, existingInventory.length])
+
+  // [B1] Persistir el borrador del wizard en el store cuando hay actividad
+  // pre-análisis. Si el usuario navega fuera (sidebar → dashboard → bounce),
+  // al volver a /cargar la hidratación lo restaura. Solo guardamos cuando
+  // hay algo que valga la pena restaurar (algún step loaded/skipped/error).
+  useEffect(() => {
+    const algoCargado = steps.some((s) => s.status === 'loaded' || s.status === 'skipped')
+    const yaAnalizado = existingSales.length > 0
+    if (yaAnalizado) return // no pisar; el store ya es la fuente de verdad
+
+    if (!algoCargado) {
+      if (wizardDraft) clearWizardDraft()
+      return
+    }
+
+    setWizardDraft({
+      ventas:      steps[0].status === 'loaded' ? (steps[0].parsedData as any) : undefined,
+      metas:       steps[1].status === 'loaded' ? (steps[1].parsedData as any) : undefined,
+      inventario:  steps[2].status === 'loaded' ? (steps[2].parsedData as any) : undefined,
+      detectedCols,
+      ignoredColumns: ignoredColumnsMap,
+      discardedRows: discardedRowsMap as any,
+      dateAmbiguity: dateAmbiguityMap as any,
+      warnings: warningsMap,
+      mapping: mappingMap,
+      files: Object.fromEntries(steps.filter((s) => s.file).map((s) => [s.id, s.file as File])),
+      stepStatus: Object.fromEntries(steps.map((s) => [s.id, s.status])),
+      currentStep,
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [steps, currentStep, detectedCols, ignoredColumnsMap, discardedRowsMap, dateAmbiguityMap, warningsMap, mappingMap, existingSales.length])
 
   type StorageFiles = {
     ventas:     { exists: boolean; name: string | null; updated_at: string | null }
@@ -218,8 +296,31 @@ export default function UploadPage() {
   const updateStep = (idx: number, partial: Partial<UploadStep>) =>
     setSteps((prev) => prev.map((s, i) => (i === idx ? { ...s, ...partial } : s)))
 
+  // [G3] Límite de tamaño antes del worker. Evita parsear archivos enormes
+  // que congelan el browser. 50MB cubre archivos reales con holgura
+  // (50k filas Excel ~ 8-10MB).
+  const MAX_FILE_BYTES = 50 * 1024 * 1024
+
   const handleFileSelect = async (idx: number, file: File) => {
     const stepId = steps[idx].id
+
+    // [G3] Validación de tamaño ANTES de invocar al worker
+    if (file.size > MAX_FILE_BYTES) {
+      const sizeMB = Math.round((file.size / (1024 * 1024)) * 10) / 10
+      updateStep(idx, {
+        file,
+        status: 'error',
+        parsedData: undefined,
+        parseError: {
+          code: 'FILE_TOO_LARGE',
+          sizeMB,
+          limitMB: 50,
+          message: `El archivo pesa ${sizeMB}MB y supera el límite de 50MB. Reducí el rango de fechas, eliminá hojas innecesarias o usá la plantilla.`,
+        },
+      })
+      return
+    }
+
     setProcessingStep(idx)
     setParseProgress(0)
     setParseDetail('Iniciando...')
@@ -229,6 +330,7 @@ export default function UploadPage() {
     setIgnoredColumnsMap(prev => { const next = { ...prev }; delete next[stepId]; return next })
     setDateAmbiguityMap(prev => { const next = { ...prev }; delete next[stepId]; return next })
     setWarningsMap(prev => { const next = { ...prev }; delete next[stepId]; return next })
+    setMappingMap(prev => { const next = { ...prev }; delete next[stepId]; return next })
 
     const onProgress = (percent: number, detail: string) => {
       setParseProgress(percent)
@@ -244,6 +346,7 @@ export default function UploadPage() {
         if (r.ignoredColumns?.length) setIgnoredColumnsMap(prev => ({ ...prev, [stepId]: r.ignoredColumns! }))
         if (r.dateAmbiguity) setDateAmbiguityMap(prev => ({ ...prev, [stepId]: r.dateAmbiguity! }))
         if (r.warnings?.length) setWarningsMap(prev => ({ ...prev, [stepId]: r.warnings! }))
+        if (r.mapping) setMappingMap(prev => ({ ...prev, [stepId]: r.mapping as Record<string, string> }))
         updateStep(idx, { parsedData: r.data, status: 'loaded', parseError: undefined })
       } else if (stepId === 'metas') {
         const r = await parseMetasFileInWorker(file, onProgress)
@@ -251,6 +354,7 @@ export default function UploadPage() {
         setDetectedCols(prev => ({ ...prev, [stepId]: r.columns }))
         if (r.discardedRows?.length) setDiscardedRowsMap(prev => ({ ...prev, [stepId]: r.discardedRows! }))
         if (r.ignoredColumns?.length) setIgnoredColumnsMap(prev => ({ ...prev, [stepId]: r.ignoredColumns! }))
+        if (r.mapping) setMappingMap(prev => ({ ...prev, [stepId]: r.mapping as Record<string, string> }))
         updateStep(idx, { parsedData: r.data, status: 'loaded', parseError: undefined })
       } else {
         const r = await parseInventoryFileInWorker(file, onProgress)
@@ -258,8 +362,11 @@ export default function UploadPage() {
         setDetectedCols(prev => ({ ...prev, [stepId]: r.columns }))
         if (r.discardedRows?.length) setDiscardedRowsMap(prev => ({ ...prev, [stepId]: r.discardedRows! }))
         if (r.ignoredColumns?.length) setIgnoredColumnsMap(prev => ({ ...prev, [stepId]: r.ignoredColumns! }))
+        if (r.mapping) setMappingMap(prev => ({ ...prev, [stepId]: r.mapping as Record<string, string> }))
         updateStep(idx, { parsedData: r.data, status: 'loaded', parseError: undefined })
       }
+      // [GAP-MAPEO-MANUAL] Mapeo manual de columnas no reconocidas: nice-to-have
+      // separado. Hoy `ignoredColumns` es read-only.
     } catch (e) {
       updateStep(idx, {
         status: 'error',
@@ -293,6 +400,81 @@ export default function UploadPage() {
   const hasAnythingToClear =
     processingStep !== null ||
     steps.some((s) => s.status === 'loaded' || s.status === 'error' || s.file !== undefined)
+
+  // [Datos insuficientes] Días distintos en ventas. Warning si < 30.
+  // No bloquea el avance — el usuario puede entrar al motor con poco
+  // historial y ver el resultado, pero advertimos que las series no
+  // van a tener tendencia/estacionalidad.
+  const ventasInsuficientes = useMemo(() => {
+    const data = steps[0].parsedData ?? []
+    if (data.length === 0) return null
+    const dias = new Set<string>()
+    for (const r of data as any[]) {
+      const f = r.fecha
+      if (!f) continue
+      const d = f instanceof Date ? f : new Date(f)
+      if (isNaN(d.getTime())) continue
+      dias.add(`${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`)
+    }
+    if (dias.size === 0 || dias.size >= 30) return null
+    return { diasDistintos: dias.size }
+  }, [steps[0].parsedData])
+
+  // [P3] Cross-validation metas ↔ ventas. Para cada dimensión que la meta
+  // declara, verificar que sus valores existan en sales. Warning, no bloqueo.
+  const metasOrfanas = useMemo(() => {
+    const metasData = steps[1].parsedData as any[] | undefined
+    const salesData = steps[0].parsedData as any[] | undefined
+    if (!metasData?.length || !salesData?.length) return null
+
+    // Sets desde sales por dimensión
+    const setsVentas: Record<string, Set<string>> = {
+      vendedor:  new Set(salesData.map((s) => s.vendedor).filter(Boolean)),
+      cliente:   new Set(salesData.map((s) => s.cliente).filter(Boolean)),
+      producto:  new Set(salesData.map((s) => s.producto).filter(Boolean)),
+      categoria: new Set(salesData.map((s) => s.categoria).filter(Boolean)),
+    }
+
+    const orfanos: Record<string, Set<string>> = {}
+    for (const m of metasData) {
+      for (const dim of ['vendedor', 'cliente', 'producto', 'categoria'] as const) {
+        const v = m[dim]
+        if (!v) continue
+        if (!setsVentas[dim].has(v)) {
+          if (!orfanos[dim]) orfanos[dim] = new Set()
+          orfanos[dim].add(v)
+        }
+      }
+    }
+    const dims = Object.keys(orfanos).filter((d) => orfanos[d].size > 0)
+    if (dims.length === 0) return null
+    return dims.map((dim) => ({
+      dimension: dim,
+      count: orfanos[dim].size,
+      examples: Array.from(orfanos[dim]).slice(0, 3),
+    }))
+  }, [steps[0].parsedData, steps[1].parsedData])
+
+  // [P3] Cross-validation inventario ↔ ventas (productos/SKU).
+  const inventarioOrfano = useMemo(() => {
+    const invData = steps[2].parsedData as any[] | undefined
+    const salesData = steps[0].parsedData as any[] | undefined
+    if (!invData?.length || !salesData?.length) return null
+
+    const productosVentas = new Set(salesData.map((s) => s.producto).filter(Boolean))
+    const codigosVentas   = new Set(salesData.map((s) => s.codigo_producto).filter(Boolean))
+
+    const productosOrfanos = new Set<string>()
+    const codigosOrfanos   = new Set<string>()
+    for (const it of invData) {
+      if (it.producto && !productosVentas.has(it.producto)) productosOrfanos.add(it.producto)
+      if (it.codigo_producto && !codigosVentas.has(it.codigo_producto)) codigosOrfanos.add(it.codigo_producto)
+    }
+    const result: Array<{ dimension: string; count: number; examples: string[] }> = []
+    if (productosOrfanos.size > 0) result.push({ dimension: 'producto', count: productosOrfanos.size, examples: Array.from(productosOrfanos).slice(0, 3) })
+    if (codigosOrfanos.size > 0)   result.push({ dimension: 'codigo_producto', count: codigosOrfanos.size, examples: Array.from(codigosOrfanos).slice(0, 3) })
+    return result.length > 0 ? result : null
+  }, [steps[0].parsedData, steps[2].parsedData])
 
   // Build detected items for the success screen
   const detectedItems = useMemo(() => {
@@ -382,6 +564,9 @@ export default function UploadPage() {
     await new Promise(resolve => setTimeout(resolve, 400))
     setLoading(null)
 
+    // [B1] Datos ya en store; descartar el borrador para no duplicar memoria.
+    clearWizardDraft()
+
     // Show success screen instead of navigating immediately
     setShowSuccess(true)
   }
@@ -404,16 +589,35 @@ export default function UploadPage() {
       setInventory(inventory)
       setConfiguracion({ empresa: DEMO_EMPRESA })
       setDataSource('demo')
-      setLoading({ title: '\u00A1Listo!', subtitle: 'Redirigiendo al dashboard', progress: 100 })
+      setLoading({ title: '\u00A1Listo!', subtitle: 'Tu monitor comercial está activo', progress: 100 })
+      // [G5] Marcar los 3 pasos como cargados para que la pantalla de éxito
+      // refleje el estado real (vendedores, productos, clientes, metas, inventario)
+      // y el stepper se vea coherente al volver al wizard.
+      setSteps((prev) => prev.map((s) => {
+        if (s.id === 'ventas')     return { ...s, status: 'loaded', parsedData: sales as any }
+        if (s.id === 'metas')      return { ...s, status: 'loaded', parsedData: metas as any }
+        if (s.id === 'inventario') return { ...s, status: 'loaded', parsedData: inventory as any }
+        return s
+      }))
+      // Hidratar detectedCols mínimas para que la success screen compute items
+      setDetectedCols({
+        ventas: ['vendedor', 'cliente', 'producto', 'categoria', 'canal', 'departamento'],
+        metas: ['vendedor'],
+        inventario: ['producto'],
+      })
       setTimeout(() => {
         setLoading(null)
-        navigate('/dashboard')
+        // [G5] No auto-redirige. La pantalla de éxito muestra resumen + CTA
+        // explícito "Ir a Estado Comercial". Antes hacía navigate automático
+        // tras 400ms, lo que rompía "no redirigir sin confirmar" y era
+        // inconsistente con el flujo de archivo real.
+        setShowSuccess(true)
       }, 400)
     }, 600)
   }
 
   const handleLimpiar = async () => {
-    resetAll()
+    resetAll() // ya limpia wizardDraft
     clearDatasets().catch(() => {})
     setSteps(INITIAL_STEPS)
     setCurrentStep(0)
@@ -424,6 +628,8 @@ export default function UploadPage() {
     setShowIgnoredColumns({})
     setDateAmbiguityMap({})
     setWarningsMap({})
+    setMappingMap({})
+    setShowMapping({})
     setShowSuccess(false)
     if (org?.id) {
       await deleteOrgFiles(org.id)
@@ -644,6 +850,45 @@ export default function UploadPage() {
         </div>
       </div>
 
+      {/* [P1 — fix Ω.1.0] Banner de re-entrada: el usuario volvió a /cargar
+          y ya tiene datos en store. Le damos acción explícita para ir al
+          dashboard o reemplazar. Sin esto, Ω.1.0 reseteaba silenciosamente
+          y atrapaba al usuario. */}
+      {existingSales.length > 0 && currentStep === 0 && step.status === 'loaded' && !processingStep && (
+        <section className="flex items-center justify-between gap-4 rounded-2xl border border-emerald-300/50 bg-emerald-50/50 px-5 py-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-white border border-emerald-300/50 flex items-center justify-center shrink-0">
+              <Check className="w-4 h-4 text-emerald-600" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-[var(--sf-t1)]">Ya tenés datos cargados</p>
+              <p className="text-xs text-[var(--sf-t3)] mt-0.5">
+                {existingSales.length.toLocaleString()} {existingSales.length === 1 ? 'venta' : 'ventas'}
+                {existingMetas.length > 0 ? ' · metas' : ''}
+                {existingInventory.length > 0 ? ' · inventario' : ''}
+                {dataSource === 'demo' ? ' (demo)' : ''}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setLimpiarIntent('reemplazar')}
+              className="rounded-lg border border-[var(--sf-border)] bg-white px-3 py-2 text-xs font-semibold text-[var(--sf-t2)] hover:bg-[var(--sf-hover)] transition-colors"
+            >
+              Reemplazar datos
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/dashboard')}
+              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 transition-colors"
+            >
+              Ir a Estado Comercial →
+            </button>
+          </div>
+        </section>
+      )}
+
       {/* [Ω.1.4] Banner demo: solo en estado verdaderamente pristine.
           Antes mostraba con dataSource !== 'demo', lo que lo dejaba visible
           después de cargar un archivo real — ruido. */}
@@ -677,7 +922,19 @@ export default function UploadPage() {
       </div>
 
       <div className="space-y-5">
-        <section className="rounded-2xl border border-[var(--sf-border)] bg-[var(--sf-card)] p-6">
+        <section className="rounded-2xl border border-[var(--sf-border)] bg-[var(--sf-card)] p-6 space-y-4">
+          {/* [G2] Resumen compacto de requisitos visible ANTES de subir.
+              Solo en estado vacío (pending sin archivo) y solo en ventas:
+              metas/inventario tienen requisitos distintos y la sección
+              detallada de abajo ya cubre el caso. */}
+          {step.id === 'ventas' && step.status === 'pending' && !step.file && processingStep === null && (
+            <div className="rounded-lg bg-[var(--sf-inset)] border border-[var(--sf-border-subtle)] px-3.5 py-2.5">
+              <p className="text-xs leading-relaxed text-[var(--sf-t3)]">
+                <span className="font-semibold text-[var(--sf-t2)]">Requerido:</span> fecha + unidades o venta neta.{' '}
+                <span className="font-semibold text-[var(--sf-t2)]">Opcional:</span> vendedor, cliente, producto, categoría, canal.
+              </p>
+            </div>
+          )}
           <FileDropzone
             step={step}
             onFileSelect={(file) => handleFileSelect(currentStep, file)}
@@ -685,6 +942,11 @@ export default function UploadPage() {
             isProcessing={processingStep === currentStep}
             progressPercent={processingStep === currentStep ? parseProgress : 0}
             progressDetail={processingStep === currentStep ? parseDetail : ''}
+            // [G1] Plantilla cerca del dropzone. onLoadDemo NO se pasa porque
+            // el banner superior ya cubre demo de forma prominente — duplicar
+            // sería ruido. La sección detallada de abajo conserva su botón
+            // "Descargar plantilla" como referencia.
+            onDownloadTemplate={step.id === 'ventas' ? downloadTemplate : undefined}
           />
         </section>
 
@@ -949,18 +1211,38 @@ export default function UploadPage() {
           </div>
         )}
 
-        {/* Ambigüedad de formato de fecha */}
-        {step.status === 'loaded' && dateAmbiguityMap[step.id] && (
-          <div className="rounded-lg border border-blue-400/30 bg-blue-50/50 px-3.5 py-2.5">
-            <span className="flex items-center gap-2 text-sm font-medium text-blue-600">
-              <Info className="w-4 h-4 shrink-0" />
-              Formato de fecha ambiguo — asumimos {dateAmbiguityMap[step.id].convention === 'dmy' ? 'DD/MM/YYYY' : dateAmbiguityMap[step.id].convention === 'mdy' ? 'MM/DD/YYYY' : dateAmbiguityMap[step.id].convention.toUpperCase()}
-            </span>
-            <p className="text-xs text-[var(--sf-t3)] mt-1.5">
-              {dateAmbiguityMap[step.id].evidence}. Si es incorrecto, convierte las fechas a formato YYYY-MM-DD en el archivo.
-            </p>
-          </div>
-        )}
+        {/* [P2] Convención de fecha asumida.
+            Diferenciamos dos casos:
+            - ambiguous=true: el parser no tuvo evidencia (todos los pares ≤12 o >12). Tono ámbar.
+            - ambiguous=false: hay evidencia (algún componente >12) pero igual avisamos para que el
+              usuario verifique. Tono azul informativo.
+            Antes solo se mostraba en el caso ambiguous=true → caso E4 (12/13/2026 → MDY) pasaba
+            sin warning. */}
+        {step.status === 'loaded' && dateAmbiguityMap[step.id] && (() => {
+          const da = dateAmbiguityMap[step.id]
+          const formatLabel = da.convention === 'dmy' ? 'DD/MM/YYYY' : da.convention === 'mdy' ? 'MM/DD/YYYY' : da.convention.toUpperCase()
+          const tone = da.ambiguous ? 'amber' : 'blue'
+          const headline = da.ambiguous
+            ? `Formato de fecha ambiguo — asumimos ${formatLabel}`
+            : `Detectamos formato ${formatLabel} — confirmá que es correcto`
+          return (
+            <div className={cn(
+              'rounded-lg border px-3.5 py-2.5',
+              tone === 'amber' ? 'border-amber-400/40 bg-amber-50/60' : 'border-blue-400/30 bg-blue-50/50'
+            )}>
+              <span className={cn(
+                'flex items-center gap-2 text-sm font-medium',
+                tone === 'amber' ? 'text-amber-700' : 'text-blue-600'
+              )}>
+                <Info className="w-4 h-4 shrink-0" />
+                {headline}
+              </span>
+              <p className="text-xs text-[var(--sf-t3)] mt-1.5">
+                {da.evidence}. Si es incorrecto, convierte las fechas a formato YYYY-MM-DD en el archivo.
+              </p>
+            </div>
+          )
+        })()}
 
         {/* Error detallado */}
         {step.status === 'error' && step.parseError && (
@@ -972,6 +1254,8 @@ export default function UploadPage() {
                 <span className="text-base shrink-0 leading-none mt-0.5">{'\u{1F512}'}</span>
               ) : step.parseError.code === 'ENCODING_ISSUE' ? (
                 <span className="text-base shrink-0 leading-none mt-0.5">{'\u{1F524}'}</span>
+              ) : step.parseError.code === 'FILE_TOO_LARGE' ? (
+                <span className="text-base shrink-0 leading-none mt-0.5">{'\u{1F4E6}'}</span>
               ) : (
                 <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
               )}
@@ -985,6 +1269,7 @@ export default function UploadPage() {
                   : step.parseError.code === 'INVALID_DATES'          ? 'Formato de fecha no reconocido'
                   : step.parseError.code === 'FILE_PROTECTED_OR_CORRUPT' ? 'Archivo protegido o corrupto'
                   : step.parseError.code === 'ENCODING_ISSUE'         ? 'Problema de codificación de texto'
+                  : step.parseError.code === 'FILE_TOO_LARGE'         ? `Archivo muy pesado (${step.parseError.sizeMB}MB > ${step.parseError.limitMB}MB)`
                   :                                                     'Error al leer el archivo'}
                 </p>
                 <p className="text-xs text-[var(--sf-t3)] leading-relaxed">{step.parseError.message}</p>
@@ -1006,6 +1291,29 @@ export default function UploadPage() {
                         </span>
                       ))}
                     </div>
+                    {/* [P5] Sugerencias accionables: nombres aceptados por can\u00f3nico */}
+                    {step.parseError.suggestions && step.parseError.suggestions.length > 0 && (
+                      <div className="pt-2 space-y-1.5">
+                        {step.parseError.suggestions.map((s) => (
+                          <div key={s.missingKey} className="text-xs text-[var(--sf-t3)]">
+                            <span className="font-medium text-[var(--sf-t2)]">Para <code className="px-1 py-0.5 rounded bg-red-100/60 text-red-700">{s.missingKey}</code> aceptamos:</span>{' '}
+                            <span className="font-mono text-[var(--sf-t3)]">{s.acceptedAliases.slice(0, 6).join(', ')}{s.acceptedAliases.length > 6 ? '\u2026' : ''}</span>
+                            {s.candidateHeaders.length > 0 && (
+                              <div className="mt-0.5 text-[0.6875rem] text-[var(--sf-t4)]">
+                                Detectamos en tu archivo:{' '}
+                                {s.candidateHeaders.map((h, i) => (
+                                  <span key={h}>
+                                    {i > 0 && ', '}
+                                    <code className="px-1 py-0.5 rounded bg-amber-100/40 text-amber-700">{h}</code>
+                                  </span>
+                                ))}
+                                . Ren\u00f3mbralas o ajusta el archivo.
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
                 {step.parseError.code === 'INVALID_DATES' && (
@@ -1059,6 +1367,91 @@ export default function UploadPage() {
           <p className="text-[0.6875rem] text-[var(--sf-t4)] pt-1 border-t border-[var(--sf-border)]">
             {detectedCols[step.id].length} columnas detectadas · {step.file?.name}
           </p>
+        )}
+
+        {/* [Datos insuficientes] Warning si <30 días distintos en ventas */}
+        {step.id === 'ventas' && step.status === 'loaded' && ventasInsuficientes && (
+          <div className="rounded-lg border border-amber-400/40 bg-amber-50/60 px-3.5 py-2.5">
+            <span className="flex items-center gap-2 text-sm font-medium text-amber-700">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              Tu archivo cubre {ventasInsuficientes.diasDistintos} {ventasInsuficientes.diasDistintos === 1 ? 'día' : 'días'} de ventas
+            </span>
+            <p className="text-xs text-[var(--sf-t3)] mt-1.5">
+              Con menos de 30 días de historial el análisis puede no detectar tendencias, estacionalidad ni comparar contra el mismo período del mes/año anterior. Podés continuar — los KPIs básicos van a funcionar.
+            </p>
+          </div>
+        )}
+
+        {/* [P3] Cross-validation metas ↔ ventas */}
+        {step.id === 'metas' && step.status === 'loaded' && metasOrfanas && metasOrfanas.length > 0 && (
+          <div className="rounded-lg border border-amber-400/40 bg-amber-50/60 px-3.5 py-2.5 space-y-1.5">
+            <span className="flex items-center gap-2 text-sm font-medium text-amber-700">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              Algunas metas no coinciden con tus ventas
+            </span>
+            <div className="space-y-1">
+              {metasOrfanas.map((o) => (
+                <p key={o.dimension} className="text-xs text-[var(--sf-t3)] leading-relaxed">
+                  <span className="font-medium text-[var(--sf-t2)]">{o.count} {o.dimension}{o.count === 1 ? '' : 's'}</span>
+                  {' '}en metas no aparecen en ventas: <span className="font-mono text-[var(--sf-t3)]">{o.examples.join(', ')}{o.count > o.examples.length ? '…' : ''}</span>
+                </p>
+              ))}
+            </div>
+            <p className="text-[0.6875rem] text-[var(--sf-t4)] pt-0.5">
+              Esas metas se cargarán igual pero no van a poder compararse contra ventas reales.
+            </p>
+          </div>
+        )}
+
+        {/* [P3] Cross-validation inventario ↔ ventas */}
+        {step.id === 'inventario' && step.status === 'loaded' && inventarioOrfano && (
+          <div className="rounded-lg border border-amber-400/40 bg-amber-50/60 px-3.5 py-2.5 space-y-1.5">
+            <span className="flex items-center gap-2 text-sm font-medium text-amber-700">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              Algunos productos del inventario no aparecen en ventas
+            </span>
+            <div className="space-y-1">
+              {inventarioOrfano.map((o) => (
+                <p key={o.dimension} className="text-xs text-[var(--sf-t3)] leading-relaxed">
+                  <span className="font-medium text-[var(--sf-t2)]">{o.count} {o.dimension === 'codigo_producto' ? 'código' : 'producto'}{o.count === 1 ? '' : 's'}</span>
+                  {' '}sin ventas: <span className="font-mono text-[var(--sf-t3)]">{o.examples.join(', ')}{o.count > o.examples.length ? '…' : ''}</span>
+                </p>
+              ))}
+            </div>
+            <p className="text-[0.6875rem] text-[var(--sf-t4)] pt-0.5">
+              Probablemente sean SKUs nuevos o discontinuados. No van a generar alertas de ruptura porque no hay venta histórica.
+            </p>
+          </div>
+        )}
+
+        {/* [P4] Panel "Mapeo detectado": header original → campo interno */}
+        {step.status === 'loaded' && mappingMap[step.id] && Object.keys(mappingMap[step.id]).length > 0 && (
+          <div className="rounded-lg border border-[var(--sf-border-subtle)] bg-[var(--sf-inset)]">
+            <button
+              onClick={() => setShowMapping(prev => ({ ...prev, [step.id]: !prev[step.id] }))}
+              className="w-full flex items-center justify-between px-3.5 py-2.5 text-left"
+            >
+              <span className="flex items-center gap-2 text-sm font-medium text-[var(--sf-t2)]">
+                <Info className="w-4 h-4 shrink-0 text-[var(--sf-t3)]" />
+                Mapeo detectado — {Object.keys(mappingMap[step.id]).length} {Object.keys(mappingMap[step.id]).length === 1 ? 'columna' : 'columnas'}
+              </span>
+              <span className="text-xs text-[var(--sf-t4)]">{showMapping[step.id] ? '▲ Ocultar' : '▼ Ver'}</span>
+            </button>
+            {showMapping[step.id] && (
+              <div className="px-3.5 pb-3 pt-1 border-t border-[var(--sf-border-subtle)]">
+                <p className="text-[0.6875rem] text-[var(--sf-t4)] mb-2">Cómo interpretamos los headers de tu archivo:</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5">
+                  {Object.entries(mappingMap[step.id]).map(([canonical, original]) => (
+                    <div key={canonical} className="flex items-center gap-2 text-xs">
+                      <code className="px-1.5 py-0.5 rounded bg-amber-100/40 text-amber-700 font-mono">{original}</code>
+                      <span className="text-[var(--sf-t4)]">→</span>
+                      <code className="px-1.5 py-0.5 rounded bg-emerald-100/50 text-emerald-700 font-mono">{canonical}</code>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         )}
 
         {/* Vista previa post-upload */}
@@ -1144,12 +1537,23 @@ export default function UploadPage() {
         </main>
       </div>
 
-      {/* Modal: confirmar sobreescritura de metas */}
-      {showMetasConfirm && (
+      {/* [E10.c] Modal: confirmar sobreescritura. Copy enumera todos los
+          datasets que efectivamente van a reemplazarse, no solo metas. */}
+      {showMetasConfirm && (() => {
+        const reemplazables: string[] = []
+        if (steps[0].parsedData && steps[0].parsedData.length > 0) reemplazables.push('ventas')
+        if (steps[1].parsedData && steps[1].parsedData.length > 0) reemplazables.push('metas')
+        if (steps[2].parsedData && steps[2].parsedData.length > 0) reemplazables.push('inventario')
+        const lista = reemplazables.length > 1
+          ? reemplazables.slice(0, -1).join(', ') + ' e ' + reemplazables[reemplazables.length - 1]
+          : reemplazables[0] ?? 'datos'
+        return (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.5)' }} onClick={() => setShowMetasConfirm(false)}>
-          <div className="rounded-xl p-6 shadow-2xl mx-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', maxWidth: 384 }} onClick={e => e.stopPropagation()}>
-            <p className="text-sm font-medium mb-1" style={{ color: 'var(--sf-t1)' }}>Ya tienes metas configuradas.</p>
-            <p className="text-sm mb-5" style={{ color: 'var(--sf-t3)' }}>¿Reemplazar todo?</p>
+          <div className="rounded-xl p-6 shadow-2xl mx-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', maxWidth: 420 }} onClick={e => e.stopPropagation()}>
+            <p className="text-sm font-medium mb-1" style={{ color: 'var(--sf-t1)' }}>Ya tienes datos cargados.</p>
+            <p className="text-sm mb-5" style={{ color: 'var(--sf-t3)' }}>
+              Vas a reemplazar {lista}. ¿Continuar?
+            </p>
             <div className="flex items-center justify-end gap-3">
               <button
                 onClick={() => setShowMetasConfirm(false)}
@@ -1164,15 +1568,36 @@ export default function UploadPage() {
             </div>
           </div>
         </div>
-      )}
+        )
+      })()}
 
-      {/* [primera-impresion] Modal: confirmar Limpiar (no descartar archivo cargado por error) */}
-      {showLimpiarConfirm && (
+      {/* [primera-impresion + E10.b + A1] Modal: confirmar Limpiar/Reemplazar.
+          Copy se adapta a:
+          - intent del disparador (limpiar vs reemplazar): el banner de re-entrada
+            dispara "reemplazar" → la copia debe hablar de reemplazo, no descarte.
+          - estado: si solo hay archivos en error (nada cargado realmente), no
+            decimos "perder lo cargado" porque sería confuso. */}
+      {showLimpiarConfirm && (() => {
+        const hasLoaded = steps.some((s) => s.status === 'loaded')
+        const onlyError = !hasLoaded && steps.some((s) => s.status === 'error' || s.file !== undefined)
+        const isReplace = limpiarIntent === 'reemplazar'
+
+        const title = isReplace
+          ? '¿Reemplazar datos cargados?'
+          : hasLoaded ? '¿Descartar lo cargado?' : onlyError ? '¿Quitar este archivo?' : '¿Limpiar el wizard?'
+        const body = isReplace
+          ? 'Vas a borrar los datos actuales para subir un archivo distinto. Esta acción no se puede deshacer.'
+          : hasLoaded
+          ? 'Vas a perder los archivos y los pasos completados de este wizard. Esta acción no se puede deshacer.'
+          : onlyError
+          ? 'Solo vas a quitar el archivo del wizard. No hay datos cargados que se pierdan.'
+          : 'Vas a reiniciar el wizard a su estado inicial.'
+        return (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.5)' }} onClick={() => setShowLimpiarConfirm(false)}>
           <div className="rounded-xl p-6 shadow-2xl mx-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', maxWidth: 400 }} onClick={e => e.stopPropagation()}>
-            <p className="text-sm font-medium mb-1" style={{ color: 'var(--sf-t1)' }}>¿Descartar lo cargado?</p>
+            <p className="text-sm font-medium mb-1" style={{ color: 'var(--sf-t1)' }}>{title}</p>
             <p className="text-sm mb-5" style={{ color: 'var(--sf-t3)' }}>
-              Vas a perder el archivo y los pasos completados de este wizard. Esta acción no se puede deshacer.
+              {body}
             </p>
             <div className="flex items-center justify-end gap-3">
               <button
@@ -1184,11 +1609,12 @@ export default function UploadPage() {
                 onClick={() => { setShowLimpiarConfirm(false); handleLimpiar() }}
                 className="px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer"
                 style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171', border: '1px solid rgba(239,68,68,0.3)' }}
-              >Sí, descartar</button>
+              >{isReplace ? 'Sí, reemplazar' : hasLoaded ? 'Sí, descartar' : onlyError ? 'Sí, quitar' : 'Sí, limpiar'}</button>
             </div>
           </div>
         </div>
-      )}
+        )
+      })()}
     </div>
   )
 }

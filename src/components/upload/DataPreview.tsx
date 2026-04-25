@@ -5,8 +5,24 @@ interface DataPreviewProps {
 
 function formatPreviewValue(key: string, value: any): string {
   if (key === 'fecha' || key === 'date' || key === 'mes_periodo') {
-    const d = new Date(value)
-    if (!isNaN(d.getTime())) {
+    // [B2] Bug fix: `new Date('2026-04-14')` parsea como UTC midnight y luego
+    // toLocaleDateString aplica el offset local, mostrando el día anterior en
+    // timezones negativos (ej. UTC-6 → 13/04/2026). Cuando el valor ya es Date
+    // (parser local), lo usamos directo. Cuando es string ISO YYYY-MM-DD,
+    // lo construimos como fecha local. Resto cae al constructor genérico.
+    let d: Date | null = null
+    if (value instanceof Date) {
+      d = value
+    } else if (typeof value === 'string') {
+      const m = value.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/)
+      if (m) {
+        d = new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10))
+      } else {
+        const tmp = new Date(value)
+        if (!isNaN(tmp.getTime())) d = tmp
+      }
+    }
+    if (d && !isNaN(d.getTime())) {
       return d.toLocaleDateString('es', { day: '2-digit', month: '2-digit', year: 'numeric' })
     }
   }

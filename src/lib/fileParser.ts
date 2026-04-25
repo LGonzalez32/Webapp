@@ -1384,7 +1384,10 @@ export async function parseSalesFileWithOverride(
     sheetName,
     discardedRows: discardedRows.length > 0 ? discardedRows : undefined,
     ignoredColumns: ignoredColumns.length > 0 ? ignoredColumns : undefined,
-    dateAmbiguity: dateConv.ambiguous ? { convention: dateConv.convention, evidence: dateConv.evidence } : undefined,
+    // [P2] Emitir siempre que convención sea dmy/mdy. Ver fileParseWorker.ts.
+    dateAmbiguity: (dateConv.convention === 'dmy' || dateConv.convention === 'mdy')
+      ? { convention: dateConv.convention, evidence: dateConv.evidence, ambiguous: dateConv.ambiguous }
+      : undefined,
     warnings: warnings.length > 0 ? warnings : undefined,
     mapping,
   }
@@ -1652,7 +1655,7 @@ function runParseWorker<T>(
     worker.onmessage = (event) => {
       const msg = event.data as
         | { type: 'progress'; percent: number; detail: string }
-        | { type: 'result'; success: boolean; data?: unknown[]; columns?: string[]; sheetName?: string; discardedRows?: DiscardedRow[]; ignoredColumns?: string[]; dateAmbiguity?: { convention: 'dmy' | 'mdy' | 'ymd' | 'unknown'; evidence: string }; warnings?: Array<{ code: string; message: string; field?: string }>; mapping?: Record<string, string>; error?: ParseError; tipoMeta?: string }
+        | { type: 'result'; success: boolean; data?: unknown[]; columns?: string[]; sheetName?: string; discardedRows?: DiscardedRow[]; ignoredColumns?: string[]; dateAmbiguity?: { convention: 'dmy' | 'mdy' | 'ymd' | 'unknown'; evidence: string; ambiguous: boolean }; warnings?: Array<{ code: string; message: string; field?: string }>; mapping?: Record<string, string>; error?: ParseError; tipoMeta?: string }
       if (msg.type === 'progress') {
         onProgress(msg.percent, msg.detail)
         return

@@ -1,4 +1,4 @@
-import { Check } from 'lucide-react';
+import { Check, SkipForward } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { UploadStep } from '../../types';
 
@@ -24,7 +24,9 @@ export default function StepIndicator({ steps, currentStepIndex, onStepClick, or
         {steps.map((step, idx) => {
           const isActive = idx === currentStepIndex;
           const isPast = idx < currentStepIndex;
-          const isDone = step.status === 'loaded' || step.status === 'skipped';
+          const isLoaded = step.status === 'loaded';
+          const isSkipped = step.status === 'skipped';
+          const isDone = isLoaded || isSkipped;
           const isClickable = isDone && isPast && !!onStepClick;
 
           return (
@@ -36,15 +38,22 @@ export default function StepIndicator({ steps, currentStepIndex, onStepClick, or
                 aria-current={isActive ? 'step' : undefined}
                 className={cn(
                   'relative z-10 w-8 h-8 rounded-full flex items-center justify-center text-sm transition-all shrink-0',
-                  isDone && isPast
+                  isLoaded && isPast
                     ? 'bg-emerald-500 text-white cursor-pointer hover:bg-emerald-600'
+                    : isSkipped && isPast
+                    ? 'bg-[var(--sf-inset)] text-[var(--sf-t4)] border-2 border-[var(--sf-border)] cursor-pointer hover:bg-[var(--sf-hover)]'
                     : isActive
                     ? 'bg-emerald-500 text-white font-semibold'
                     : 'border-2 border-[var(--sf-border)] text-[var(--sf-t4)] bg-[var(--sf-card)]',
                   !isClickable && 'cursor-default'
                 )}
+                title={isSkipped && isPast ? 'Paso omitido' : undefined}
               >
-                {isDone && isPast ? <Check className="w-4 h-4" strokeWidth={3} /> : idx + 1}
+                {isLoaded && isPast
+                  ? <Check className="w-4 h-4" strokeWidth={3} />
+                  : isSkipped && isPast
+                  ? <SkipForward className="w-3.5 h-3.5" />
+                  : idx + 1}
               </button>
               <div className="min-w-0 pt-0.5">
                 <p className={cn(
@@ -54,7 +63,13 @@ export default function StepIndicator({ steps, currentStepIndex, onStepClick, or
                   {step.label}
                 </p>
                 <p className="text-[11px] leading-snug text-[var(--sf-t5)] mt-0.5">
-                  {isActive ? 'Paso actual' : step.required ? 'Requerido' : 'Opcional'}
+                  {isActive
+                    ? 'Paso actual'
+                    : isSkipped && isPast
+                    ? 'Omitido'
+                    : isLoaded && isPast
+                    ? 'Completado'
+                    : step.required ? 'Requerido' : 'Opcional'}
                 </p>
               </div>
             </div>
@@ -69,7 +84,9 @@ export default function StepIndicator({ steps, currentStepIndex, onStepClick, or
       {steps.map((step, idx) => {
         const isActive = idx === currentStepIndex;
         const isPast = idx < currentStepIndex;
-        const isDone = step.status === 'loaded' || step.status === 'skipped';
+        const isLoaded = step.status === 'loaded';
+        const isSkipped = step.status === 'skipped';
+        const isDone = isLoaded || isSkipped;
         const isClickable = isDone && isPast && !!onStepClick;
 
         return (
@@ -78,16 +95,23 @@ export default function StepIndicator({ steps, currentStepIndex, onStepClick, or
               {/* Circle */}
               <div
                 onClick={() => isClickable && onStepClick(idx)}
+                title={isSkipped && isPast ? 'Paso omitido' : undefined}
                 className={cn(
                   'w-8 h-8 rounded-full flex items-center justify-center text-sm transition-all',
-                  isDone && isPast
+                  isLoaded && isPast
                     ? 'bg-emerald-500 text-white cursor-pointer hover:bg-emerald-600'
+                    : isSkipped && isPast
+                    ? 'bg-[var(--sf-inset)] text-[var(--sf-t4)] border-2 border-[var(--sf-border)] cursor-pointer hover:bg-[var(--sf-hover)]'
                     : isActive
                     ? 'bg-emerald-500 text-white font-semibold'
                     : 'border-2 border-[var(--sf-border)] text-[var(--sf-t4)]'
                 )}
               >
-                {isDone && isPast ? <Check className="w-4 h-4" strokeWidth={3} /> : idx + 1}
+                {isLoaded && isPast
+                  ? <Check className="w-4 h-4" strokeWidth={3} />
+                  : isSkipped && isPast
+                  ? <SkipForward className="w-3.5 h-3.5" />
+                  : idx + 1}
               </div>
 
               {/* Label */}
@@ -98,17 +122,21 @@ export default function StepIndicator({ steps, currentStepIndex, onStepClick, or
                 )}>
                   {step.label}
                 </p>
-                {!step.required && (
+                {isSkipped && isPast ? (
+                  <span className="text-xs text-[var(--sf-t4)]">Omitido</span>
+                ) : !step.required ? (
                   <span className="text-xs text-[var(--sf-t4)]">Opcional</span>
-                )}
+                ) : null}
               </div>
             </div>
 
-            {/* Connector line */}
+            {/* Connector line — verde sólido si paso completado, punteado si omitido */}
             {idx < steps.length - 1 && (
               <div className={cn(
                 'w-16 md:w-24 h-0.5 mt-4 mx-1 transition-all rounded-full',
-                isPast ? 'bg-emerald-500' : 'bg-[var(--sf-border)]'
+                isLoaded && isPast ? 'bg-emerald-500'
+                  : isSkipped && isPast ? 'bg-[var(--sf-border)]'
+                  : 'bg-[var(--sf-border)]'
               )} />
             )}
           </div>

@@ -262,6 +262,7 @@ export type ParseError =
   | { code: 'INVALID_DATES'; sample: string[]; message: string }
   | { code: 'FILE_PROTECTED_OR_CORRUPT'; message: string }
   | { code: 'ENCODING_ISSUE'; sample: string[]; message: string }
+  | { code: 'FILE_TOO_LARGE'; sizeMB: number; limitMB: number; message: string }
   | { code: 'UNKNOWN'; message: string }
 
 export interface DiscardedRow {
@@ -313,7 +314,7 @@ export type ParseResult<T> =
       sheetName?: string
       discardedRows?: DiscardedRow[]
       ignoredColumns?: string[]
-      dateAmbiguity?: { convention: 'dmy' | 'mdy' | 'ymd' | 'unknown'; evidence: string }
+      dateAmbiguity?: { convention: 'dmy' | 'mdy' | 'ymd' | 'unknown'; evidence: string; ambiguous: boolean }
       warnings?: Array<{ code: string; message: string; field?: string }>
       /** [Z.P1.10.b.1] Trace de mapeo: canónico → header crudo del archivo que se asignó. */
       mapping?: Partial<Record<CanonicalField, string>>
