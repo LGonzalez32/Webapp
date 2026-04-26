@@ -4860,6 +4860,9 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
         if (insightType.id === 'correlation') continue              // separate pass
         if (insightType.needsInventario) continue                   // [Z.7 T1 — A] inventory pass
         if (insightType.id === 'meta_gap' && metric.id !== 'cumplimiento_meta') continue
+        // [mainLoopInsightTypes] Si la métrica define tipos permitidos, descartar combinaciones fuera de la lista.
+        // Evita candidatos sin significado semántico (ej. dominance sobre precio_unitario).
+        if (metric.mainLoopInsightTypes !== undefined && !metric.mainLoopInsightTypes.includes(insightType.id)) continue
 
         if (insightType.needsHistory && !points.some(p => p.history && p.history.filter(v => v > 0).length >= 3)) continue
         if (insightType.needsPrevValue && !points.some(p => p.prevValue != null && p.prevValue > 0)) continue

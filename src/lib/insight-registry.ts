@@ -68,8 +68,12 @@ export interface MetricDef {
   higherIsBetter: boolean
   requiresMetas?: boolean
   compute: (records: SaleRecord[], opts: MetricComputeOpts) => number | null
-  // [PR-FIX.8] qué insight types pueden analizar esta métrica. Vacío = ninguno.
+  // [PR-FIX.8] qué insight types pueden analizar esta métrica (builders especializados).
   compatibleInsights?: string[]
+  // Qué insight types del loop principal (trend/change/dominance/contribution/proportion_shift/meta_gap)
+  // están permitidos para esta métrica. Si undefined → todos permitidos.
+  // Usar para métricas de ratio/promedio donde dominance/contribution no tienen significado semántico.
+  mainLoopInsightTypes?: string[]
 }
 
 export interface DimensionDef {
@@ -148,6 +152,8 @@ export const METRIC_REGISTRY: MetricDef[] = [
     unit: 'USD',
     higherIsBetter: true,
     compatibleInsights: ['change_point', 'outlier', 'correlation'],
+    // Promedio — dominance/contribution/proportion_shift no tienen significado semántico sobre un promedio.
+    mainLoopInsightTypes: ['trend', 'change'],
     compute: (records, opts) => {
       if (records.length === 0) return null
       const total =
@@ -169,6 +175,8 @@ export const METRIC_REGISTRY: MetricDef[] = [
       return totalNeto / totalUnidades
     },
     compatibleInsights: ['change_point', 'outlier', 'correlation'],
+    // Ratio — la suma de precios unitarios no tiene significado de negocio.
+    mainLoopInsightTypes: ['trend', 'change'],
   },
   {
     id: 'num_transacciones',
@@ -204,6 +212,8 @@ export const METRIC_REGISTRY: MetricDef[] = [
       return records.reduce((s, r) => s + (r.venta_neta ?? 0), 0) / clientes.size
     },
     compatibleInsights: ['outlier'],
+    // Promedio derivado — misma razón que ticket_promedio.
+    mainLoopInsightTypes: ['trend', 'change'],
   },
   {
     id: 'cumplimiento_meta',
@@ -211,6 +221,9 @@ export const METRIC_REGISTRY: MetricDef[] = [
     unit: 'pct',
     higherIsBetter: true,
     requiresMetas: true,
+    // Solo meta_gap (brecha del mes actual), trend (deterioro sostenido) y change (quiebre abrupto).
+    // dominance/contribution/proportion_shift no aplican sobre un porcentaje de cumplimiento.
+    mainLoopInsightTypes: ['meta_gap', 'trend', 'change'],
     compute: (records, opts) => {
       if (!opts.member || !opts.metas.length) return null
       const metaMes = opts.month + 1   // MetaRecord.mes is 1-indexed
@@ -241,6 +254,8 @@ export const METRIC_REGISTRY: MetricDef[] = [
       return records.length / clientes
     },
     compatibleInsights: ['change_point', 'outlier', 'correlation'],
+    // Ratio transacciones/clientes — la suma de ratios no tiene significado de volumen.
+    mainLoopInsightTypes: ['trend', 'change'],
   },
 ]
 
