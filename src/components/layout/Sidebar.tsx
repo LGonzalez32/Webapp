@@ -105,7 +105,7 @@ export default function Sidebar() {
         // verde (fondo + texto + icono), sobrecargando el acento de marca.
         // Ahora el verde queda como acento sutil solo en el icono.
         style={active
-          ? { background: 'var(--sf-hover)', color: 'var(--sf-t1)' }
+          ? { background: 'var(--sf-green-bg)', color: 'var(--sf-green)', boxShadow: 'inset 3px 0 0 var(--sf-green)' }
           : { color: 'var(--sf-t4)' }
         }
       >

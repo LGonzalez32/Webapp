@@ -16,9 +16,9 @@ export default function StepIndicator({ steps, currentStepIndex, onStepClick, or
 
     return (
       <nav className={cn('relative flex flex-col gap-5 py-1.5', className)} aria-label="Progreso de carga">
-        <div className="absolute left-4 top-4 bottom-4 w-px bg-[var(--sf-border)]" />
+        <div className="absolute left-4 top-4 bottom-4 w-px bg-[var(--border)]" />
         <div
-          className="absolute left-4 top-4 w-px bg-emerald-500 transition-all duration-500"
+          className="absolute left-4 top-4 w-px bg-[var(--primary)] transition-all duration-500"
           style={{ height: `calc((100% - 2rem) * ${progressRatio})` }}
         />
         {steps.map((step, idx) => {
@@ -39,12 +39,12 @@ export default function StepIndicator({ steps, currentStepIndex, onStepClick, or
                 className={cn(
                   'relative z-10 w-8 h-8 rounded-full flex items-center justify-center text-sm transition-all shrink-0',
                   isLoaded && isPast
-                    ? 'bg-emerald-500 text-white cursor-pointer hover:bg-emerald-600'
+                    ? 'bg-[var(--primary)] text-[var(--primary-fg)] cursor-pointer hover:bg-[var(--primary-hover)]'
                     : isSkipped && isPast
-                    ? 'bg-[var(--sf-inset)] text-[var(--sf-t4)] border-2 border-[var(--sf-border)] cursor-pointer hover:bg-[var(--sf-hover)]'
+                    ? 'bg-[var(--surface-2)] text-[var(--t-4)] border-2 border-[var(--border)] cursor-pointer hover:bg-[var(--surface-3)]'
                     : isActive
-                    ? 'bg-emerald-500 text-white font-semibold'
-                    : 'border-2 border-[var(--sf-border)] text-[var(--sf-t4)] bg-[var(--sf-card)]',
+                    ? 'bg-[var(--primary)] text-[var(--primary-fg)] font-semibold shadow-[var(--shadow-glow)]'
+                    : 'border-2 border-[var(--border)] text-[var(--t-4)] bg-[var(--surface)]',
                   !isClickable && 'cursor-default'
                 )}
                 title={isSkipped && isPast ? 'Paso omitido' : undefined}
@@ -58,11 +58,11 @@ export default function StepIndicator({ steps, currentStepIndex, onStepClick, or
               <div className="min-w-0 pt-0.5">
                 <p className={cn(
                   'text-[11px] font-bold uppercase leading-tight',
-                  isActive ? 'text-[var(--sf-t1)]' : 'text-[var(--sf-t4)]'
+                  isActive ? 'text-[var(--t-1)]' : 'text-[var(--t-4)]'
                 )}>
                   {step.label}
                 </p>
-                <p className="text-[11px] leading-snug text-[var(--sf-t5)] mt-0.5">
+                <p className="text-[11px] leading-snug text-[var(--t-5)] mt-0.5">
                   {isActive
                     ? 'Paso actual'
                     : isSkipped && isPast
@@ -99,11 +99,11 @@ export default function StepIndicator({ steps, currentStepIndex, onStepClick, or
                 className={cn(
                   'w-8 h-8 rounded-full flex items-center justify-center text-sm transition-all',
                   isLoaded && isPast
-                    ? 'bg-emerald-500 text-white cursor-pointer hover:bg-emerald-600'
+                    ? 'bg-[var(--primary)] text-[var(--primary-fg)] cursor-pointer hover:bg-[var(--primary-hover)]'
                     : isSkipped && isPast
-                    ? 'bg-[var(--sf-inset)] text-[var(--sf-t4)] border-2 border-[var(--sf-border)] cursor-pointer hover:bg-[var(--sf-hover)]'
+                    ? 'bg-[var(--surface-2)] text-[var(--t-4)] border-2 border-[var(--border)] cursor-pointer hover:bg-[var(--surface-3)]'
                     : isActive
-                    ? 'bg-emerald-500 text-white font-semibold'
+                    ? 'bg-[var(--primary)] text-[var(--primary-fg)] font-semibold shadow-[var(--shadow-glow)]'
                     : 'border-2 border-[var(--sf-border)] text-[var(--sf-t4)]'
                 )}
               >
@@ -118,14 +118,14 @@ export default function StepIndicator({ steps, currentStepIndex, onStepClick, or
               <div className="mt-1.5 text-center">
                 <p className={cn(
                   'text-[10px] font-bold uppercase tracking-wider whitespace-nowrap',
-                  isActive ? 'text-[var(--sf-t1)] font-semibold' : 'text-[var(--sf-t4)]'
+                  isActive ? 'text-[var(--t-1)] font-semibold' : 'text-[var(--t-4)]'
                 )}>
                   {step.label}
                 </p>
                 {isSkipped && isPast ? (
-                  <span className="text-xs text-[var(--sf-t4)]">Omitido</span>
+                  <span className="text-xs text-[var(--t-4)]">Omitido</span>
                 ) : !step.required ? (
-                  <span className="text-xs text-[var(--sf-t4)]">Opcional</span>
+                  <span className="text-xs text-[var(--t-4)]">Opcional</span>
                 ) : null}
               </div>
             </div>
@@ -134,9 +134,9 @@ export default function StepIndicator({ steps, currentStepIndex, onStepClick, or
             {idx < steps.length - 1 && (
               <div className={cn(
                 'w-16 md:w-24 h-0.5 mt-4 mx-1 transition-all rounded-full',
-                isLoaded && isPast ? 'bg-emerald-500'
-                  : isSkipped && isPast ? 'bg-[var(--sf-border)]'
-                  : 'bg-[var(--sf-border)]'
+                isLoaded && isPast ? 'bg-[var(--primary)]'
+                  : isSkipped && isPast ? 'bg-[var(--border)]'
+                  : 'bg-[var(--border)]'
               )} />
             )}
           </div>

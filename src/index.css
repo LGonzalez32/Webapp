@@ -4,147 +4,257 @@
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* Semantic color utilities — bg-surface, text-t1, etc. */
+  --color-bg:            var(--bg);
+  --color-bg-elev:       var(--bg-elev);
+  --color-bg-sunken:     var(--bg-sunken);
+  --color-surface:       var(--surface);
+  --color-surface-2:     var(--surface-2);
+  --color-surface-3:     var(--surface-3);
+  --color-border:        var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-border-soft:   var(--border-soft);
+  --color-t1:            var(--t-1);
+  --color-t2:            var(--t-2);
+  --color-t3:            var(--t-3);
+  --color-t4:            var(--t-4);
+  --color-t5:            var(--t-5);
+  --color-primary:       var(--primary);
+  --color-primary-soft:  var(--primary-soft);
+  --color-primary-fg:    var(--primary-fg);
+  --color-accent:        var(--accent);
+  --color-accent-soft:   var(--accent-soft);
+  --color-danger:        var(--danger);
+  --color-danger-soft:   var(--danger-soft);
+  --color-success:       var(--success);
+  --color-info:          var(--info);
+  --color-info-soft:     var(--info-soft);
 }
 
 :root {
-  --color-zinc-950: #fdfaf6;
-  --color-zinc-900: #f7f3ed;
-  --color-zinc-800: #ede8df;
-  --color-zinc-700: #dcd5c9;
-  --color-zinc-600: #a8a29e;
-  --color-zinc-500: #78716c;
-  --color-zinc-400: #57534e;
-  --color-zinc-300: #44403c;
-  --color-zinc-200: #292524;
-  --color-zinc-100: #1c1917;
-  --color-zinc-50: #0c0a09;
+  --color-zinc-950: #F7F8FA;
+  --color-zinc-900: #EEF1F5;
+  --color-zinc-800: #E3E7ED;
+  --color-zinc-700: #CFD6DF;
+  --color-zinc-600: #8A93A6;
+  --color-zinc-500: #6B7588;
+  --color-zinc-400: #475063;
+  --color-zinc-300: #1F2A3A;
+  --color-zinc-200: #0B1220;
+  --color-zinc-100: #070D18;
+  --color-zinc-50:  #040913;
 }
 
 .dark {
-  --color-zinc-950: #09090b;
-  --color-zinc-900: #18181b;
-  --color-zinc-800: #27272a;
-  --color-zinc-700: #3f3f46;
-  --color-zinc-600: #52525b;
-  --color-zinc-500: #71717a;
-  --color-zinc-400: #a1a1aa;
-  --color-zinc-300: #d4d4d8;
-  --color-zinc-200: #e4e4e7;
-  --color-zinc-100: #f4f4f5;
-  --color-zinc-50: #fafafa;
+  --color-zinc-950: #0A1220;
+  --color-zinc-900: #0F1A2C;
+  --color-zinc-800: #132238;
+  --color-zinc-700: #182B45;
+  --color-zinc-600: #2A4670;
+  --color-zinc-500: #4F6280;
+  --color-zinc-400: #93A4BE;
+  --color-zinc-300: #C8D5E8;
+  --color-zinc-200: #E6EDF8;
+  --color-zinc-100: #EDF3FC;
+  --color-zinc-50:  #F2F6FD;
 }
 
-/* ── SalesFlow theme semantic tokens ─────────────────────── */
+/* ── SalesFlow · Aurora Teal — design tokens v2 ────────────── */
 
 :root {
-  /* Backgrounds — warm-neutral cálido (Z.P1.11.a/V1).
-     Alineados con la escala zinc-* redefinida arriba para que body
-     (bg-zinc-950 = #fdfaf6) y shell (var(--sf-sidebar)) sean misma familia.
-     Antes: cool blue-gray (#f8f9fc / #f1f3f8 / #e2e6ef). Disonancia
-     warm/cool resuelta. */
-  --sf-page: #fdfaf6;          /* = zinc-950, base */
-  --sf-sidebar: #f7f3ed;       /* = zinc-900, 1 step más oscuro que body */
-  --sf-card: #ffffff;          /* card elevada se mantiene blanco puro */
-  --sf-elevated: #ffffff;
-  --sf-inset: #f7f3ed;         /* = zinc-900, igual al sidebar */
-  --sf-hover: #ede8df;         /* = zinc-800, hover marcado */
-  --sf-hover-card: #ede8df;
+  /* ─ Surfaces ─────────────────────────────────────────── */
+  --bg:            #F7F8FA;
+  --bg-elev:       #FFFFFF;
+  --bg-sunken:     #EEF1F5;
+  --surface:       #FFFFFF;
+  --surface-2:     #F0F3F8;
+  --surface-3:     #EEF1F5;
 
-  /* Borders — warm equivalentes (mismas luminancias que cool anteriores) */
-  --sf-border: #e8e1d6;
-  --sf-border-subtle: #f0eae0;
-  --sf-border-active: #d4c8b4;
+  /* ─ Borders ───────────────────────────────────────────── */
+  --border:        #E3E7ED;
+  --border-strong: #CFD6DF;
+  --border-soft:   #ECEFF3;
 
-  /* Text hierarchy (dark on light) */
-  --sf-t1: #1a1816;
-  --sf-t2: #292420;
-  --sf-t3: #5c5650;
-  --sf-t4: #78716c;
-  --sf-t5: #8c857d;
-  --sf-t6: #93857a;
-  --sf-t7: #a89e94;
-  --sf-t8: #ccc5bc;
+  /* ─ Text ──────────────────────────────────────────────── */
+  --t-1: #0B1220;
+  --t-2: #1F2A3A;
+  --t-3: #475063;
+  --t-4: #6B7588;
+  --t-5: #8A93A6;
 
-  /* Semi-transparent overlays */
-  --sf-overlay-subtle: rgba(0,0,0,0.02);
-  --sf-overlay-light: rgba(0,0,0,0.03);
-  --sf-overlay-medium: rgba(0,0,0,0.05);
-  --sf-overlay-strong: rgba(0,0,0,0.08);
+  /* ─ Primary (teal-green) ──────────────────────────────── */
+  --primary:         #0BA67A;
+  --primary-hover:   #089065;
+  --primary-press:   #067653;
+  --primary-soft:    rgba(11,166,122,0.08);
+  --primary-fg:      #FFFFFF;
+  --on-primary-soft: #0A6F50;
 
-  /* Public pages — alineados con --sf-page */
-  --sf-bg: #fdfaf6;
-  --sf-bg-rgb: 253,250,246;
-  --sf-footer-bg: #1e293b;
-  --sf-footer-text: #94a3b8;
-  --sf-footer-heading: #e2e8f0;
+  /* ─ Accent (amber) ────────────────────────────────────── */
+  --accent:         #D97706;
+  --accent-soft:    rgba(217,119,6,0.08);
+  --accent-fg:      #FFFFFF;
+  --on-accent-soft: #92400E;
 
-  /* Accent — status colors (text) */
-  --sf-green: #059669;
-  --sf-red: #dc2626;
-  --sf-amber: #ea580c;
+  /* ─ Semantic ──────────────────────────────────────────── */
+  --danger:          #DC2626;
+  --danger-soft:     rgba(220,38,38,0.08);
+  --on-danger-soft:  #9F1B1B;
+  --success:         #0BA67A;
+  --success-soft:    rgba(11,166,122,0.08);
+  --on-success-soft: #0A6F50;
+  --info:            #2563EB;
+  --info-soft:       rgba(37,99,235,0.08);
+  --on-info-soft:    #1D4ED8;
 
-  /* Accent — status backgrounds */
-  --sf-green-bg: #f0fdf4;
-  --sf-green-border: #bbf7d0;
-  --sf-red-bg: #fef2f2;
-  --sf-red-border: #fecaca;
-  --sf-amber-bg: #fff7ed;
-  --sf-amber-border: #fed7aa;
+  /* ─ Aurora ────────────────────────────────────────────── */
+  --aurora-1: rgba(11,166,122,0.10);
+  --aurora-2: rgba(20,184,166,0.08);
+  --aurora-3: rgba(217,119,6,0.05);
+
+  /* ─ Elevation & interaction ───────────────────────────── */
+  --ring:        color-mix(in oklab, var(--primary) 55%, transparent);
+  --shadow-sm:   0 1px 2px rgba(15,23,42,.04), 0 1px 1px rgba(15,23,42,.03);
+  --shadow-md:   0 6px 16px -6px rgba(15,23,42,.10), 0 2px 4px rgba(15,23,42,.04);
+  --shadow-lg:   0 24px 48px -16px rgba(15,23,42,.18), 0 8px 16px rgba(15,23,42,.06);
+  --shadow-glow: 0 0 0 4px color-mix(in oklab, var(--primary) 18%, transparent);
+  --radius-sm:   8px;
+  --radius:      12px;
+  --radius-lg:   18px;
+  --radius-xl:   24px;
+  color-scheme:  light;
+
+  /* ─ Legacy --sf-* aliases (no usar en código nuevo) ───── */
+  --sf-page: var(--bg);          --sf-sidebar: var(--bg);
+  --sf-card: var(--surface);     --sf-elevated: var(--bg-elev);
+  --sf-inset: var(--surface-2);  --sf-hover: var(--surface-2);
+  --sf-hover-card: var(--surface-3);
+  --sf-border: var(--border);    --sf-border-subtle: var(--border-soft);
+  --sf-border-active: var(--border-strong);
+  --sf-t1: var(--t-1); --sf-t2: var(--t-2); --sf-t3: var(--t-3);
+  --sf-t4: var(--t-4); --sf-t5: var(--t-5); --sf-t6: var(--t-5);
+  --sf-t7: var(--t-5); --sf-t8: var(--t-5);
+  --sf-green: var(--primary);        --sf-green-bg: var(--primary-soft);
+  --sf-green-border: color-mix(in oklab, var(--primary) 28%, var(--border));
+  --sf-red: var(--danger);           --sf-red-bg: var(--danger-soft);
+  --sf-red-border: color-mix(in oklab, var(--danger) 28%, var(--border));
+  --sf-amber: var(--accent);         --sf-amber-bg: var(--accent-soft);
+  --sf-amber-border: color-mix(in oklab, var(--accent) 28%, var(--border));
+  --sf-info: var(--info);            --sf-info-bg: var(--info-soft);
+  --sf-info-border: color-mix(in oklab, var(--info) 28%, var(--border));
+  --sf-accent: var(--primary);       --sf-accent-bg: var(--primary-soft);
+  --sf-accent-border: var(--border-strong);
+  --sf-bg: var(--bg);                --sf-bg-rgb: 247,248,250;
+  --sf-footer-bg: var(--surface);    --sf-footer-text: var(--t-4);
+  --sf-footer-heading: var(--t-1);
+  --sf-overlay-subtle: rgba(0,0,0,0.02);   --sf-overlay-light: rgba(0,0,0,0.03);
+  --sf-overlay-medium: rgba(0,0,0,0.05);   --sf-overlay-strong: rgba(0,0,0,0.08);
 }
 
-/* Light mode card shadows */
+/* Card shadows */
 :root .intel-fade {
-  box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  box-shadow: var(--shadow-sm);
 }
 
 .dark {
-  --sf-page: #020C18;
-  --sf-sidebar: #020C18;
-  --sf-card: #0F1E35;
-  --sf-elevated: #0D1A2E;
-  --sf-inset: #0A1D30;
-  --sf-hover: #0B1E30;
-  --sf-hover-card: #0F2A3F;
+  /* ─ Surfaces ─────────────────────────────────────────── */
+  --bg:            #0A1220;
+  --bg-elev:       #0F1A2C;
+  --bg-sunken:     #070D17;
+  --surface:       #0F1A2C;
+  --surface-2:     #132238;
+  --surface-3:     #182B45;
 
-  --sf-border: #1A2F4A;
-  --sf-border-subtle: #152840;
-  --sf-border-active: rgba(0,214,143,0.25);
+  /* ─ Borders ───────────────────────────────────────────── */
+  --border:        #1E3252;
+  --border-strong: #2A4670;
+  --border-soft:   #16263E;
 
-  --sf-t1: #E2EBF6;
-  --sf-t2: #C8DDEF;
-  --sf-t3: #8BA4BE;
-  --sf-t4: #6B90AE;
-  --sf-t5: #5A7A9A;
-  --sf-t6: #4A6880;
-  --sf-t7: #3A5870;
-  --sf-t8: #2A4860;
+  /* ─ Text ──────────────────────────────────────────────── */
+  --t-1: #E6EDF8;
+  --t-2: #C8D5E8;
+  --t-3: #93A4BE;
+  --t-4: #6B7E99;
+  --t-5: #4F6280;
 
-  --sf-overlay-subtle: rgba(255,255,255,0.025);
-  --sf-overlay-light: rgba(255,255,255,0.04);
-  --sf-overlay-medium: rgba(255,255,255,0.06);
-  --sf-overlay-strong: rgba(255,255,255,0.1);
+  /* ─ Primary (mint) ────────────────────────────────────── */
+  --primary:         #2EE6A8;
+  --primary-hover:   #3CF0B4;
+  --primary-press:   #22C68F;
+  --primary-soft:    rgba(46,230,168,0.12);
+  --primary-fg:      #03110A;
+  --on-primary-soft: #9DF5D0;
 
-  --sf-bg: #020C18;
-  --sf-bg-rgb: 2,12,24;
-  --sf-footer-bg: #010810;
-  --sf-footer-text: #5A7A9A;
-  --sf-footer-heading: #C8DDEF;
+  /* ─ Accent (amber) ────────────────────────────────────── */
+  --accent:         #F5A524;
+  --accent-soft:    rgba(245,165,36,0.12);
+  --accent-fg:      #1A0F02;
+  --on-accent-soft: #FFD89A;
 
-  --sf-green: #00D68F;
-  --sf-red: #FF4D4D;
-  --sf-amber: #FFB800;
+  /* ─ Semantic ──────────────────────────────────────────── */
+  --danger:          #FF5C5C;
+  --danger-soft:     rgba(255,92,92,0.12);
+  --on-danger-soft:  #FFB4B4;
+  --success:         #2EE6A8;
+  --success-soft:    rgba(46,230,168,0.12);
+  --on-success-soft: #9DF5D0;
+  --info:            #6AA2FF;
+  --info-soft:       rgba(106,162,255,0.12);
+  --on-info-soft:    #B6CFFF;
 
-  --sf-green-bg: rgba(0,214,143,0.09);
-  --sf-green-border: rgba(0,214,143,0.25);
-  --sf-red-bg: rgba(255,77,77,0.09);
-  --sf-red-border: rgba(255,77,77,0.25);
-  --sf-amber-bg: rgba(255,184,0,0.09);
-  --sf-amber-border: rgba(255,184,0,0.25);
+  /* ─ Aurora ────────────────────────────────────────────── */
+  --aurora-1: rgba(46,230,168,0.15);
+  --aurora-2: rgba(56,189,248,0.12);
+  --aurora-3: rgba(245,165,36,0.08);
+
+  /* ─ Elevation & interaction ───────────────────────────── */
+  --ring:        color-mix(in oklab, var(--primary) 50%, transparent);
+  --shadow-sm:   0 1px 2px rgba(0,0,0,.40);
+  --shadow-md:   0 6px 16px -6px rgba(0,0,0,.55), 0 2px 4px rgba(0,0,0,.35);
+  --shadow-lg:   0 24px 48px -16px rgba(0,0,0,.65), 0 8px 16px rgba(0,0,0,.40);
+  --shadow-glow: 0 0 0 4px color-mix(in oklab, var(--primary) 22%, transparent);
+  color-scheme:  dark;
+
+  /* ─ Legacy --sf-* aliases ────────────────────────────── */
+  --sf-page: var(--bg);          --sf-sidebar: var(--bg);
+  --sf-card: var(--surface);     --sf-elevated: var(--bg-elev);
+  --sf-inset: var(--surface-2);  --sf-hover: var(--surface-2);
+  --sf-hover-card: var(--surface-3);
+  --sf-border: var(--border);    --sf-border-subtle: var(--border-soft);
+  --sf-border-active: rgba(46,230,168,0.30);
+  --sf-t1: var(--t-1); --sf-t2: var(--t-2); --sf-t3: var(--t-3);
+  --sf-t4: var(--t-4); --sf-t5: var(--t-5); --sf-t6: var(--t-5);
+  --sf-t7: var(--t-5); --sf-t8: var(--t-5);
+  --sf-green: var(--primary);        --sf-green-bg: var(--primary-soft);
+  --sf-green-border: color-mix(in oklab, var(--primary) 28%, var(--border));
+  --sf-red: var(--danger);           --sf-red-bg: var(--danger-soft);
+  --sf-red-border: color-mix(in oklab, var(--danger) 28%, var(--border));
+  --sf-amber: var(--accent);         --sf-amber-bg: var(--accent-soft);
+  --sf-amber-border: color-mix(in oklab, var(--accent) 28%, var(--border));
+  --sf-info: var(--info);            --sf-info-bg: var(--info-soft);
+  --sf-info-border: color-mix(in oklab, var(--info) 28%, var(--border));
+  --sf-accent: var(--primary);       --sf-accent-bg: var(--primary-soft);
+  --sf-accent-border: var(--border-strong);
+  --sf-bg: var(--bg);                --sf-bg-rgb: 10,18,32;
+  --sf-footer-bg: var(--bg-sunken);  --sf-footer-text: var(--t-4);
+  --sf-footer-heading: var(--t-1);
+  --sf-overlay-subtle: rgba(255,255,255,0.025); --sf-overlay-light: rgba(255,255,255,0.04);
+  --sf-overlay-medium: rgba(255,255,255,0.06);  --sf-overlay-strong: rgba(255,255,255,0.10);
 }
 
 @layer base {
   body {
-    @apply bg-zinc-950 text-zinc-200 antialiased transition-colors duration-300;
+    background-color: var(--bg);
+    background-image:
+      radial-gradient(ellipse 65% 50% at 82% -5%, var(--aurora-1), transparent 60%),
+      radial-gradient(ellipse 55% 40% at 15% 5%, var(--aurora-2), transparent 65%);
+    background-attachment: fixed;
+    color: var(--t-1);
+    font-feature-settings: 'cv11', 'ss01', 'ss03';
+    letter-spacing: -0.005em;
+    -webkit-font-smoothing: antialiased;
+    transition: background-color 0.3s, color 0.3s;
   }
 }
 
@@ -159,13 +269,83 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  @apply bg-zinc-800 rounded-full hover:bg-zinc-700 transition-colors;
+  background: var(--sf-border);
+  border-radius: 9999px;
+  transition: background-color 0.15s;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--sf-t7);
 }
 
 /* ── Chat table row hover ────────────────────────────────────── */
 .sf-table-row:hover td {
-  background: var(--sf-inset) !important;
+  background: var(--surface-2) !important;
 }
+
+/* ── Utility classes — Aurora Teal ──────────────────────────── */
+
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 9px 18px; border-radius: var(--radius-sm);
+  font-size: 13.5px; font-weight: 600; line-height: 1;
+  cursor: pointer; border: 1px solid transparent;
+  transition: background 0.15s, box-shadow 0.15s, transform 0.1s, opacity 0.15s;
+  white-space: nowrap; user-select: none;
+}
+.btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.btn:disabled { opacity: 0.48; cursor: not-allowed; pointer-events: none; }
+.btn .arr { transition: transform 0.2s; }
+.btn:hover .arr { transform: translateX(3px); }
+
+.btn-primary { background: var(--primary); color: var(--primary-fg); box-shadow: var(--shadow-sm); }
+.btn-primary:hover { background: var(--primary-hover); box-shadow: var(--shadow-md); transform: translateY(-1px); }
+.btn-primary:active { background: var(--primary-press); transform: translateY(0); box-shadow: var(--shadow-sm); }
+
+.btn-ghost { background: transparent; color: var(--t-2); border-color: var(--border); }
+.btn-ghost:hover { background: var(--surface-2); }
+
+.btn-tonal { background: var(--primary-soft); color: var(--on-primary-soft); border-color: color-mix(in oklab, var(--primary) 25%, var(--border)); }
+.btn-tonal:hover { background: color-mix(in oklab, var(--primary-soft) 130%, var(--surface-2)); }
+
+.btn-danger { background: var(--danger); color: #fff; box-shadow: var(--shadow-sm); }
+.btn-danger:hover { opacity: 0.9; box-shadow: var(--shadow-md); }
+
+.btn-sm { padding: 6px 12px; font-size: 12px; }
+
+.linkbtn {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: inherit; font-weight: 500; color: var(--primary);
+  background: transparent; border: none; cursor: pointer; padding: 0;
+  transition: opacity 0.15s;
+}
+.linkbtn:hover { opacity: 0.75; }
+
+/* Banners */
+.banner { display: flex; gap: 14px; padding: 13px 16px; border-radius: var(--radius); align-items: flex-start; border: 1px solid var(--border); }
+.banner-icon { width: 24px; height: 24px; border-radius: 8px; display: grid; place-items: center; flex-shrink: 0; }
+.banner-title { font-size: 13.5px; font-weight: 600; color: var(--t-1); margin: 0; }
+.banner-body  { font-size: 12.5px; color: var(--t-3); line-height: 1.5; margin: 3px 0 0; }
+
+.banner-info    { background: var(--info-soft);    border-color: color-mix(in oklab, var(--info)    28%, var(--border)); }
+.banner-success { background: var(--success-soft); border-color: color-mix(in oklab, var(--success) 28%, var(--border)); }
+.banner-warn    { background: var(--accent-soft);  border-color: color-mix(in oklab, var(--accent)  28%, var(--border)); }
+.banner-danger  { background: var(--danger-soft);  border-color: color-mix(in oklab, var(--danger)  28%, var(--border)); }
+.banner-info    .banner-icon { background: color-mix(in oklab, var(--info)    18%, transparent); color: var(--info);    }
+.banner-success .banner-icon { background: color-mix(in oklab, var(--success) 18%, transparent); color: var(--success); }
+.banner-warn    .banner-icon { background: color-mix(in oklab, var(--accent)  18%, transparent); color: var(--accent);  }
+.banner-danger  .banner-icon { background: color-mix(in oklab, var(--danger)  18%, transparent); color: var(--danger);  }
+
+@keyframes slideInUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+.animate-slide-in  { animation: slideInUp 0.4s cubic-bezier(.4, 1.5, .6, 1) both; }
+.animate-pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
 
 /* ── Print / PDF export ──────────────────────────────────────── */
 @media print, html.sf-printing {
@@ -211,9 +391,9 @@
     --sf-t3: #5c5650;
     --sf-t4: #78716c;
     --sf-t5: #8c857d;
-    --sf-green:        #059669;
-    --sf-green-bg:     #f0fdf4;
-    --sf-green-border: #bbf7d0;
+    --sf-green:        #0BA67A;
+    --sf-green-bg:     #ecfdf5;
+    --sf-green-border: #a7f3d0;
     --sf-red:          #dc2626;
     --sf-amber:        #ea580c;
     color-scheme: light;
@@ -298,7 +478,7 @@ html.sf-printing-chat {
       --sf-t3: #5c5650;
       --sf-t4: #78716c;
       --sf-t5: #8c857d;
-      --sf-green: #059669;
+      --sf-green: #0BA67A;
       color-scheme: light;
     }
 

@@ -134,7 +134,7 @@ export default function TopBar() {
               }
             }}
             className="sf-no-print bg-[var(--sf-green)] hover:opacity-90 font-semibold text-xs px-3 py-1.5 rounded-lg transition-opacity"
-            style={{ color: tema === 'dark' ? '#020C18' : '#fff' }}
+            style={{ color: tema === 'dark' ? '#0A1220' : '#fff' }}
           >
             <span className="hidden md:inline">✦ ¿Qué hago hoy?</span>
             <span className="md:hidden">✦ Hoy</span>
@@ -152,7 +152,7 @@ export default function TopBar() {
               style={{
                 width: 'calc(50% - 2px)',
                 left: metricaGlobal === 'usd' ? 2 : 'calc(50%)',
-                background: tema === 'dark' ? '#475569' : 'var(--sf-card)',
+                background: tema === 'dark' ? 'rgba(255,255,255,0.10)' : 'var(--sf-card)',
                 boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
               }}
             />
@@ -188,7 +188,7 @@ export default function TopBar() {
             style={{
               width: 'calc(50% - 2px)',
               left: tema === 'light' ? 2 : 'calc(50%)',
-              background: tema === 'dark' ? '#475569' : 'var(--sf-card)',
+              background: tema === 'dark' ? 'rgba(255,255,255,0.10)' : 'var(--sf-card)',
               boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
             }}
           />
