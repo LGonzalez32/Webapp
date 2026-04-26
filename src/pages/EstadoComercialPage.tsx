@@ -9,7 +9,7 @@ import { salesInPeriod } from '../lib/analysis'
 import { callAI } from '../lib/chatService'
 import VendedorPanel from '../components/vendedor/VendedorPanel'
 import { useDemoPath } from '../lib/useDemoPath'
-import { runInsightEngine, candidatesToDiagnosticBlocks, filtrarConEstandar, buildRichBlocksFromInsights, type DiagnosticBlock } from '../lib/insight-engine'
+import { runInsightEngine, candidatesToDiagnosticBlocks, filtrarConEstandar, buildRichBlocksFromInsights, recordInsightRuntimeAuditReport, type DiagnosticBlock } from '../lib/insight-engine'
 import DiagnosticBlockView from '../components/diagnostic/DiagnosticBlock'
 import EstadoGeneralEmpresa from '../components/estado-general/EstadoGeneralEmpresa'
 import { enrichDiagnosticBlocks, type EnrichedDiagnosticBlock } from '../lib/diagnostic-actions'
@@ -1557,6 +1557,23 @@ export default function EstadoComercialPage() {
       topProductosPorCliente,
     })
   }, [diagnosticBlocks, teamStats, vendorAnalysis, clientesDormidos, categoriasInventario, tipoMetaActivo, selectedPeriod, topProductosPorCliente])
+
+  useEffect(() => {
+    if (!sales?.length || !vendorAnalysis?.length) return
+    recordInsightRuntimeAuditReport({
+      candidatesReturned: _insightCandidates,
+      filteredCandidates: _filteredCandidates,
+      chainsCount: _insightChains.length,
+      executiveProblemsCount: _executiveProblems.length,
+      residualCandidatesCount: _residualCandidates.length,
+      legacyBlocksCount: _legacyBlocks.length,
+      diagnosticBlocksCount: diagnosticBlocks.length,
+      enrichedBlocksCount: enrichedBlocks.length,
+    })
+  }, [
+    sales, vendorAnalysis, _insightCandidates, _filteredCandidates, _insightChains,
+    _executiveProblems, _residualCandidates, _legacyBlocks, diagnosticBlocks, enrichedBlocks,
+  ])
 
   // R103: conteo UI sobre enrichedBlocks, no agregación de ventas
   const urgentPendingCount = useMemo(

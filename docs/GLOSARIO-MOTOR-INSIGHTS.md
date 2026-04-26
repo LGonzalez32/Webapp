@@ -5,6 +5,16 @@
 
 ---
 
+## Nota runtime audit
+
+- `getLastInsightEngineStatus()` expone stages internos, origenes y ranker audit.
+- `getLastInsightRuntimeAuditReport()` completa gate, compresion ejecutiva y render.
+- Los registries declarativos (`metricRegistry`, `dimensionRegistry`,
+  `insightTypeRegistry`) siguen siendo metadata parcial: no son la fuente
+  principal del runtime hasta que una migracion futura los conecte.
+
+---
+
 ## Cómo usarlo
 
 Primera parada cuando una sesión nueva pregunta "¿dónde va X?".

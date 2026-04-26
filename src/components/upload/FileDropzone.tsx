@@ -83,7 +83,7 @@ export default function FileDropzone({ step, onFileSelect, onSkip, isProcessing,
           // whitespace que parece overlap visual.
           (isLoaded || isError) ? 'min-h-0' : 'min-h-[280px]',
           isDragOver
-            ? 'border-[var(--primary)] bg-[var(--primary-soft)] p-8 scale-[1.005]'
+            ? 'border-[var(--primary)] bg-[var(--sf-green-bg)] p-8 scale-[1.005]'
             : isLoaded
             ? 'border-[var(--sf-green-border)] bg-[var(--sf-green-bg)] p-4'
             : isError
@@ -100,9 +100,12 @@ export default function FileDropzone({ step, onFileSelect, onSkip, isProcessing,
         />
 
         {isDragOver ? (
-          <div className="text-center">
-            <p className="text-base font-semibold" style={{ color: 'var(--primary)' }}>Suelta el archivo aquí</p>
-          </div>
+          <>
+            <div className="pointer-events-none absolute inset-0 rounded-2xl border-2 border-[var(--primary)] animate-sf-pulse" style={{ borderRadius: 'inherit' }} />
+            <div className="text-center">
+              <p className="text-base font-semibold" style={{ color: 'var(--primary)' }}>Soltá el archivo aquí</p>
+            </div>
+          </>
         ) : isProcessing ? (
           <div className="flex flex-col items-center gap-4 py-2 w-full">
             <div className="w-full max-w-md">
@@ -123,10 +126,9 @@ export default function FileDropzone({ step, onFileSelect, onSkip, isProcessing,
           // El detalle de filas/columnas vive en el banner verde "Archivo listo"
           // de la página, no se duplica acá. Acá solo: ícono + filename + acción.
           <div className="flex items-center gap-2.5 w-full">
-            <style>{`@keyframes checkPop{0%{transform:scale(0.8)}60%{transform:scale(1.15)}100%{transform:scale(1)}}`}</style>
             <CheckCircle2
-              className="w-5 h-5 shrink-0"
-              style={{ color: 'var(--primary)', animation: 'checkPop 0.4s ease-out forwards' }}
+              className="w-5 h-5 shrink-0 animate-sf-check"
+              style={{ color: 'var(--primary)' }}
             />
             <p className="text-sm font-semibold text-[var(--sf-t1)] truncate flex-1 min-w-0">{step.file?.name}</p>
             <span className="text-xs text-[var(--sf-t4)] underline underline-offset-2 shrink-0">Cambiar archivo</span>
@@ -146,10 +148,22 @@ export default function FileDropzone({ step, onFileSelect, onSkip, isProcessing,
           </div>
         ) : (
           <div className="flex flex-col items-center text-center w-full">
-            <Upload className="w-10 h-10 mb-3 transition-transform group-hover:-translate-y-1" style={{ color: 'var(--primary)' }} />
-            <p className="text-base font-semibold text-[var(--sf-t1)] mb-0.5">Arrastra tu archivo aquí</p>
-            <p className="text-sm text-[var(--sf-t3)]">o haz clic para elegir</p>
-            <p className="text-xs text-[var(--sf-t4)] mt-2">.xlsx · .xls · .csv</p>
+            <div className="sf-dropzone-icon mb-4 animate-sf-breathe">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/>
+                <line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+            </div>
+            <p className="text-[22px] font-semibold leading-snug text-[var(--sf-t1)] mb-1" style={{ letterSpacing: '-0.01em' }}>Arrastrá tu archivo aquí</p>
+            <p className="text-sm text-[var(--sf-t3)]">o hacé clic para elegir desde tu computadora</p>
+            <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+              {['.xlsx', '.xls', '.csv', 'máx 50MB'].map((lbl) => (
+                <span key={lbl} className="inline-flex items-center px-2.5 py-1 rounded-full border border-[var(--sf-border)] bg-[var(--sf-overlay-light)] font-mono text-[11px] text-[var(--sf-t3)]">
+                  {lbl}
+                </span>
+              ))}
+            </div>
             {(onLoadDemo || onDownloadTemplate) && (
               <div className="mt-6 pt-4 w-full flex flex-col gap-1.5 items-center" style={{ borderTop: '1px solid var(--border-soft)' }}>
                 {onLoadDemo && (

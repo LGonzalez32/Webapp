@@ -31,6 +31,24 @@ no es ADR, no es referencia histórica. Para historia ver
 de ventas en una pasada para que `filtrarConEstandar` no recompute (`Z.4` —
 ver `domain-aggregations.ts:getAgregadosParaFiltro`).
 
+### Mapa runtime verificable
+
+El motor mantiene un mapa auditable no visible para el usuario:
+
+- Cada `InsightCandidate` puede llevar `_origin` interno:
+  `motor2_registry_loop`, `cross_engine`, `special_builder`,
+  `motor1_legacy`, `executive_compression` o `legacy_render_adapter`.
+- `EngineStatusReport.pipeline` mide etapas internas de `runInsightEngine`:
+  `motor2_registry_loop`, `cross_engine`, `special_builders`, `dedup` y
+  `ranker`, con entradas, salidas, descartes y duracion.
+- `recordInsightRuntimeAuditReport()` completa el mapa fuera del motor con
+  `gate`, `executive_compression` y `render_adapter`.
+- `getLastInsightRuntimeAuditReport()` devuelve el ultimo reporte completo
+  para tests, consola DEV y auditorias.
+
+Contrato: estos campos son solo diagnostico. No deben cambiar ranking, gate,
+copy visible ni render.
+
 ---
 
 ## 2. Tipos canónicos
@@ -39,10 +57,14 @@ ver `domain-aggregations.ts:getAgregadosParaFiltro`).
 |---|---|---|
 | `InsightCandidate` | `insight-engine.ts:313` | Estructura de un candidato del motor (etapas 6–8) |
 | `EngineParams` | `insight-engine.ts:396` | Input de `runInsightEngine` |
+| `InsightRuntimeAuditReport` | `insightTelemetry.ts` | Mapa completo desde candidatos retornados hasta gate, compresion ejecutiva y render adapter. Se accede via `getLastInsightRuntimeAuditReport()` |
 | `EngineStatusReport` | `insight-engine.ts:421` | Telemetría: bruto vs seleccionado, por detector. Se accede vía `getLastInsightEngineStatus()` |
 | `InsightChain` | `decision-engine.ts` | Cadena causal entre candidatos con `root_problem_key` compatible |
 | `ExecutiveProblem` | `decision-engine.ts` | Compresión ejecutiva sobre una chain (etapa 9) |
 | `DiagnosticBlock` | `src/types/diagnostic-types.ts` | Card visual (etapa 10) |
+
+Nota: `EngineStatusReport` ya no es solo conteo por detector; tambien expone
+`pipeline`, `originBreakdown` y `rankerAudit`.
 
 ---
 

@@ -60,96 +60,107 @@
   --color-zinc-50:  #F2F6FD;
 }
 
-/* ── SalesFlow · Aurora Teal — design tokens v2 ────────────── */
+/* ── SalesFlow · Datascape — design tokens Ω.3 ──────────────── */
 
 :root {
-  /* ─ Surfaces ─────────────────────────────────────────── */
-  --bg:            #F7F8FA;
+  /* ─ Surfaces (Paper-leaning) ────────────────────────────── */
+  --bg:            #F8F5EE;
   --bg-elev:       #FFFFFF;
-  --bg-sunken:     #EEF1F5;
+  --bg-sunken:     #F4EFE3;
   --surface:       #FFFFFF;
-  --surface-2:     #F0F3F8;
-  --surface-3:     #EEF1F5;
+  --surface-2:     #F4EFE3;
+  --surface-3:     #EDE7D8;
 
-  /* ─ Borders ───────────────────────────────────────────── */
-  --border:        #E3E7ED;
-  --border-strong: #CFD6DF;
-  --border-soft:   #ECEFF3;
+  /* ─ Borders ───────────────────────────────────────────────── */
+  --border:        #E6DFD0;
+  --border-strong: #D4CBB7;
+  --border-soft:   #EFE9DB;
 
-  /* ─ Text ──────────────────────────────────────────────── */
-  --t-1: #0B1220;
-  --t-2: #1F2A3A;
-  --t-3: #475063;
-  --t-4: #6B7588;
-  --t-5: #8A93A6;
+  /* ─ Text ──────────────────────────────────────────────────── */
+  --t-1: #1A1816;
+  --t-2: #2B2722;
+  --t-3: #5C5650;
+  --t-4: #78716C;
+  --t-5: #8C857D;
 
-  /* ─ Primary (teal-green) ──────────────────────────────── */
-  --primary:         #0BA67A;
-  --primary-hover:   #089065;
-  --primary-press:   #067653;
-  --primary-soft:    rgba(11,166,122,0.08);
+  /* ─ Primary (Datascape green) ────────────────────────────── */
+  --primary:         #04935E;
+  --primary-hover:   #03825A;
+  --primary-press:   #037A55;
+  --primary-soft:    #ECFAF1;
   --primary-fg:      #FFFFFF;
-  --on-primary-soft: #0A6F50;
+  --on-primary-soft: #04935E;
 
-  /* ─ Accent (amber) ────────────────────────────────────── */
-  --accent:         #D97706;
-  --accent-soft:    rgba(217,119,6,0.08);
+  /* ─ Accent (amber) ───────────────────────────────────────── */
+  --accent:         #C2410C;
+  --accent-soft:    #FFF6EC;
   --accent-fg:      #FFFFFF;
-  --on-accent-soft: #92400E;
+  --on-accent-soft: #C2410C;
 
-  /* ─ Semantic ──────────────────────────────────────────── */
-  --danger:          #DC2626;
-  --danger-soft:     rgba(220,38,38,0.08);
-  --on-danger-soft:  #9F1B1B;
-  --success:         #0BA67A;
-  --success-soft:    rgba(11,166,122,0.08);
-  --on-success-soft: #0A6F50;
+  /* ─ Semantic ─────────────────────────────────────────────── */
+  --danger:          #B91C1C;
+  --danger-soft:     #FDEEEE;
+  --on-danger-soft:  #B91C1C;
+  --success:         #04935E;
+  --success-soft:    #ECFAF1;
+  --on-success-soft: #04935E;
   --info:            #2563EB;
   --info-soft:       rgba(37,99,235,0.08);
   --on-info-soft:    #1D4ED8;
 
-  /* ─ Aurora ────────────────────────────────────────────── */
-  --aurora-1: rgba(11,166,122,0.10);
-  --aurora-2: rgba(20,184,166,0.08);
-  --aurora-3: rgba(217,119,6,0.05);
+  /* ─ Datascape atmosphere ─────────────────────────────────── */
+  --aurora-1: rgba(194,65,12,0.06);
+  --aurora-2: rgba(4,147,94,0.05);
+  --aurora-3: rgba(194,65,12,0.03);
 
-  /* ─ Elevation & interaction ───────────────────────────── */
-  --ring:        color-mix(in oklab, var(--primary) 55%, transparent);
-  --shadow-sm:   0 1px 2px rgba(15,23,42,.04), 0 1px 1px rgba(15,23,42,.03);
-  --shadow-md:   0 6px 16px -6px rgba(15,23,42,.10), 0 2px 4px rgba(15,23,42,.04);
-  --shadow-lg:   0 24px 48px -16px rgba(15,23,42,.18), 0 8px 16px rgba(15,23,42,.06);
-  --shadow-glow: 0 0 0 4px color-mix(in oklab, var(--primary) 18%, transparent);
+  /* ─ Elevation & interaction ──────────────────────────────── */
+  --ring:        rgba(4,147,94,0.45);
+  --shadow-sm:   0 1px 2px rgba(26,24,22,0.04), 0 1px 1px rgba(26,24,22,0.03);
+  --shadow-md:   0 6px 16px -8px rgba(26,24,22,0.12), 0 2px 4px rgba(26,24,22,0.04);
+  --shadow-lg:   0 12px 32px -12px rgba(26,24,22,0.18), 0 4px 8px rgba(26,24,22,0.06);
+  --shadow-glow: 0 0 0 4px rgba(4,147,94,0.18);
   --radius-sm:   8px;
   --radius:      12px;
   --radius-lg:   18px;
   --radius-xl:   24px;
   color-scheme:  light;
 
-  /* ─ Legacy --sf-* aliases (no usar en código nuevo) ───── */
-  --sf-page: var(--bg);          --sf-sidebar: var(--bg);
+  /* ─ Legacy --sf-* aliases ────────────────────────────────── */
+  --sf-page: var(--bg);          --sf-sidebar: #F1ECE0;
   --sf-card: var(--surface);     --sf-elevated: var(--bg-elev);
-  --sf-inset: var(--surface-2);  --sf-hover: var(--surface-2);
-  --sf-hover-card: var(--surface-3);
+  --sf-inset: var(--surface-2);  --sf-hover: var(--surface-3);
+  --sf-hover-card: #F4EFE3;
   --sf-border: var(--border);    --sf-border-subtle: var(--border-soft);
-  --sf-border-active: var(--border-strong);
+  --sf-border-active: rgba(4,147,94,0.32);
+  --sf-border-strong: #D4CBB7;
   --sf-t1: var(--t-1); --sf-t2: var(--t-2); --sf-t3: var(--t-3);
-  --sf-t4: var(--t-4); --sf-t5: var(--t-5); --sf-t6: var(--t-5);
-  --sf-t7: var(--t-5); --sf-t8: var(--t-5);
-  --sf-green: var(--primary);        --sf-green-bg: var(--primary-soft);
-  --sf-green-border: color-mix(in oklab, var(--primary) 28%, var(--border));
+  --sf-t4: var(--t-4); --sf-t5: var(--t-5); --sf-t6: #93857A;
+  --sf-t7: #A89E94;    --sf-t8: #CCC5BC;
+  --sf-green: var(--primary);        --sf-green-fg: var(--primary-fg);
+  --sf-green-bg: var(--primary-soft);
+  --sf-green-border: #B6E4CB;
   --sf-red: var(--danger);           --sf-red-bg: var(--danger-soft);
-  --sf-red-border: color-mix(in oklab, var(--danger) 28%, var(--border));
+  --sf-red-border: #F2C2C2;
   --sf-amber: var(--accent);         --sf-amber-bg: var(--accent-soft);
-  --sf-amber-border: color-mix(in oklab, var(--accent) 28%, var(--border));
+  --sf-amber-border: #F5D0A8;
   --sf-info: var(--info);            --sf-info-bg: var(--info-soft);
   --sf-info-border: color-mix(in oklab, var(--info) 28%, var(--border));
   --sf-accent: var(--primary);       --sf-accent-bg: var(--primary-soft);
   --sf-accent-border: var(--border-strong);
-  --sf-bg: var(--bg);                --sf-bg-rgb: 247,248,250;
+  --sf-bg: var(--bg);                --sf-bg-rgb: 248,245,238;
   --sf-footer-bg: var(--surface);    --sf-footer-text: var(--t-4);
   --sf-footer-heading: var(--t-1);
   --sf-overlay-subtle: rgba(0,0,0,0.02);   --sf-overlay-light: rgba(0,0,0,0.03);
   --sf-overlay-medium: rgba(0,0,0,0.05);   --sf-overlay-strong: rgba(0,0,0,0.08);
+  --sf-ring: rgba(4,147,94,0.45);          --sf-ring-offset: var(--sf-bg);
+  --sf-shadow-1: 0 1px 2px rgba(26,24,22,0.04), 0 1px 1px rgba(26,24,22,0.03);
+  --sf-shadow-2: 0 6px 16px -8px rgba(26,24,22,0.12), 0 2px 4px rgba(26,24,22,0.04);
+  --sf-shadow-pop: 0 12px 32px -12px rgba(26,24,22,0.18), 0 4px 8px rgba(26,24,22,0.06);
+  --sf-wash-1: radial-gradient(60% 50% at 100% 0%, rgba(194,65,12,0.06), transparent 70%);
+  --sf-wash-2: radial-gradient(40% 35% at 0% 100%, rgba(4,147,94,0.05), transparent 70%);
+  --sf-grid-color: rgba(26,24,22,0.05);    --sf-grid-size: 32px;
+  --sf-font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --sf-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 /* Card shadows */
@@ -158,97 +169,106 @@
 }
 
 .dark {
-  /* ─ Surfaces ─────────────────────────────────────────── */
-  --bg:            #0A1220;
-  --bg-elev:       #0F1A2C;
-  --bg-sunken:     #070D17;
-  --surface:       #0F1A2C;
-  --surface-2:     #132238;
-  --surface-3:     #182B45;
+  /* ─ Surfaces (Datascape) ─────────────────────────────────── */
+  --bg:            #070D18;
+  --bg-elev:       #0E1828;
+  --bg-sunken:     #060B14;
+  --surface:       #0E1828;
+  --surface-2:     #0A1322;
+  --surface-3:     #112038;
 
-  /* ─ Borders ───────────────────────────────────────────── */
-  --border:        #1E3252;
-  --border-strong: #2A4670;
-  --border-soft:   #16263E;
+  /* ─ Borders ──────────────────────────────────────────────── */
+  --border:        rgba(255,255,255,0.06);
+  --border-strong: rgba(255,255,255,0.10);
+  --border-soft:   rgba(255,255,255,0.04);
 
-  /* ─ Text ──────────────────────────────────────────────── */
-  --t-1: #E6EDF8;
-  --t-2: #C8D5E8;
-  --t-3: #93A4BE;
-  --t-4: #6B7E99;
-  --t-5: #4F6280;
+  /* ─ Text ─────────────────────────────────────────────────── */
+  --t-1: #E6EEF8;
+  --t-2: #CFDDEC;
+  --t-3: #9AB0C6;
+  --t-4: #7B95AE;
+  --t-5: #607C96;
 
-  /* ─ Primary (mint) ────────────────────────────────────── */
-  --primary:         #2EE6A8;
-  --primary-hover:   #3CF0B4;
-  --primary-press:   #22C68F;
-  --primary-soft:    rgba(46,230,168,0.12);
-  --primary-fg:      #03110A;
-  --on-primary-soft: #9DF5D0;
+  /* ─ Primary (Datascape mint) ─────────────────────────────── */
+  --primary:         #00D68F;
+  --primary-hover:   #1AE0A0;
+  --primary-press:   #00C285;
+  --primary-soft:    rgba(0,214,143,0.10);
+  --primary-fg:      #052B1C;
+  --on-primary-soft: #00D68F;
 
-  /* ─ Accent (amber) ────────────────────────────────────── */
-  --accent:         #F5A524;
-  --accent-soft:    rgba(245,165,36,0.12);
+  /* ─ Accent (amber) ───────────────────────────────────────── */
+  --accent:         #FFB800;
+  --accent-soft:    rgba(255,184,0,0.10);
   --accent-fg:      #1A0F02;
-  --on-accent-soft: #FFD89A;
+  --on-accent-soft: #FFB800;
 
-  /* ─ Semantic ──────────────────────────────────────────── */
-  --danger:          #FF5C5C;
-  --danger-soft:     rgba(255,92,92,0.12);
-  --on-danger-soft:  #FFB4B4;
-  --success:         #2EE6A8;
-  --success-soft:    rgba(46,230,168,0.12);
-  --on-success-soft: #9DF5D0;
+  /* ─ Semantic ─────────────────────────────────────────────── */
+  --danger:          #FF5A5A;
+  --danger-soft:     rgba(255,90,90,0.10);
+  --on-danger-soft:  #FF5A5A;
+  --success:         #00D68F;
+  --success-soft:    rgba(0,214,143,0.10);
+  --on-success-soft: #00D68F;
   --info:            #6AA2FF;
-  --info-soft:       rgba(106,162,255,0.12);
+  --info-soft:       rgba(106,162,255,0.10);
   --on-info-soft:    #B6CFFF;
 
-  /* ─ Aurora ────────────────────────────────────────────── */
-  --aurora-1: rgba(46,230,168,0.15);
-  --aurora-2: rgba(56,189,248,0.12);
-  --aurora-3: rgba(245,165,36,0.08);
+  /* ─ Datascape atmosphere ─────────────────────────────────── */
+  --aurora-1: rgba(0,214,143,0.12);
+  --aurora-2: rgba(80,150,255,0.08);
+  --aurora-3: rgba(255,184,0,0.06);
 
-  /* ─ Elevation & interaction ───────────────────────────── */
-  --ring:        color-mix(in oklab, var(--primary) 50%, transparent);
-  --shadow-sm:   0 1px 2px rgba(0,0,0,.40);
-  --shadow-md:   0 6px 16px -6px rgba(0,0,0,.55), 0 2px 4px rgba(0,0,0,.35);
-  --shadow-lg:   0 24px 48px -16px rgba(0,0,0,.65), 0 8px 16px rgba(0,0,0,.40);
-  --shadow-glow: 0 0 0 4px color-mix(in oklab, var(--primary) 22%, transparent);
+  /* ─ Elevation & interaction ──────────────────────────────── */
+  --ring:        rgba(0,214,143,0.55);
+  --shadow-sm:   0 1px 2px rgba(0,0,0,0.30), 0 1px 1px rgba(0,0,0,0.20);
+  --shadow-md:   0 8px 24px -10px rgba(0,0,0,0.55), 0 2px 6px rgba(0,0,0,0.35);
+  --shadow-lg:   0 16px 40px -14px rgba(0,0,0,0.65), 0 6px 12px rgba(0,0,0,0.40);
+  --shadow-glow: 0 0 0 4px rgba(0,214,143,0.22);
   color-scheme:  dark;
 
-  /* ─ Legacy --sf-* aliases ────────────────────────────── */
-  --sf-page: var(--bg);          --sf-sidebar: var(--bg);
+  /* ─ Legacy --sf-* aliases ────────────────────────────────── */
+  --sf-page: var(--bg);          --sf-sidebar: #060B14;
   --sf-card: var(--surface);     --sf-elevated: var(--bg-elev);
-  --sf-inset: var(--surface-2);  --sf-hover: var(--surface-2);
-  --sf-hover-card: var(--surface-3);
+  --sf-inset: var(--surface-2);  --sf-hover: var(--surface-3);
+  --sf-hover-card: #142944;
   --sf-border: var(--border);    --sf-border-subtle: var(--border-soft);
-  --sf-border-active: rgba(46,230,168,0.30);
+  --sf-border-active: rgba(0,214,143,0.40);
+  --sf-border-strong: rgba(255,255,255,0.10);
   --sf-t1: var(--t-1); --sf-t2: var(--t-2); --sf-t3: var(--t-3);
-  --sf-t4: var(--t-4); --sf-t5: var(--t-5); --sf-t6: var(--t-5);
-  --sf-t7: var(--t-5); --sf-t8: var(--t-5);
-  --sf-green: var(--primary);        --sf-green-bg: var(--primary-soft);
-  --sf-green-border: color-mix(in oklab, var(--primary) 28%, var(--border));
+  --sf-t4: var(--t-4); --sf-t5: var(--t-5); --sf-t6: #4F6A82;
+  --sf-t7: #3F586E;    --sf-t8: #2D4458;
+  --sf-green: var(--primary);        --sf-green-fg: var(--primary-fg);
+  --sf-green-bg: var(--primary-soft);
+  --sf-green-border: rgba(0,214,143,0.28);
   --sf-red: var(--danger);           --sf-red-bg: var(--danger-soft);
-  --sf-red-border: color-mix(in oklab, var(--danger) 28%, var(--border));
+  --sf-red-border: rgba(255,90,90,0.28);
   --sf-amber: var(--accent);         --sf-amber-bg: var(--accent-soft);
-  --sf-amber-border: color-mix(in oklab, var(--accent) 28%, var(--border));
+  --sf-amber-border: rgba(255,184,0,0.28);
   --sf-info: var(--info);            --sf-info-bg: var(--info-soft);
   --sf-info-border: color-mix(in oklab, var(--info) 28%, var(--border));
   --sf-accent: var(--primary);       --sf-accent-bg: var(--primary-soft);
   --sf-accent-border: var(--border-strong);
-  --sf-bg: var(--bg);                --sf-bg-rgb: 10,18,32;
+  --sf-bg: var(--bg);                --sf-bg-rgb: 7,13,24;
   --sf-footer-bg: var(--bg-sunken);  --sf-footer-text: var(--t-4);
   --sf-footer-heading: var(--t-1);
   --sf-overlay-subtle: rgba(255,255,255,0.025); --sf-overlay-light: rgba(255,255,255,0.04);
   --sf-overlay-medium: rgba(255,255,255,0.06);  --sf-overlay-strong: rgba(255,255,255,0.10);
+  --sf-ring: rgba(0,214,143,0.55);             --sf-ring-offset: var(--sf-bg);
+  --sf-shadow-1: 0 1px 2px rgba(0,0,0,0.30), 0 1px 1px rgba(0,0,0,0.20);
+  --sf-shadow-2: 0 8px 24px -10px rgba(0,0,0,0.55), 0 2px 6px rgba(0,0,0,0.35);
+  --sf-shadow-pop: 0 16px 40px -14px rgba(0,0,0,0.65), 0 6px 12px rgba(0,0,0,0.40);
+  --sf-wash-1: radial-gradient(60% 50% at 100% 0%, rgba(0,214,143,0.08), transparent 70%);
+  --sf-wash-2: radial-gradient(45% 40% at 0% 100%, rgba(80,150,255,0.06), transparent 70%);
+  --sf-grid-color: rgba(255,255,255,0.045);    --sf-grid-size: 32px;
+  --sf-font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --sf-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 @layer base {
   body {
     background-color: var(--bg);
-    background-image:
-      radial-gradient(ellipse 65% 50% at 82% -5%, var(--aurora-1), transparent 60%),
-      radial-gradient(ellipse 55% 40% at 15% 5%, var(--aurora-2), transparent 65%);
+    background-image: var(--sf-wash-1), var(--sf-wash-2);
     background-attachment: fixed;
     color: var(--t-1);
     font-feature-settings: 'cv11', 'ss01', 'ss03';
@@ -346,6 +366,70 @@
 }
 .animate-slide-in  { animation: slideInUp 0.4s cubic-bezier(.4, 1.5, .6, 1) both; }
 .animate-pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+
+/* ── Datascape atmosphere ──────────────────────────────────── */
+.sf-atmos { position: relative; isolation: isolate; }
+.sf-atmos::before {
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background: var(--sf-wash-1), var(--sf-wash-2);
+}
+.sf-atmos::after {
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background-image:
+    linear-gradient(var(--sf-grid-color) 1px, transparent 1px),
+    linear-gradient(90deg, var(--sf-grid-color) 1px, transparent 1px);
+  background-size: var(--sf-grid-size) var(--sf-grid-size);
+  mask-image: radial-gradient(ellipse 60% 50% at 50% 35%, black 0%, transparent 75%);
+  -webkit-mask-image: radial-gradient(ellipse 60% 50% at 50% 35%, black 0%, transparent 75%);
+  opacity: 0.9;
+}
+.sf-atmos > * { position: relative; z-index: 1; }
+
+/* ── Dropzone icon ─────────────────────────────────────────── */
+.sf-dropzone-icon {
+  width: 64px; height: 64px; border-radius: 16px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #04935E 0%, #0EA5E9 100%);
+  box-shadow: 0 8px 20px -10px rgba(4,147,94,0.30);
+}
+.dark .sf-dropzone-icon {
+  background: linear-gradient(135deg, #00D68F 0%, #00B8FF 100%);
+  box-shadow: 0 8px 24px -8px rgba(0,214,143,0.40);
+}
+
+/* ── Datascape microinteractions ───────────────────────────── */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes sf-breathe {
+    0%, 100% { transform: translateY(0); }
+    50%       { transform: translateY(-3px); }
+  }
+  @keyframes sf-pulse-ring {
+    0%   { transform: scale(1);    opacity: 0.5; }
+    100% { transform: scale(1.04); opacity: 0;   }
+  }
+  @keyframes sf-check-pop {
+    0%   { transform: scale(0.6); }
+    60%  { transform: scale(1.15); }
+    100% { transform: scale(1); }
+  }
+  @keyframes sf-banner-in {
+    from { opacity: 0; transform: translateY(-6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes sf-banner-shake {
+    0%   { transform: translateX(0); }
+    20%  { transform: translateX(-3px); }
+    40%  { transform: translateX(3px); }
+    60%  { transform: translateX(-2px); }
+    80%  { transform: translateX(2px); }
+    100% { transform: translateX(0); }
+  }
+  .animate-sf-breathe  { animation: sf-breathe    4s ease-in-out infinite; }
+  .animate-sf-pulse    { animation: sf-pulse-ring  1.4s ease-out infinite; }
+  .animate-sf-check    { animation: sf-check-pop   320ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
+  .animate-sf-banner   { animation: sf-banner-in   240ms ease-out both; }
+  .animate-sf-shake    { animation: sf-banner-shake 220ms ease-out both; }
+}
 
 /* ── Print / PDF export ──────────────────────────────────────── */
 @media print, html.sf-printing {

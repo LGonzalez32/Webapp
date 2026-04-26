@@ -98,6 +98,7 @@ self.onmessage = (event: MessageEvent<WorkerInput | EnrichInput>) => {
 
   // ── Phase 1 — initial analysis ────────────────────────────────────────────
   const { sales, metas, inventory, selectedPeriod, configuracion, tipoMetaActivo } = event.data as WorkerInput
+  const _analysisWorkerT0 = performance.now()
 
   const post = (message: string) =>
     (self as unknown as Worker).postMessage({ type: 'progress', message })
@@ -250,5 +251,23 @@ self.onmessage = (event: MessageEvent<WorkerInput | EnrichInput>) => {
     monthlyTotals: aggregated.monthlyTotals,
     monthlyTotalsSameDay: aggregated.monthlyTotalsSameDay,
     fechaRefISO: aggregated.fechaRefISO,
+    runtimeTelemetry: {
+      id: 'analysis_worker',
+      status: 'ok',
+      durationMs: Math.round(performance.now() - _analysisWorkerT0),
+      inputCount: sales.length,
+      outputCount: insights.length,
+      metadata: {
+        metas: metas.length,
+        inventory: inventory.length,
+        vendors: vendorAnalysis.length,
+        clientesDormidos: clientesDormidos.length,
+        categoriasInventario: categoriasInventario?.length ?? 0,
+        supervisorAnalysis: supervisorAnalysis?.length ?? 0,
+        categoriaAnalysis: categoriaAnalysis?.length ?? 0,
+        canalAnalysis: canalAnalysis?.length ?? 0,
+        motor1LegacyMs: Math.round(_pr_l1_motor1_ms),
+      },
+    },
   })
 }

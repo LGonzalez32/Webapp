@@ -115,6 +115,17 @@ import {
   type InsightGateDecision,
 } from './insightStandard'
 import { getAgregadosParaFiltro, type AgregadosFiltro } from './domain-aggregations' // [Z.4 — perf: cuello-2]
+import {
+  buildPortfolioAudit,
+  buildPortfolioPreview,
+  makeStageReport,
+  summarizeCandidateOrigins,
+  type InsightCandidateOrigin,
+  type InsightPipelineStageId,
+  type InsightPipelineStageReport,
+  type InsightPortfolioAudit,
+  type InsightRuntimeAuditReport,
+} from './insightTelemetry'
 import { buildTransactionOutlierBlocks } from './builders/buildTransactionOutlierBlocks' // [PR-M7d]
 import { buildChangePointBlocks }       from './builders/buildChangePointBlocks'        // [PR-M8a]
 import { buildSteadyShareBlocks }       from './builders/buildSteadyShareBlocks'        // [PR-M9]
@@ -342,6 +353,11 @@ export interface InsightCandidate {
   score_raw?:        number
   score_normalized?: number
 
+  // [RUNTIME-AUDIT] Internal provenance only. It explains where the candidate
+  // entered the pipeline and must not affect ranker, gate, copy, or render.
+  _origin?: InsightCandidateOrigin
+  _portfolioAudit?: InsightPortfolioAudit
+
   // ── Contrato ejecutivo Z.9 ────────────────────────────────────────────────
   // R134: todos estos campos son opcionales o nullables. Builders los pueblan
   // parcialmente en Z.9.2. Consumidores manejan null sin crashear.
@@ -421,10 +437,22 @@ export interface EngineDetectorStatus {
   error?:            string
 }
 
+export interface EngineRankerAudit {
+  protectedCount: number
+  regularCount: number
+  regularCap: number
+  regularSelected: number
+  selectedByOrigin: Record<InsightCandidateOrigin | 'unknown', number>
+  portfolioPreview: InsightRuntimeAuditReport['portfolioPreview']
+}
+
 export interface EngineStatusReport {
   runAt:              number   // Date.now()
   candidatesTotal:    number
   candidatesSelected: number
+  pipeline: Partial<Record<InsightPipelineStageId, InsightPipelineStageReport>>
+  originBreakdown: Record<InsightCandidateOrigin | 'unknown', number>
+  rankerAudit?: EngineRankerAudit
   detectors: {
     motor1:            EngineDetectorStatus
     outlier_builder:   EngineDetectorStatus
@@ -441,10 +469,85 @@ function _emptyDetector(): EngineDetectorStatus {
 }
 
 let _lastEngineStatus: EngineStatusReport | null = null
+let _lastRuntimeAuditReport: InsightRuntimeAuditReport | null = null
+let _lastAnalysisWorkerStage: InsightPipelineStageReport | null = null
 
 /** Retorna el último EngineStatusReport generado por runInsightEngine, o null si aún no se ejecutó. */
 export function getLastInsightEngineStatus(): EngineStatusReport | null {
   return _lastEngineStatus
+}
+
+export function getLastInsightRuntimeAuditReport(): InsightRuntimeAuditReport | null {
+  return _lastRuntimeAuditReport
+}
+
+export function recordAnalysisWorkerStageReport(stage: InsightPipelineStageReport): void {
+  _lastAnalysisWorkerStage = stage
+}
+
+export function recordInsightRuntimeAuditReport(input: {
+  candidatesReturned: InsightCandidate[]
+  filteredCandidates: InsightCandidate[]
+  chainsCount: number
+  executiveProblemsCount: number
+  residualCandidatesCount: number
+  legacyBlocksCount: number
+  diagnosticBlocksCount: number
+  enrichedBlocksCount: number
+}): InsightRuntimeAuditReport {
+  const engineStatus = _lastEngineStatus
+  const stages: Partial<Record<InsightPipelineStageId, InsightPipelineStageReport>> = {
+    ...(_lastAnalysisWorkerStage ? { analysis_worker: _lastAnalysisWorkerStage } : {}),
+    ...(engineStatus?.pipeline ?? {}),
+    gate: makeStageReport('gate', {
+      status: 'ok',
+      inputCount: input.candidatesReturned.length,
+      outputCount: input.filteredCandidates.length,
+      discardedCount: Math.max(0, input.candidatesReturned.length - input.filteredCandidates.length),
+    }),
+    executive_compression: makeStageReport('executive_compression', {
+      status: input.chainsCount > 0 || input.executiveProblemsCount > 0 ? 'ok' : 'skipped',
+      inputCount: input.filteredCandidates.length,
+      outputCount: input.executiveProblemsCount,
+      metadata: {
+        chains: input.chainsCount,
+        residualCandidates: input.residualCandidatesCount,
+      },
+    }),
+    render_adapter: makeStageReport('render_adapter', {
+      status: 'ok',
+      inputCount: input.residualCandidatesCount + input.legacyBlocksCount,
+      outputCount: input.enrichedBlocksCount,
+      metadata: {
+        legacyBlocks: input.legacyBlocksCount,
+        diagnosticBlocks: input.diagnosticBlocksCount,
+      },
+    }),
+  }
+
+  _lastRuntimeAuditReport = {
+    runAt: Date.now(),
+    summary: {
+      candidatesReturned: input.candidatesReturned.length,
+      candidatesFiltered: input.filteredCandidates.length,
+      candidatesRejectedByGate: Math.max(0, input.candidatesReturned.length - input.filteredCandidates.length),
+      chains: input.chainsCount,
+      executiveProblems: input.executiveProblemsCount,
+      residualCandidates: input.residualCandidatesCount,
+      legacyBlocks: input.legacyBlocksCount,
+      diagnosticBlocks: input.diagnosticBlocksCount,
+      enrichedBlocks: input.enrichedBlocksCount,
+    },
+    origins: summarizeCandidateOrigins(input.candidatesReturned),
+    stages,
+    portfolioPreview: buildPortfolioPreview(input.candidatesReturned),
+  }
+
+  if (import.meta.env.DEV) {
+    console.debug('[insight-runtime-audit]', _lastRuntimeAuditReport)
+  }
+
+  return _lastRuntimeAuditReport
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -4718,6 +4821,8 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
     runAt:              Date.now(),
     candidatesTotal:    0,
     candidatesSelected: 0,
+    pipeline:           {},
+    originBreakdown:    summarizeCandidateOrigins([]),
     detectors: {
       motor1:            _emptyDetector(),
       outlier_builder:   _emptyDetector(),
@@ -4728,6 +4833,32 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
       z9_hydration:      _emptyDetector(),
     },
   }
+
+  const _stageStartedAt = new Map<InsightPipelineStageId, number>()
+  const _beginStage = (id: InsightPipelineStageId): void => {
+    _stageStartedAt.set(id, performance.now())
+  }
+  const _endStage = (
+    id: InsightPipelineStageId,
+    data: Partial<Omit<InsightPipelineStageReport, 'id' | 'durationMs'>> = {},
+  ): void => {
+    const started = _stageStartedAt.get(id)
+    _status.pipeline[id] = makeStageReport(id, {
+      status: data.status ?? 'ok',
+      inputCount: data.inputCount,
+      outputCount: data.outputCount,
+      discardedCount: data.discardedCount,
+      reason: data.reason,
+      metadata: data.metadata,
+      durationMs: started == null ? undefined : performance.now() - started,
+    })
+  }
+  _status.pipeline.motor1_legacy = makeStageReport('motor1_legacy', {
+    status: 'skipped',
+    inputCount: 0,
+    outputCount: 0,
+    reason: 'Legacy insights enter later through render_adapter/buildRichBlocksFromInsights.',
+  })
 
   // 1. Slice sales by period
   const currentSales = getSalesForPeriod(sales, year, month)
@@ -4786,10 +4917,19 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
 
   const allCandidates: InsightCandidate[] = []
 
+  const _tagCandidate = (candidate: InsightCandidate, origin: InsightCandidateOrigin): InsightCandidate => {
+    if (!candidate._origin) candidate._origin = origin
+    return candidate
+  }
+
   // [Z.10.4c] push con enrichment para candidatos que vienen de builders PR-M.
   // Los no-elegibles se pushean bit-idénticos (fallback transparente del helper).
-  const _pushWithEnrichment = (candidates: InsightCandidate[]): void => {
-    for (const c of candidates) {
+  const _pushWithEnrichment = (
+    candidates: InsightCandidate[],
+    origin: InsightCandidateOrigin = 'special_builder',
+  ): void => {
+    for (const raw of candidates) {
+      const c = _tagCandidate(raw, origin)
       if (_isEnrichEligible(c.dimensionId, c.insightTypeId)) {
         const _r = enriquecerCandidate(
           {
@@ -4801,7 +4941,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
           },
           _enrichCtx,
         )
-        allCandidates.push({ ...c, description: _r.description, detail: _r.detail })
+        allCandidates.push({ ...c, description: _r.description, detail: _r.detail, _origin: c._origin })
       } else {
         allCandidates.push(c)
       }
@@ -4809,6 +4949,9 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   }
 
   // 2. Main loop: dimension × metric × insightType
+  const _registryLoopStartCount = allCandidates.length
+  _beginStage('motor2_registry_loop')
+
   for (const dim of DIMENSION_REGISTRY) {
     const currentGroups = groupByField(currentSales, dim.field)
     if (currentGroups.size < 2) continue
@@ -4955,6 +5098,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
         }
 
         allCandidates.push({
+          _origin:       'motor2_registry_loop',
           metricId:      metric.id,
           dimensionId:   dim.id,
           insightTypeId: insightType.id,
@@ -5013,6 +5157,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
       )
 
       allCandidates.push({
+        _origin:       'motor2_registry_loop',
         metricId:      `${m1Id}_${m2Id}`,
         dimensionId:   'vendedor',
         insightTypeId: 'correlation',
@@ -5027,6 +5172,19 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   }
 
   // 3B. Absolute impact floor for contribution: tiny absolute change ≠ CRITICA
+  _endStage('motor2_registry_loop', {
+    inputCount: currentSales.length,
+    outputCount: allCandidates.length - _registryLoopStartCount,
+    metadata: {
+      dimensions: DIMENSION_REGISTRY.length,
+      metrics: METRIC_REGISTRY.length,
+      insightTypes: INSIGHT_TYPE_REGISTRY.length,
+    },
+  })
+
+  const _specialBuildersStartCount = allCandidates.length
+  _beginStage('special_builders')
+
   for (const c of allCandidates) {
     if (c.insightTypeId !== 'contribution') continue
     const totalChange = Math.abs((c.detail.totalChange as number) ?? 0)
@@ -5084,6 +5242,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
         ? ` Aportaba $${Math.round(impacto).toLocaleString('es-SV')} en ${mesAnteriorLabel}.`
         : ''
       allCandidates.push({
+        _origin:       'special_builder',
         metricId:      'dias_sin_compra',
         dimensionId:   'cliente',
         insightTypeId: 'cliente_dormido',
@@ -5194,6 +5353,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
         try { _nar = _tmpl(_res.detail, tipoMetaActivo) } catch { continue }
         const _topProd = (_res.detail.topProduct as string | undefined) ?? ''
         allCandidates.push({
+          _origin:       'special_builder',
           metricId:      'inventario',
           dimensionId:   'producto',
           insightTypeId: invType.id,
@@ -5274,6 +5434,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
                 ? _rDecl.detail
                 : _baseDetail
               allCandidates.push({
+                _origin:       'special_builder',
                 metricId:      'venta',
                 dimensionId:   'producto',
                 insightTypeId: 'migration',
@@ -5300,6 +5461,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
               const _nar = _tmpl(_res.detail, tipoMetaActivo)
               const _cluster = (_res.detail.cluster as string[] | undefined) ?? []
               allCandidates.push({
+                _origin:       'special_builder',
                 metricId:      'venta',
                 dimensionId:   'producto',
                 insightTypeId: 'co_decline',
@@ -5346,6 +5508,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
               const _enrichedDetail = _r.detail
 
               allCandidates.push({
+                _origin:       'special_builder',
                 metricId:      'venta',
                 dimensionId:   'producto',
                 insightTypeId: 'product_dead',
@@ -5623,6 +5786,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   // [PR-M4a] Cross-engine genérico (Metric × Dimension × InsightType).
   // Con DETECTORS={} en M4a, no produce candidatos. PR-M4b/c wire outlier/seasonality.
   // Construcción de DataAvailability desde las flags inferibles en este scope.
+  _beginStage('cross_engine')
   try {
     const _xeAvailability: DataAvailability = {
       has_producto:        params.sales.some(s => s.producto != null && s.producto !== ''),
@@ -5672,6 +5836,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
         _detail = _r.detail
       }
       allCandidates.push({
+        _origin:       'cross_engine',
         metricId:      c.metricId,
         dimensionId:   c.dimensionId,
         insightTypeId: c.insightTypeId,
@@ -5685,6 +5850,12 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
         accion:        c.accion,
       })
     }
+    _endStage('cross_engine', {
+      inputCount: currentSales.length,
+      outputCount: _xe.candidates.length - _xeDedupCount,
+      discardedCount: _xeDedupCount,
+      metadata: _xe.telemetry as unknown as Record<string, unknown>,
+    })
     if (import.meta.env.DEV) {
       // [PR-M4d] Telemetría extendida con flags de infraestructura activa
       console.debug('[PR-M4] cross_engine:', {
@@ -5698,6 +5869,11 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
       })
     }
   } catch (e) {
+    _endStage('cross_engine', {
+      status: 'failed',
+      outputCount: 0,
+      reason: String(e),
+    })
     console.error('[PR-M4] cross_engine failed:', e)
   }
 
@@ -5882,6 +6058,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
           `Representa ${Math.round(pctSobreNegocio * 10000) / 100}% del negocio del período.`
 
         const candidate: InsightCandidate = {
+          _origin:       'special_builder',
           metricId:      'venta',
           dimensionId:   par.dimA,
           insightTypeId: 'cross_delta',
@@ -5948,11 +6125,21 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
     if (import.meta.env.DEV) console.warn('[Z.13.3] cross_delta_detector fallback (degradación silenciosa):', e)
   }
 
+  _endStage('special_builders', {
+    inputCount: currentSales.length,
+    outputCount: allCandidates.length - _specialBuildersStartCount,
+    metadata: {
+      includesCrossEngine: true,
+      detectorStatus: _status.detectors,
+    },
+  })
+
   // 4. Deduplicate
   // [PR-M5a'] Allowlist re-habilitada: tipos que preservan variantes por metric en la key.
   // trend/change/contribution tienen valor semántico dual (unidades complementa USD).
   // Los otros 10 detectores mantienen la clave sin metricId.
   const METRIC_DEDUP_ALLOWLIST = new Set(['trend', 'change', 'contribution'])
+  _beginStage('dedup')
   const _preDedupCount = allCandidates.length
   const dedupMap = new Map<string, InsightCandidate>()
   for (const c of allCandidates) {
@@ -5962,6 +6149,11 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
     const existing = dedupMap.get(key)
     if (!existing || c.score > existing.score) dedupMap.set(key, c)
   }
+  _endStage('dedup', {
+    inputCount: _preDedupCount,
+    outputCount: dedupMap.size,
+    discardedCount: Math.max(0, _preDedupCount - dedupMap.size),
+  })
 
   // [PR-M5a'] Telemetría de expansión metric-aware
   if (import.meta.env.DEV) {
@@ -6030,6 +6222,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   const RANKER_TOTAL_CAP  = 12
 
   const _allDedup = Array.from(dedupMap.values())
+  _beginStage('ranker')
 
   // Agrupar candidates de tipos con cap upstream
   const _byProtectedType = new Map<string, InsightCandidate[]>()
@@ -6228,6 +6421,20 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
       median_score_top:  Math.round(_pm7cAudit.median_score_top * 1000) / 1000,
     })
   }
+
+  _endStage('ranker', {
+    inputCount: _allDedup.length,
+    outputCount: selected.length,
+    discardedCount: Math.max(0, _allDedup.length - selected.length),
+    metadata: {
+      protectedCount: _protectedCands.length,
+      regularCount: _regularCands.length,
+      regularCap: _regularCap,
+      regularSelected: _regularSelected.length,
+      diversityTriggered: _pm7cAudit.triggered,
+      diversityInjected: _pm7cAudit.slots_injected,
+    },
+  })
 
   if (import.meta.env.DEV) {
     console.debug('[PR-M5a\'-cap-upstream]', {
@@ -6695,8 +6902,34 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   }
 
   // [Z.9.7] Commit status report
+  const _selectedByType: Record<string, number> = {}
+  const _selectedByDimension: Record<string, number> = {}
+  for (const c of selected) {
+    _selectedByType[c.insightTypeId] = (_selectedByType[c.insightTypeId] ?? 0) + 1
+    _selectedByDimension[c.dimensionId] = (_selectedByDimension[c.dimensionId] ?? 0) + 1
+  }
+  const _selectedByOrigin = summarizeCandidateOrigins(selected)
+  for (const c of selected) {
+    c._portfolioAudit = buildPortfolioAudit(c, {
+      ventaTotalNegocio: _Z13_ventaTotalNegocio,
+      selectedOrigins: _selectedByOrigin,
+      selectedTypes: _selectedByType,
+      selectedDimensions: _selectedByDimension,
+    })
+  }
+  const _portfolioPreview = buildPortfolioPreview(selected)
+
   _status.candidatesTotal    = allCandidates.length
   _status.candidatesSelected = selected.length
+  _status.originBreakdown    = summarizeCandidateOrigins(allCandidates)
+  _status.rankerAudit = {
+    protectedCount: _protectedCands.length,
+    regularCount: _regularCands.length,
+    regularCap: _regularCap,
+    regularSelected: _regularSelected.length,
+    selectedByOrigin: _selectedByOrigin,
+    portfolioPreview: _portfolioPreview,
+  }
   _lastEngineStatus          = _status
 
   return selected

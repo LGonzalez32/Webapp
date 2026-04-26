@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useAppStore } from '../store/appStore'
 import { getProjectionsFromBackend } from './forecastApi'
+import { recordAnalysisWorkerStageReport } from './insight-engine'
 import type { VendorAnalysis } from '../types'
 
 export function useAnalysis() {
@@ -122,8 +123,10 @@ export function useAnalysis() {
           canalAnalysis: Parameters<typeof setCanalAnalysis>[0] | null
           insights: Parameters<typeof setInsights>[0]
           dataAvailability: Parameters<typeof setDataAvailability>[0]
+          runtimeTelemetry?: Parameters<typeof recordAnalysisWorkerStageReport>[0]
         }
 
+        if (data.runtimeTelemetry) recordAnalysisWorkerStageReport(data.runtimeTelemetry)
         setDataAvailability(dataAvailability)
         setVendorAnalysis(vendorAnalysis)
         setTeamStats(teamStats)

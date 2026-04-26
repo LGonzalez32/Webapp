@@ -8,6 +8,11 @@ desplazó del top-10 insights hardcoded USD-recuperable preexistentes.
 Este documento audita el mecanismo responsable (`group-*`) y define los
 requisitos para re-habilitar outlier sin canibalización.
 
+> **Historico.** Este documento conserva una auditoria puntual de PR-M4b. No es
+> roadmap activo. Para el contrato vigente del motor, usar
+> `docs/MANIFIESTO-MOTOR-INSIGHTS.md`; para el mapa runtime actual, usar
+> `getLastInsightRuntimeAuditReport()`.
+
 ---
 
 ## 1. Mecanismo `group-*` — origen, lógica, criterios

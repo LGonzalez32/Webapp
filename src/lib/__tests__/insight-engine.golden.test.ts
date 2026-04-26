@@ -44,6 +44,8 @@ import {
   runInsightEngine,
   filtrarConEstandar,
   getLastInsightEngineStatus,
+  getLastInsightRuntimeAuditReport,
+  recordInsightRuntimeAuditReport,
   type InsightCandidate,
 } from '../insight-engine'
 import { getAgregadosParaFiltro } from '../domain-aggregations'
@@ -85,6 +87,18 @@ const counts = <T extends string>(arr: T[]): Record<T, number> => {
     Object.entries(o).sort(([a], [b]) => a.localeCompare(b))
   ) as Record<T, number>
 }
+
+const stageSnapshot = (stages: Record<string, any> | undefined) => Object.fromEntries(
+  Object.entries(stages ?? {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([id, stage]) => [id, {
+      status: stage.status,
+      inputCount: stage.inputCount ?? null,
+      outputCount: stage.outputCount ?? null,
+      discardedCount: stage.discardedCount ?? null,
+      reason: stage.reason ?? null,
+    }]),
+)
 
 /**
  * Ejecuta el pipeline completo (motor + filtro) sobre el demo dataset y
@@ -161,6 +175,21 @@ function runGoldenCase(tipoMetaActivo: 'usd' | 'uds') {
     agregados:        agregados ?? undefined,
   })
 
+  const runtimeAudit = recordInsightRuntimeAuditReport({
+    candidatesReturned: candidates,
+    filteredCandidates: filtered,
+    chainsCount: 0,
+    executiveProblemsCount: 0,
+    residualCandidatesCount: filtered.length,
+    legacyBlocksCount: 0,
+    diagnosticBlocksCount: filtered.length,
+    enrichedBlocksCount: filtered.length,
+  })
+  expect(getLastInsightRuntimeAuditReport()).toBe(runtimeAudit)
+  expect(
+    Object.values(engineStatus?.originBreakdown ?? {}).reduce((sum, n) => sum + n, 0),
+  ).toBe(engineStatus?.candidatesTotal ?? 0)
+
   // ── Assert payload: snapshot estructural ─────────────────────────────────
   const detectorsEmitted: Record<string, number> = {}
   if (engineStatus) {
@@ -182,7 +211,23 @@ function runGoldenCase(tipoMetaActivo: 'usd' | 'uds') {
       candidatesTotal:    engineStatus.candidatesTotal,
       candidatesSelected: engineStatus.candidatesSelected,
       detectorsEmitted,
+      origins:            engineStatus.originBreakdown,
+      stages:             stageSnapshot(engineStatus.pipeline as Record<string, any>),
+      rankerAudit: engineStatus.rankerAudit ? {
+        protectedCount:   engineStatus.rankerAudit.protectedCount,
+        regularCount:     engineStatus.rankerAudit.regularCount,
+        regularCap:       engineStatus.rankerAudit.regularCap,
+        regularSelected:  engineStatus.rankerAudit.regularSelected,
+        selectedByOrigin: engineStatus.rankerAudit.selectedByOrigin,
+        portfolioPreview: engineStatus.rankerAudit.portfolioPreview.slice(0, 5),
+      } : null,
     } : null,
+    runtimeAudit: {
+      summary: runtimeAudit.summary,
+      origins: runtimeAudit.origins,
+      stages:  stageSnapshot(runtimeAudit.stages as Record<string, any>),
+      portfolioPreview: runtimeAudit.portfolioPreview.slice(0, 5),
+    },
     // Pool retornado por el motor (post-ranker/cap, pre-filtro estándar)
     poolReturnedByEngine: {
       total:         candidates.length,

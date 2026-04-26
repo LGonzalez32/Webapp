@@ -714,8 +714,8 @@ export default function UploadPage() {
         <div className="text-center py-16">
           {/* Check icon */}
           <div
-            className="w-16 h-16 mx-auto mb-5 rounded-2xl bg-emerald-500 flex items-center justify-center text-white"
-            style={{ animation: 'fadeInUp 0.3s ease forwards' }}
+            className="w-16 h-16 mx-auto mb-5 rounded-2xl flex items-center justify-center"
+            style={{ animation: 'fadeInUp 0.3s ease forwards', background: 'var(--primary)', color: 'var(--primary-fg)' }}
           >
             <Check className="w-8 h-8" strokeWidth={3} />
           </div>
@@ -758,7 +758,8 @@ export default function UploadPage() {
           >
             <button
               onClick={() => navigate('/dashboard')}
-              className="px-6 py-3 rounded-xl bg-emerald-500 text-white text-sm font-semibold hover:bg-emerald-600 transition-colors"
+              className="px-6 py-3 rounded-xl text-sm font-medium transition-all active:translate-y-px focus-visible:outline-2 focus-visible:outline-offset-2"
+              style={{ background: 'var(--primary)', color: 'var(--primary-fg)', boxShadow: 'var(--shadow-sm)', outlineColor: 'var(--sf-ring)' }}
             >
               Ir a Estado Comercial →
             </button>
@@ -802,7 +803,7 @@ export default function UploadPage() {
   }
 
   return (
-    <div className="min-h-screen px-4 sm:px-6 lg:px-8 pb-20 animate-in fade-in duration-700">
+    <div className="min-h-screen px-4 sm:px-6 lg:px-8 pb-20 animate-in fade-in duration-700 sf-atmos">
       <LoadingOverlay
         isVisible={loading !== null}
         title={loading?.title ?? ''}
@@ -813,7 +814,7 @@ export default function UploadPage() {
       <div className="mx-auto grid w-full max-w-6xl gap-6 lg:grid-cols-[14.5rem_minmax(0,1fr)] lg:items-start">
         <aside className="hidden lg:block sticky top-16 py-6">
           <div className="flex min-h-[33rem] flex-col rounded-2xl border border-[var(--sf-border)] bg-[var(--sf-card)] px-4 py-5 shadow-sm">
-            <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-[var(--sf-t4)]">Carga guiada</p>
+            <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-[var(--sf-t4)]" style={{ fontFamily: 'var(--sf-font-mono)' }}>Carga guiada</p>
             <StepIndicator
               steps={steps}
               currentStepIndex={currentStep}
@@ -828,8 +829,14 @@ export default function UploadPage() {
       {/* Header */}
       <div className="flex items-start justify-between gap-6">
         <div className="min-w-0">
-          <h1 className="text-3xl font-bold text-[var(--sf-t1)] tracking-tight">Cargar Datos</h1>
-          <p className="text-base text-[var(--sf-t3)] mt-1">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--sf-green-border)] bg-[var(--sf-green-bg)] px-2.5 py-1 text-[11px] text-[var(--sf-green)]" style={{ fontFamily: 'var(--sf-font-mono)', letterSpacing: '0.08em' }}>
+              <span className="w-1.5 h-1.5 rounded-full bg-[var(--sf-green)]" style={{ boxShadow: '0 0 0 4px var(--sf-green-bg)' }} />
+              PASO {currentStep + 1} · CARGA GUIADA
+            </span>
+          </div>
+          <h1 className="text-4xl font-semibold text-[var(--sf-t1)]" style={{ letterSpacing: '-0.02em', lineHeight: 1.1 }}>Cargar Datos</h1>
+          <p className="text-base text-[var(--sf-t3)] mt-2 max-w-[52ch]">
             Te mostramos qué vendedor creció, qué cliente se enfrió y qué producto hay que atender — en 2 minutos.
           </p>
         </div>
@@ -855,10 +862,10 @@ export default function UploadPage() {
           dashboard o reemplazar. Sin esto, Ω.1.0 reseteaba silenciosamente
           y atrapaba al usuario. */}
       {existingSales.length > 0 && currentStep === 0 && step.status === 'loaded' && !processingStep && (
-        <section className="flex items-center justify-between gap-4 rounded-2xl border border-emerald-300/50 bg-emerald-50/50 px-5 py-4">
+        <section className="animate-sf-banner flex items-center justify-between gap-4 rounded-xl border border-[var(--sf-green-border)] bg-[var(--sf-green-bg)] px-5 py-4">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-9 h-9 rounded-xl bg-white border border-emerald-300/50 flex items-center justify-center shrink-0">
-              <Check className="w-4 h-4 text-emerald-600" />
+            <div className="w-9 h-9 rounded-[9px] bg-[var(--sf-elevated)] border border-[var(--sf-green-border)] flex items-center justify-center shrink-0">
+              <Check className="w-4 h-4" style={{ color: 'var(--sf-green)' }} />
             </div>
             <div className="min-w-0">
               <p className="text-sm font-semibold text-[var(--sf-t1)]">Ya tenés datos cargados</p>
@@ -881,7 +888,8 @@ export default function UploadPage() {
             <button
               type="button"
               onClick={() => navigate('/dashboard')}
-              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 transition-colors"
+              className="rounded-lg px-4 py-2 text-sm font-medium transition-all active:translate-y-px"
+              style={{ background: 'var(--primary)', color: 'var(--primary-fg)', boxShadow: 'var(--shadow-sm)' }}
             >
               Ir a Estado Comercial →
             </button>
@@ -893,20 +901,21 @@ export default function UploadPage() {
           Antes mostraba con dataSource !== 'demo', lo que lo dejaba visible
           después de cargar un archivo real — ruido. */}
       {step.id === 'ventas' && dataSource === 'none' && step.status === 'pending' && !step.file && (
-        <section className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--sf-green-border)] bg-[var(--sf-green-bg)] px-5 py-4">
+        <section className="animate-sf-banner flex items-center justify-between gap-4 rounded-xl border border-[var(--sf-border)] bg-[var(--sf-elevated)] px-5 py-4" style={{ boxShadow: 'var(--sf-shadow-1)' }}>
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-9 h-9 rounded-xl bg-white/70 border border-[var(--sf-green-border)] flex items-center justify-center shrink-0">
-              <span className="text-[var(--sf-green)] text-sm">✣</span>
+            <div className="w-9 h-9 rounded-[9px] border border-[var(--sf-amber-border)] bg-[var(--sf-amber-bg)] flex items-center justify-center shrink-0 text-[var(--sf-amber)]">
+              <span className="text-sm">✦</span>
             </div>
             <div className="min-w-0">
               <p className="text-sm font-semibold text-[var(--sf-t1)]">¿Primera vez? Probá con datos demo</p>
-              <p className="text-xs text-[var(--sf-t3)] mt-0.5">50,012 registros · 3 vendedores · 6 meses de historial</p>
+              <p className="text-xs text-[var(--sf-t3)] mt-0.5">93,155 registros · 8 vendedores · 2+ años de historial</p>
             </div>
           </div>
           <button
             type="button"
             onClick={handleLoadDemo}
-            className="shrink-0 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 transition-colors"
+            className="shrink-0 rounded-lg px-4 py-2 text-sm font-medium transition-all active:translate-y-px focus-visible:outline-2 focus-visible:outline-offset-2"
+            style={{ background: 'var(--primary)', color: 'var(--primary-fg)', boxShadow: 'var(--shadow-sm)', outlineColor: 'var(--sf-ring)' }}
           >
             Cargar demo
           </button>
@@ -1466,23 +1475,23 @@ export default function UploadPage() {
       </div>
 
       {/* Navigation */}
-      <div className="grid grid-cols-[auto_1fr_auto] items-center gap-4 pt-1 border-t border-[var(--sf-border-subtle)]">
+      <div className="sticky bottom-4 mt-4">
+      <div className="grid grid-cols-[auto_1fr_auto] items-center gap-4 rounded-xl border border-[var(--sf-border)] bg-[var(--sf-elevated)] px-4 py-3" style={{ backdropFilter: 'blur(8px)', boxShadow: 'var(--sf-shadow-2)' }}>
         <button
           onClick={() => setCurrentStep((c) => c - 1)}
           disabled={currentStep === 0}
           className={cn(
-            'flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all',
+            'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all',
             currentStep === 0
               ? 'opacity-30 cursor-not-allowed text-[var(--sf-t4)]'
-              : 'border border-[var(--sf-border)] hover:bg-[var(--sf-hover)] text-[var(--sf-t2)]'
+              : 'text-[var(--sf-t3)] hover:text-[var(--sf-t1)] hover:bg-[var(--sf-overlay-light)]'
           )}
-          style={currentStep > 0 ? { background: 'var(--sf-card)' } : undefined}
         >
           <ChevronLeft className="w-4 h-4" />
           Anterior
         </button>
 
-        <p className="text-center text-xs text-[var(--sf-t4)] min-w-0">
+        <p className="text-center min-w-0" style={{ fontFamily: 'var(--sf-font-mono)', fontSize: '12px', color: 'var(--sf-t4)' }}>
           Paso {currentStep + 1} de {steps.length} · {wizardStatusCopy}
         </p>
 
@@ -1492,11 +1501,15 @@ export default function UploadPage() {
               onClick={handleAnalyze}
               disabled={!allRequiredDone()}
               className={cn(
-                'flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-semibold transition-all',
+                'flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-medium transition-all active:translate-y-px focus-visible:outline-2 focus-visible:outline-offset-2',
                 allRequiredDone()
-                  ? 'bg-emerald-500 hover:bg-emerald-600 text-white'
-                  : 'bg-[var(--sf-inset)] text-[var(--sf-t4)] cursor-not-allowed'
+                  ? ''
+                  : 'cursor-not-allowed opacity-50'
               )}
+              style={allRequiredDone()
+                ? { background: 'var(--primary)', color: 'var(--primary-fg)', boxShadow: 'var(--shadow-sm)', outlineColor: 'var(--sf-ring)' }
+                : { background: 'var(--sf-inset)', color: 'var(--sf-t4)' }
+              }
             >
               Analizar ventas
               <ChevronRight className="w-4 h-4" />
@@ -1516,12 +1529,15 @@ export default function UploadPage() {
                   : undefined
                 }
                 className={cn(
-                  'flex items-center gap-2 rounded-xl text-sm font-semibold transition-all duration-300',
+                  'flex items-center gap-2 rounded-lg text-sm font-medium transition-all duration-200 active:translate-y-px focus-visible:outline-2 focus-visible:outline-offset-2',
                   canGoNext()
-                    ? 'bg-emerald-500 hover:bg-emerald-600 text-white py-3 px-8'
-                    : 'text-[var(--sf-t4)] cursor-not-allowed px-6 py-2.5 border border-[var(--sf-border)]'
+                    ? 'py-2.5 px-6'
+                    : 'cursor-not-allowed opacity-50 px-5 py-2 border border-[var(--sf-border)]'
                 )}
-                style={!canGoNext() ? { background: 'var(--sf-card)' } : undefined}
+                style={canGoNext()
+                  ? { background: 'var(--primary)', color: 'var(--primary-fg)', boxShadow: 'var(--shadow-sm)', outlineColor: 'var(--sf-ring)' }
+                  : { background: 'var(--sf-card)' }
+                }
               >
                 {canGoNext()
                   ? `Siguiente: ${steps[currentStep + 1]?.label ?? 'Continuar'} \u2192`
@@ -1533,6 +1549,7 @@ export default function UploadPage() {
             </div>
           )}
         </div>
+      </div>
       </div>
         </main>
       </div>
