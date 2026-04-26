@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAppStore } from '../../store/appStore'
 import { Sun, Moon, DollarSign, Hash } from 'lucide-react'
+import { cn } from '../../lib/utils'
 
 const PAGE_TITLES: Record<string, { title: string; sub: string }> = {
   '/cargar':        { title: 'Cargar Datos',        sub: 'Paso 1 · Datos de ventas' },
@@ -54,7 +55,7 @@ export default function TopBar() {
     <header className="sf-topbar h-14 border-b border-zinc-800 bg-zinc-950/70 backdrop-blur-md flex items-center justify-between pl-16 pr-6 md:px-6 sticky top-0 z-30">
       <div className="flex items-center gap-2">
         <div>
-          <h1 className="text-sm font-bold text-zinc-100 leading-tight">{page.title}</h1>
+          <p className="text-sm font-bold text-zinc-100 leading-tight">{page.title}</p>
           <p className="text-[11px]" style={{ color: 'var(--sf-t5)' }}>{page.sub}</p>
         </div>
       </div>
@@ -133,8 +134,13 @@ export default function TopBar() {
                 navigate(chatPath, { state: targetState })
               }
             }}
-            className="sf-no-print bg-[var(--sf-green)] hover:opacity-90 font-semibold text-xs px-3 py-1.5 rounded-lg transition-opacity"
-            style={{ color: tema === 'dark' ? '#0A1220' : '#fff' }}
+            className={cn(
+              'sf-no-print font-semibold text-xs px-3 py-1.5 rounded-lg transition-all',
+              location.pathname === '/cargar'
+                ? 'border border-[var(--sf-border-strong)] text-[var(--sf-t2)] hover:bg-[var(--sf-hover)]'
+                : 'bg-[var(--sf-green)] hover:opacity-90'
+            )}
+            style={location.pathname !== '/cargar' ? { color: tema === 'dark' ? '#0A1220' : '#fff' } : undefined}
           >
             <span className="hidden md:inline">✦ ¿Qué hago hoy?</span>
             <span className="md:hidden">✦ Hoy</span>

@@ -829,13 +829,11 @@ export default function UploadPage() {
       {/* Header */}
       <div className="flex items-start justify-between gap-6">
         <div className="min-w-0">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--sf-green-border)] bg-[var(--sf-green-bg)] px-2.5 py-1 text-[11px] text-[var(--sf-green)]" style={{ fontFamily: 'var(--sf-font-mono)', letterSpacing: '0.08em' }}>
-              <span className="w-1.5 h-1.5 rounded-full bg-[var(--sf-green)]" style={{ boxShadow: '0 0 0 4px var(--sf-green-bg)' }} />
-              PASO {currentStep + 1} · CARGA GUIADA
-            </span>
+          <div className="sf-kicker">
+            <span className="sf-kicker__dot" />
+            PASO {currentStep + 1} · CARGA GUIADA
           </div>
-          <h1 className="text-4xl font-semibold text-[var(--sf-t1)]" style={{ letterSpacing: '-0.02em', lineHeight: 1.1 }}>Cargar Datos</h1>
+          <h1 className="sf-page-title">Cargar Datos</h1>
           <p className="text-base text-[var(--sf-t3)] mt-2 max-w-[52ch]">
             Te mostramos qué vendedor creció, qué cliente se enfrió y qué producto hay que atender — en 2 minutos.
           </p>
@@ -901,15 +899,11 @@ export default function UploadPage() {
           Antes mostraba con dataSource !== 'demo', lo que lo dejaba visible
           después de cargar un archivo real — ruido. */}
       {step.id === 'ventas' && dataSource === 'none' && step.status === 'pending' && !step.file && (
-        <section className="animate-sf-banner flex items-center justify-between gap-4 rounded-xl border border-[var(--sf-border)] bg-[var(--sf-elevated)] px-5 py-4" style={{ boxShadow: 'var(--sf-shadow-1)' }}>
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-9 h-9 rounded-[9px] border border-[var(--sf-amber-border)] bg-[var(--sf-amber-bg)] flex items-center justify-center shrink-0 text-[var(--sf-amber)]">
-              <span className="text-sm">✦</span>
-            </div>
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-[var(--sf-t1)]">¿Primera vez? Probá con datos demo</p>
-              <p className="text-xs text-[var(--sf-t3)] mt-0.5">93,155 registros · 8 vendedores · 2+ años de historial</p>
-            </div>
+        <section className="sf-demo-banner animate-sf-banner">
+          <div className="sf-demo-banner__icon">✦</div>
+          <div className="sf-demo-banner__body">
+            <p className="sf-demo-banner__title">¿Primera vez? Probá con datos demo</p>
+            <p className="sf-demo-banner__meta">93,155 registros · 8 vendedores · 2+ años de historial</p>
           </div>
           <button
             type="button"
@@ -951,11 +945,6 @@ export default function UploadPage() {
             isProcessing={processingStep === currentStep}
             progressPercent={processingStep === currentStep ? parseProgress : 0}
             progressDetail={processingStep === currentStep ? parseDetail : ''}
-            // [G1] Plantilla cerca del dropzone. onLoadDemo NO se pasa porque
-            // el banner superior ya cubre demo de forma prominente — duplicar
-            // sería ruido. La sección detallada de abajo conserva su botón
-            // "Descargar plantilla" como referencia.
-            onDownloadTemplate={step.id === 'ventas' ? downloadTemplate : undefined}
           />
         </section>
 
@@ -1110,12 +1099,7 @@ export default function UploadPage() {
                     {item.chips.map((chip) => (
                       <span
                         key={chip}
-                        className={cn(
-                          'inline-flex items-center rounded-md border px-2.5 py-1 text-xs font-mono',
-                          item.tone === 'amber' ? 'border-amber-200 bg-amber-50 text-amber-700'
-                            : item.tone === 'sky' ? 'border-sky-200 bg-sky-50 text-sky-700'
-                            : 'border-slate-200 bg-slate-100 text-slate-700'
-                        )}
+                        className={cn('sf-field-pill', item.tone === 'amber' && 'sf-field-pill--required')}
                       >
                         {chip}
                       </span>

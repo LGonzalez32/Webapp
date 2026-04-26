@@ -37,15 +37,12 @@ export default function StepIndicator({ steps, currentStepIndex, onStepClick, or
                 disabled={!isClickable}
                 aria-current={isActive ? 'step' : undefined}
                 className={cn(
-                  'relative z-10 w-8 h-8 rounded-full flex items-center justify-center text-sm transition-all shrink-0',
-                  isLoaded && isPast
-                    ? 'bg-[var(--primary)] text-[var(--primary-fg)] cursor-pointer hover:bg-[var(--primary-hover)]'
-                    : isSkipped && isPast
-                    ? 'bg-[var(--surface-2)] text-[var(--t-4)] border-2 border-[var(--border)] cursor-pointer hover:bg-[var(--surface-3)]'
-                    : isActive
-                    ? 'bg-[var(--primary)] text-[var(--primary-fg)] font-semibold shadow-[var(--shadow-glow)]'
-                    : 'border-2 border-[var(--border)] text-[var(--t-4)] bg-[var(--surface)]',
-                  !isClickable && 'cursor-default'
+                  'relative z-10 sf-stepper-num shrink-0 transition-all',
+                  isLoaded && isPast ? 'sf-stepper-num--done'
+                    : isSkipped && isPast ? 'sf-stepper-num--skip'
+                    : isActive ? 'sf-stepper-num--current'
+                    : '',
+                  isClickable ? 'cursor-pointer' : 'cursor-default'
                 )}
                 title={isSkipped && isPast ? 'Paso omitido' : undefined}
               >
@@ -97,14 +94,12 @@ export default function StepIndicator({ steps, currentStepIndex, onStepClick, or
                 onClick={() => isClickable && onStepClick(idx)}
                 title={isSkipped && isPast ? 'Paso omitido' : undefined}
                 className={cn(
-                  'w-8 h-8 rounded-full flex items-center justify-center text-sm transition-all',
-                  isLoaded && isPast
-                    ? 'bg-[var(--primary)] text-[var(--primary-fg)] cursor-pointer hover:bg-[var(--primary-hover)]'
-                    : isSkipped && isPast
-                    ? 'bg-[var(--surface-2)] text-[var(--t-4)] border-2 border-[var(--border)] cursor-pointer hover:bg-[var(--surface-3)]'
-                    : isActive
-                    ? 'bg-[var(--primary)] text-[var(--primary-fg)] font-semibold shadow-[var(--shadow-glow)]'
-                    : 'border-2 border-[var(--sf-border)] text-[var(--sf-t4)]'
+                  'sf-stepper-num transition-all',
+                  isLoaded && isPast ? 'sf-stepper-num--done'
+                    : isSkipped && isPast ? 'sf-stepper-num--skip'
+                    : isActive ? 'sf-stepper-num--current'
+                    : '',
+                  isClickable ? 'cursor-pointer' : 'cursor-default'
                 )}
               >
                 {isLoaded && isPast

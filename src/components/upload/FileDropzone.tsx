@@ -1,5 +1,5 @@
 import { useState, useRef, DragEvent, ChangeEvent } from 'react';
-import { Upload, CheckCircle2, XCircle, SkipForward, Lock } from 'lucide-react';
+import { CheckCircle2, XCircle, SkipForward, Lock } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { UploadStep } from '../../types';
 
@@ -10,13 +10,9 @@ interface FileDropzoneProps {
   isProcessing?: boolean;
   progressPercent?: number;
   progressDetail?: string;
-  /** [Z.P1.10.a] Callback para cargar datos demo (antes vivía en banner superior). Solo se muestra en step ventas sin archivo. */
-  onLoadDemo?: () => void;
-  /** [Z.P1.10.c/K2] Callback para bajar la plantilla desde dentro del dropzone. */
-  onDownloadTemplate?: () => void;
 }
 
-export default function FileDropzone({ step, onFileSelect, onSkip, isProcessing, progressPercent = 0, progressDetail = '', onLoadDemo, onDownloadTemplate }: FileDropzoneProps) {
+export default function FileDropzone({ step, onFileSelect, onSkip, isProcessing, progressPercent = 0, progressDetail = '' }: FileDropzoneProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
 
@@ -76,19 +72,12 @@ export default function FileDropzone({ step, onFileSelect, onSkip, isProcessing,
         onDragLeave={() => setIsDragOver(false)}
         onDrop={handleDrop}
         className={cn(
-          'relative border-2 border-dashed rounded-2xl transition-all cursor-pointer group flex flex-col items-center justify-center',
-          isProcessing && 'cursor-not-allowed opacity-60',
-          // [Z.P1.10.c.fix-mini/C1] min-h-[280px] solo en estado vacío.
-          // En loaded/error el contenido es chico — forzar 280px de alto crea
-          // whitespace que parece overlap visual.
-          (isLoaded || isError) ? 'min-h-0' : 'min-h-[280px]',
-          isDragOver
-            ? 'border-[var(--primary)] bg-[var(--sf-green-bg)] p-8 scale-[1.005]'
-            : isLoaded
-            ? 'border-[var(--sf-green-border)] bg-[var(--sf-green-bg)] p-4'
-            : isError
-            ? 'border-[var(--danger)] border-opacity-40 bg-[var(--danger-soft)] p-4'
-            : 'border-[var(--border)] p-6 hover:border-[var(--primary)] hover:bg-[var(--primary-soft)]'
+          'sf-dropzone',
+          isProcessing && 'is-processing',
+          isDragOver && 'is-dragging',
+          isLoaded && 'is-loaded',
+          isError && 'is-error',
+          (isLoaded || isError) && 'is-compact'
         )}
       >
         <input
@@ -99,10 +88,14 @@ export default function FileDropzone({ step, onFileSelect, onSkip, isProcessing,
           onChange={handleChange}
         />
 
+        {!isLoaded && !isError && !isProcessing && !isDragOver && (
+          <div className="sf-dropzone__inner-grid" aria-hidden="true" />
+        )}
+
         {isDragOver ? (
           <>
-            <div className="pointer-events-none absolute inset-0 rounded-2xl border-2 border-[var(--primary)] animate-sf-pulse" style={{ borderRadius: 'inherit' }} />
-            <div className="text-center">
+            <div className="pointer-events-none absolute inset-0 animate-sf-pulse" style={{ borderRadius: 'inherit', border: '2px solid var(--primary)' }} />
+            <div className="relative z-10 text-center">
               <p className="text-base font-semibold" style={{ color: 'var(--primary)' }}>Soltá el archivo aquí</p>
             </div>
           </>
@@ -147,46 +140,21 @@ export default function FileDropzone({ step, onFileSelect, onSkip, isProcessing,
             </div>
           </div>
         ) : (
-          <div className="flex flex-col items-center text-center w-full">
-            <div className="sf-dropzone-icon mb-4 animate-sf-breathe">
+          <div className="sf-dropzone__content">
+            <div className="sf-dropzone__icon">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
                 <polyline points="17 8 12 3 7 8"/>
                 <line x1="12" y1="3" x2="12" y2="15"/>
               </svg>
             </div>
-            <p className="text-[22px] font-semibold leading-snug text-[var(--sf-t1)] mb-1" style={{ letterSpacing: '-0.01em' }}>Arrastrá tu archivo aquí</p>
-            <p className="text-sm text-[var(--sf-t3)]">o hacé clic para elegir desde tu computadora</p>
-            <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+            <p className="sf-dropzone__title">Arrastrá tu archivo aquí</p>
+            <p className="sf-dropzone__subtitle">o hacé clic para elegir desde tu computadora</p>
+            <ul className="sf-dropzone__formats">
               {['.xlsx', '.xls', '.csv', 'máx 50MB'].map((lbl) => (
-                <span key={lbl} className="inline-flex items-center px-2.5 py-1 rounded-full border border-[var(--sf-border)] bg-[var(--sf-overlay-light)] font-mono text-[11px] text-[var(--sf-t3)]">
-                  {lbl}
-                </span>
+                <li key={lbl}>{lbl}</li>
               ))}
-            </div>
-            {(onLoadDemo || onDownloadTemplate) && (
-              <div className="mt-6 pt-4 w-full flex flex-col gap-1.5 items-center" style={{ borderTop: '1px solid var(--border-soft)' }}>
-                {onLoadDemo && (
-                  <button
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); onLoadDemo(); }}
-                    title="Carga un dataset de ejemplo con 50.012 registros para que explorés la app sin subir tu archivo."
-                    className="text-xs transition-colors linkbtn"
-                  >
-                    ¿Primera vez? → Cargar demo
-                  </button>
-                )}
-                {onDownloadTemplate && (
-                  <button
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); onDownloadTemplate(); }}
-                    className="text-xs transition-colors" style={{ color: 'var(--t-4)' }}
-                  >
-                    ¿No sabés cómo armarlo? → Bajar plantilla
-                  </button>
-                )}
-              </div>
-            )}
+            </ul>
           </div>
         )}
       </div>
