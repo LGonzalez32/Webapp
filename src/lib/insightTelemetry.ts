@@ -57,6 +57,8 @@ export interface InsightCandidateTelemetryShape {
   root_problem_key?: string | null
   impacto_usd_normalizado?: number | null
   impacto_usd_source?: string
+  // Sprint 3: precomputed by ranker with full context; used by buildPortfolioPreview
+  _portfolioAudit?: InsightPortfolioAudit
 }
 
 export interface InsightRuntimeAuditReport {
@@ -134,11 +136,30 @@ export function buildPortfolioAudit(
   const economicImpact = Math.min(1, usd / ventaTotal)
   if (usd > 0) reasons.push('economic_impact')
 
+  // Sprint 3: graded strategic value per type — reflects decision urgency, not just
+  // "is non-monetary". Monetary types contribute 0 here; economicImpact carries them.
+  const STRATEGIC_NM_SCORE: Record<string, number> = {
+    change_point:      0.90, // structural regime shift → reallocate resources
+    meta_gap_temporal: 0.85, // direct management action, time-bound
+    cliente_dormido:   0.80, // recovery window is closing
+    migration:         0.80, // cannibalization → active portfolio decision
+    product_dead:      0.70, // catalog hygiene with inventory cost
+    steady_share:      0.65, // slow erosion → medium urgency
+    cross_delta:       0.60, // directional signal, needs triangulation
+    co_decline:        0.55, // cluster signal, less actionable alone
+    correlation:       0.45, // diagnostic, not directly actionable
+  }
   const source = candidate.impacto_usd_source ?? 'unavailable'
-  const nonMonetaryMetric = source === 'non_monetary' || source === 'unavailable'
-  const strategicTypes = new Set(['change_point', 'steady_share', 'correlation', 'meta_gap_temporal', 'cliente_dormido'])
-  const strategicNonMonetary = nonMonetaryMetric || strategicTypes.has(candidate.insightTypeId ?? '') ? 1 : 0
-  if (strategicNonMonetary > 0) reasons.push('strategic_signal')
+  const insightType = candidate.insightTypeId ?? ''
+  const typeScore = STRATEGIC_NM_SCORE[insightType]
+  // Non-monetary types not in the table also carry partial strategic value
+  const isNonMonetary = source === 'non_monetary' || source === 'unavailable'
+  const rawStrategic = typeScore ?? (isNonMonetary ? 0.35 : 0)
+  // Weight by confidence: low-score signals get reduced strategic weight
+  const strategicNonMonetary = rawStrategic > 0
+    ? rawStrategic * Math.min(1, (candidate.score ?? 0) * 2)
+    : 0
+  if (strategicNonMonetary >= 0.30) reasons.push('strategic_signal')
 
   const confidence = Math.max(0, Math.min(1, candidate.score ?? 0))
   if (confidence >= 0.75) reasons.push('high_confidence')
@@ -183,7 +204,9 @@ export function buildPortfolioPreview(
     .map((candidate, currentRank) => ({
       candidate,
       currentRank: currentRank + 1,
-      audit: buildPortfolioAudit(candidate),
+      // Prefer precomputed audit (set by ranker with full context); fall back to
+      // context-free computation only when the candidate hasn't been through the ranker.
+      audit: candidate._portfolioAudit ?? buildPortfolioAudit(candidate),
     }))
     .sort((a, b) => b.audit.portfolioScore - a.audit.portfolioScore)
 
@@ -194,7 +217,7 @@ export function buildPortfolioPreview(
 
   return candidates.slice(0, 12).map((candidate, idx) => {
     const id = candidateAuditId(candidate)
-    const audit = buildPortfolioAudit(candidate)
+    const audit = candidate._portfolioAudit ?? buildPortfolioAudit(candidate)
     return {
       id,
       currentRank: idx + 1,

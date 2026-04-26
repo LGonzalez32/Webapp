@@ -5183,6 +5183,8 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   })
 
   const _specialBuildersStartCount = allCandidates.length
+  // Sprint 2: per-builder breakdown surfaced in stages.special_builders.metadata.builders
+  const _builderStats: Record<string, { ms: number; input: number; output: number; discarded?: number }> = {}
   _beginStage('special_builders')
 
   for (const c of allCandidates) {
@@ -5200,6 +5202,8 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   // 3C. Candidatos cliente_dormido (Fase 5B.1) — emitidos desde clientesDormidos
   // del store cuando dias_sin_actividad >= umbral configurable. Compiten con los
   // demás candidatos por score; no hay cuota reservada. Pasan por V1–V16 y dedup.
+  {
+    const _t0 = performance.now(); const _in = allCandidates.length
   if (clientesDormidos && clientesDormidos.length > 0) {
     const dormidoCfg = getDiasDormidoUsuario()
     const umbralDias = dormidoCfg.valor
@@ -5268,11 +5272,14 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
       )
     }
   }
+  _builderStats['cliente_dormido'] = { ms: performance.now() - _t0, input: _in, output: allCandidates.length - _in }
+  }
 
   // 3D. [Z.7 T1 — A/B] Inventory special pass — stock_risk, stock_excess, migration, co_decline
   // Runs after the main loop so allCandidates already has the sales-based candidates.
   const _catInv = params.categoriasInventario ?? []
   if (_catInv.length > 0 || currentSales.length > 0) {
+    const _t0_inv = performance.now(); const _in_inv = allCandidates.length
     // Build YTD product aggregates (Jan 1 → currentPeriod) for umbralVenta + cross data
     const _ytdStart = new Date(year, 0, 1)
     const _ytdEnd   = new Date(year, month, new Date(year, month + 1, 0).getDate())
@@ -5373,8 +5380,13 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
         })
       }
     }
+    _builderStats['inventory_stock'] = { ms: performance.now() - _t0_inv, input: _in_inv, output: allCandidates.length - _in_inv }
 
     // ── migration + co_decline ────────────────────────────────────────────────
+    // Default to 0 so keys are always present even when the conditional below is skipped
+    _builderStats['migration']    = { ms: 0, input: 0, output: 0 }
+    _builderStats['co_decline']   = { ms: 0, input: 0, output: 0 }
+    _builderStats['product_dead'] = { ms: 0, input: 0, output: 0 }
     // Build DataPoints for product-level cross data
     if (_prodYTD.size >= 2) {
       // product-client map: producto → set de clientes que lo compraron en YTD
@@ -5411,6 +5423,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
       const _coDeclType = INSIGHT_TYPE_REGISTRY.find(t => t.id === 'co_decline')
 
       if (_migType) {
+        const _t0_mig = performance.now(); const _in_mig = allCandidates.length
         const _res = _migType.detect(_migPoints)
         if (_res?.found && _res.score >= 0.1) {
           const _tmpl = NARRATIVE_TEMPLATES['migration']
@@ -5450,9 +5463,11 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
             } catch { /* skip */ }
           }
         }
+        _builderStats['migration'] = { ms: performance.now() - _t0_mig, input: _in_mig, output: allCandidates.length - _in_mig }
       }
 
       if (_coDeclType) {
+        const _t0_codecl = performance.now(); const _in_codecl = allCandidates.length
         const _res = _coDeclType.detect(_migPoints)
         if (_res?.found && _res.score >= 0.1) {
           const _tmpl = NARRATIVE_TEMPLATES['co_decline']
@@ -5477,6 +5492,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
             } catch { /* skip */ }
           }
         }
+        _builderStats['co_decline'] = { ms: performance.now() - _t0_codecl, input: _in_codecl, output: allCandidates.length - _in_codecl }
       }
 
       // [PR-L2b.1] product_dead — producto con venta actual 0 y venta histórica > 0.
@@ -5484,6 +5500,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
       // Acepta ctx.invMap opcional para enriquecer con stock actual.
       const _prodDeadType = INSIGHT_TYPE_REGISTRY.find(t => t.id === 'product_dead')
       if (_prodDeadType && _migPoints.length >= 1) {
+        const _t0_dead = performance.now(); const _in_dead = allCandidates.length
         const _invStockMap = new Map<string, number>()
         for (const inv of _catInv) _invStockMap.set(inv.producto, inv.unidades_actuales)
         const _res = _prodDeadType.detect(_migPoints, { invMap: _invStockMap })
@@ -5541,6 +5558,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
         } else if (import.meta.env.DEV) {
           console.debug('[PR-L2b.1] product_dead: 0 detectados (sin productos con venta actual=0 y prevNet>0)')
         }
+        _builderStats['product_dead'] = { ms: performance.now() - _t0_dead, input: _in_dead, output: allCandidates.length - _in_dead }
       }
 
       // [PR-L2b.2] Enriquecimiento prospeccion_cross_sell para candidatos
@@ -5884,12 +5902,14 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   // Candidatos non_monetary (ver NON_MONETARY_METRIC_IDS). No suman a totalImpact.
   // Compiten con el resto en dedup + ranker. Si no detecta outliers, retorna [].
   try {
+    const _t0_outlier = performance.now(); const _in_outlier = allCandidates.length
     const _pm7dOut = buildTransactionOutlierBlocks({
       currentSales,
       selectedPeriod: { year, month },
     })
     _pushWithEnrichment(_pm7dOut.candidates)
     _status.detectors.outlier_builder = { result: 'ok', candidatesEmitted: _pm7dOut.candidates.length }
+    _builderStats['outlier_builder'] = { ms: performance.now() - _t0_outlier, input: _in_outlier, output: allCandidates.length - _in_outlier }
     if (import.meta.env.DEV) {
       // [PR-M7f] log separado para la extensión multi-métrica.
       if (_pm7dOut.telemetry?.m7f) {
@@ -5899,39 +5919,49 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
     }
   } catch (e) {
     _status.detectors.outlier_builder = { result: 'failed', candidatesEmitted: 0, error: String(e) }
+    _builderStats['outlier_builder'] = { ms: 0, input: 0, output: 0 }
     if (import.meta.env.DEV) console.warn('[PR-M7d] builder failed (degradación silenciosa):', e)
   }
 
   // [PR-M8a] Change Point Detection — quiebres de régimen en series mensuales.
   // Usa TODO el historial (`sales`, no `currentSales`). Aditivo; degrada a [].
   try {
+    const _t0_cp = performance.now(); const _in_cp = allCandidates.length
     const _pm8aOut = buildChangePointBlocks(sales)
     _pushWithEnrichment(_pm8aOut.candidates)
     _status.detectors.change_point = { result: 'ok', candidatesEmitted: _pm8aOut.candidates.length }
+    _builderStats['change_point'] = { ms: performance.now() - _t0_cp, input: _in_cp, output: allCandidates.length - _in_cp }
   } catch (e) {
     _status.detectors.change_point = { result: 'failed', candidatesEmitted: 0, error: String(e) }
+    _builderStats['change_point'] = { ms: 0, input: 0, output: 0 }
     if (import.meta.env.DEV) console.warn('[PR-M8a] builder failed (degradación silenciosa):', e)
   }
 
   // [PR-M9] Steady Share Detection — cambios sostenidos en participación
   // relativa al grupo (complementaria a change_point: relativo vs absoluto).
   try {
+    const _t0_ss = performance.now(); const _in_ss = allCandidates.length
     const _pm9Out = buildSteadyShareBlocks(sales)
     _pushWithEnrichment(_pm9Out.candidates)
     _status.detectors.steady_share = { result: 'ok', candidatesEmitted: _pm9Out.candidates.length }
+    _builderStats['steady_share'] = { ms: performance.now() - _t0_ss, input: _in_ss, output: allCandidates.length - _in_ss }
   } catch (e) {
     _status.detectors.steady_share = { result: 'failed', candidatesEmitted: 0, error: String(e) }
+    _builderStats['steady_share'] = { ms: 0, input: 0, output: 0 }
     if (import.meta.env.DEV) console.warn('[PR-M9] builder failed (degradación silenciosa):', e)
   }
 
   // [PR-M10] Correlation Detection — pares de métricas con movimiento inverso
   // sostenido para una misma entidad. Pearson r ≤ -0.65 durante ≥6 meses.
   try {
+    const _t0_corr = performance.now(); const _in_corr = allCandidates.length
     const _pm10Out = buildCorrelationBlocks(sales)
     _pushWithEnrichment(_pm10Out.candidates)
     _status.detectors.correlation = { result: 'ok', candidatesEmitted: _pm10Out.candidates.length }
+    _builderStats['correlation'] = { ms: performance.now() - _t0_corr, input: _in_corr, output: allCandidates.length - _in_corr }
   } catch (e) {
     _status.detectors.correlation = { result: 'failed', candidatesEmitted: 0, error: String(e) }
+    _builderStats['correlation'] = { ms: 0, input: 0, output: 0 }
     if (import.meta.env.DEV) console.warn('[PR-M10] builder failed (degradación silenciosa):', e)
   }
 
@@ -5939,12 +5969,15 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   // Detecta declive consecutivo (≥3 meses ↓) o brecha estructural (≥4 meses
   // ≥15pp por debajo del promedio del equipo). impactoUSD=0.
   try {
+    const _t0_mgt = performance.now(); const _in_mgt = allCandidates.length
     const _pm11Out = buildMetaGapTemporalBlocks({ sales, metas, tipoMetaActivo, selectedPeriod: { year, month } })
     _pushWithEnrichment(_pm11Out.candidates)
     _status.detectors.meta_gap_temporal = { result: 'ok', candidatesEmitted: _pm11Out.candidates.length }
+    _builderStats['meta_gap_temporal'] = { ms: performance.now() - _t0_mgt, input: _in_mgt, output: allCandidates.length - _in_mgt }
     console.log('[PR-M11] meta_gap_temporal_builder', _pm11Out.telemetry)
   } catch (e) {
     _status.detectors.meta_gap_temporal = { result: 'failed', candidatesEmitted: 0, error: String(e) }
+    _builderStats['meta_gap_temporal'] = { ms: 0, input: 0, output: 0 }
     if (import.meta.env.DEV) console.warn('[PR-M11] builder failed (degradación silenciosa):', e)
   }
 
@@ -5953,6 +5986,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   // el delta YoY de la combinación es material. Capa ADITIVA: no toca el cartesiano
   // existente, compite en pool regular del ranker. Sin protección en ALWAYS_PROTECTED_CAPS.
   try {
+    const _t0_cdelta = performance.now(); const _in_cdelta = allCandidates.length
     const _Z133_valueOf = (r: SaleRecord): number => {
       const rAny = r as unknown as Record<string, unknown>
       const v = (rAny.venta_neta ?? rAny.venta_total ?? rAny.venta ?? rAny.monto ?? 0) as number
@@ -6109,6 +6143,12 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
       }
     }
 
+    _builderStats['cross_delta'] = {
+      ms: performance.now() - _t0_cdelta,
+      input: _in_cdelta,
+      output: allCandidates.length - _in_cdelta,
+      discarded: _Z133_descartadosMaterialidad,
+    }
     if (import.meta.env.DEV) {
       console.debug('[Z.13.3] cross_delta_detector', {
         ventaTotalNegocio:         Math.round(_Z133_ventaTotalSafe),
@@ -6122,6 +6162,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
       })
     }
   } catch (e) {
+    _builderStats['cross_delta'] = { ms: 0, input: 0, output: 0, discarded: 0 }
     if (import.meta.env.DEV) console.warn('[Z.13.3] cross_delta_detector fallback (degradación silenciosa):', e)
   }
 
@@ -6131,6 +6172,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
     metadata: {
       includesCrossEngine: true,
       detectorStatus: _status.detectors,
+      builders: _builderStats,
     },
   })
 

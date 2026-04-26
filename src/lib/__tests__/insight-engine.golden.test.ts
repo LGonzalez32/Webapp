@@ -91,13 +91,27 @@ const counts = <T extends string>(arr: T[]): Record<T, number> => {
 const stageSnapshot = (stages: Record<string, any> | undefined) => Object.fromEntries(
   Object.entries(stages ?? {})
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([id, stage]) => [id, {
-      status: stage.status,
-      inputCount: stage.inputCount ?? null,
-      outputCount: stage.outputCount ?? null,
-      discardedCount: stage.discardedCount ?? null,
-      reason: stage.reason ?? null,
-    }]),
+    .map(([id, stage]) => {
+      const entry: Record<string, any> = {
+        status: stage.status,
+        inputCount: stage.inputCount ?? null,
+        outputCount: stage.outputCount ?? null,
+        discardedCount: stage.discardedCount ?? null,
+        reason: stage.reason ?? null,
+      }
+      // Sprint 2: snapshot per-builder output counts so regressions are caught
+      const builders = stage.metadata?.builders as Record<string, { output: number; discarded?: number }> | undefined
+      if (builders) {
+        entry.builders = Object.fromEntries(
+          Object.entries(builders)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([name, s]) => [name, s.discarded !== undefined
+              ? { output: s.output, discarded: s.discarded }
+              : { output: s.output }]),
+        )
+      }
+      return [id, entry]
+    }),
 )
 
 /**
@@ -269,6 +283,110 @@ function runGoldenCase(tipoMetaActivo: 'usd' | 'uds') {
   return { summary, rows }
 }
 
+/**
+ * Sprint 0 gap — baselines con datasets parciales.
+ *
+ * Cubre los caminos más comunes en el mundo real:
+ * - 'sales-only': solo ventas (caso más desnudo)
+ * - 'sales-metas': ventas + metas, sin inventario (SMB típico)
+ *
+ * Propósito: blindar el motor contra regresiones cuando faltan tablas opcionales.
+ * Confirma que los builders correctos quedan silenciosos vs. activos según el
+ * shape del dataset.
+ */
+type BaselineMode = 'sales-only' | 'sales-metas'
+function runBaselineCase(mode: BaselineMode) {
+  const demo = getDemoData()
+  const sales = demo.sales
+  const metas = mode === 'sales-metas' ? demo.metas : []
+  const inventory: never[] = []
+  const idx = buildSaleIndex(sales)
+
+  const fr = idx.fechaReferencia
+  const selectedPeriod = { year: fr.getFullYear(), month: fr.getMonth() }
+
+  const commercial = computeCommercialAnalysis(
+    sales, metas, inventory, selectedPeriod, TEST_CONFIG, idx, 'usd',
+  )
+  const categoriasInventario = computeCategoriasInventario(
+    sales, inventory, selectedPeriod, TEST_CONFIG, idx,
+  )
+
+  const diasTotales = new Date(selectedPeriod.year, selectedPeriod.month + 1, 0).getDate()
+  const diasTranscurridos =
+    fr.getFullYear() === selectedPeriod.year && fr.getMonth() === selectedPeriod.month
+      ? fr.getDate()
+      : diasTotales
+
+  const categoriaAnalysis = analyzeCategoria(metas, selectedPeriod, idx, diasTranscurridos, diasTotales)
+  const canalAnalysis     = analyzeCanal(selectedPeriod, idx, diasTranscurridos, diasTotales)
+  const supervisorAnalysis = analyzeSupervisor(commercial.vendorAnalysis, metas, selectedPeriod, idx)
+
+  const candidates: InsightCandidate[] = runInsightEngine({
+    sales,
+    metas,
+    vendorAnalysis:      commercial.vendorAnalysis,
+    categoriaAnalysis,
+    canalAnalysis,
+    supervisorAnalysis,
+    concentracionRiesgo: commercial.concentracionRiesgo,
+    clientesDormidos:    commercial.clientesDormidos,
+    categoriasInventario,
+    selectedPeriod,
+    selectedMonths: null,
+    tipoMetaActivo: 'usd',
+  })
+
+  const engineStatus = getLastInsightEngineStatus()
+  const agregados = getAgregadosParaFiltro(sales, selectedPeriod)
+
+  const filtered = filtrarConEstandar(candidates, {
+    diaDelMes:        diasTranscurridos,
+    diasEnMes:        diasTotales,
+    sales,
+    metas,
+    inventory:        categoriasInventario,
+    clientesDormidos: commercial.clientesDormidos,
+    ventaTotalNegocio: agregados?.ventaTotalNegocio ?? 0,
+    tipoMetaActivo:   'usd',
+    selectedPeriod,
+    agregados:        agregados ?? undefined,
+  })
+
+  // Capture builder output counts from the special_builders stage
+  const specialBuilders = engineStatus?.pipeline?.special_builders as
+    { metadata?: { builders?: Record<string, { output: number }> } } | undefined
+  const builderOutputs = specialBuilders?.metadata?.builders
+    ? Object.fromEntries(
+        Object.entries(specialBuilders.metadata.builders)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([k, v]) => [k, v.output]),
+      )
+    : {}
+
+  return {
+    datasetShape: {
+      sales:     sales.length,
+      metas:     metas.length,
+      inventory: inventory.length,
+    },
+    engineStatus: engineStatus ? {
+      candidatesTotal:    engineStatus.candidatesTotal,
+      candidatesSelected: engineStatus.candidatesSelected,
+      origins:            engineStatus.originBreakdown,
+    } : null,
+    specialBuilderOutputs: builderOutputs,
+    poolReturnedByEngine: {
+      total:         candidates.length,
+      byInsightType: counts(candidates.map((c) => c.insightTypeId)),
+    },
+    poolAfterFilter: {
+      total:    filtered.length,
+      passRate: round(filtered.length / Math.max(1, candidates.length), 3),
+    },
+  }
+}
+
 // ─── Cobertura USD (baseline histórico — preserva snapshot byte-idéntico) ────
 describe('insight-engine golden master (demo dataset, USD)', () => {
   beforeAll(() => {
@@ -298,5 +416,59 @@ describe('insight-engine golden master (demo dataset, UDS)', () => {
 
   it('produces stable structural output for demo dataset', () => {
     expect(runGoldenCase('uds')).toMatchSnapshot()
+  })
+})
+
+// ─── Sprint 0 gap: baseline ventas-only (sin metas ni inventario) ─────────────
+describe('insight-engine baseline (sales only, no metas no inventory)', () => {
+  beforeAll(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: false })
+    vi.setSystemTime(FROZEN_NOW)
+  })
+
+  afterAll(() => {
+    vi.useRealTimers()
+  })
+
+  it('runs cleanly and inventory/meta builders emit 0 candidates', () => {
+    const result = runBaselineCase('sales-only')
+
+    // Builders that truly gate on metas/inventory input must be silent
+    expect(result.specialBuilderOutputs['meta_gap_temporal']).toBe(0) // needs metas
+    expect(result.specialBuilderOutputs['inventory_stock']).toBe(0)   // needs categoriasInventario
+
+    // Sales-only builders must still produce candidates (not crash to 0)
+    // migration/co_decline/product_dead run on _prodYTD which is sales-derived
+    expect((result.specialBuilderOutputs['change_point'] ?? 0)).toBeGreaterThan(0)
+
+    // Structural snapshot — catches any regression in pool shape or pass rate
+    expect(result).toMatchSnapshot()
+  })
+})
+
+// ─── Sprint 0 gap: baseline ventas + metas (sin inventario) ───────────────────
+describe('insight-engine baseline (sales + metas, no inventory)', () => {
+  beforeAll(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: false })
+    vi.setSystemTime(FROZEN_NOW)
+  })
+
+  afterAll(() => {
+    vi.useRealTimers()
+  })
+
+  it('activates meta_gap_temporal but keeps inventory_stock silent', () => {
+    const result = runBaselineCase('sales-metas')
+
+    // Inventory builder must still be silent
+    expect(result.specialBuilderOutputs['inventory_stock']).toBe(0)
+
+    // meta_gap_temporal must now produce candidates (metas available)
+    expect((result.specialBuilderOutputs['meta_gap_temporal'] ?? 0)).toBeGreaterThan(0)
+
+    // Sales-only builders unchanged from sales-only baseline
+    expect((result.specialBuilderOutputs['change_point'] ?? 0)).toBeGreaterThan(0)
+
+    expect(result).toMatchSnapshot()
   })
 })

@@ -1,5 +1,108 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`insight-engine baseline (sales + metas, no inventory) > activates meta_gap_temporal but keeps inventory_stock silent 1`] = `
+{
+  "datasetShape": {
+    "inventory": 0,
+    "metas": 900,
+    "sales": 94838,
+  },
+  "engineStatus": {
+    "candidatesSelected": 11,
+    "candidatesTotal": 207,
+    "origins": {
+      "cross_engine": 1,
+      "executive_compression": 0,
+      "legacy_render_adapter": 0,
+      "motor1_legacy": 0,
+      "motor2_registry_loop": 113,
+      "special_builder": 93,
+      "unknown": 0,
+    },
+  },
+  "poolAfterFilter": {
+    "passRate": 0.545,
+    "total": 6,
+  },
+  "poolReturnedByEngine": {
+    "byInsightType": {
+      "change": 2,
+      "contribution": 2,
+      "meta_gap_temporal": 1,
+      "migration": 2,
+      "outlier": 1,
+      "product_dead": 1,
+      "trend": 2,
+    },
+    "total": 11,
+  },
+  "specialBuilderOutputs": {
+    "change_point": 68,
+    "cliente_dormido": 2,
+    "co_decline": 1,
+    "correlation": 0,
+    "cross_delta": 9,
+    "inventory_stock": 0,
+    "meta_gap_temporal": 3,
+    "migration": 1,
+    "outlier_builder": 4,
+    "product_dead": 1,
+    "steady_share": 4,
+  },
+}
+`;
+
+exports[`insight-engine baseline (sales only, no metas no inventory) > runs cleanly and inventory/meta builders emit 0 candidates 1`] = `
+{
+  "datasetShape": {
+    "inventory": 0,
+    "metas": 0,
+    "sales": 94838,
+  },
+  "engineStatus": {
+    "candidatesSelected": 10,
+    "candidatesTotal": 201,
+    "origins": {
+      "cross_engine": 1,
+      "executive_compression": 0,
+      "legacy_render_adapter": 0,
+      "motor1_legacy": 0,
+      "motor2_registry_loop": 110,
+      "special_builder": 90,
+      "unknown": 0,
+    },
+  },
+  "poolAfterFilter": {
+    "passRate": 0.5,
+    "total": 5,
+  },
+  "poolReturnedByEngine": {
+    "byInsightType": {
+      "change": 2,
+      "contribution": 2,
+      "migration": 2,
+      "outlier": 1,
+      "product_dead": 1,
+      "trend": 2,
+    },
+    "total": 10,
+  },
+  "specialBuilderOutputs": {
+    "change_point": 68,
+    "cliente_dormido": 2,
+    "co_decline": 1,
+    "correlation": 0,
+    "cross_delta": 9,
+    "inventory_stock": 0,
+    "meta_gap_temporal": 0,
+    "migration": 1,
+    "outlier_builder": 4,
+    "product_dead": 1,
+    "steady_share": 4,
+  },
+}
+`;
+
 exports[`insight-engine golden master (demo dataset, UDS) > produces stable structural output for demo dataset 1`] = `
 {
   "rows": [
@@ -147,13 +250,13 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
       "sales": 94838,
     },
     "engineStatus": {
-      "candidatesSelected": 11,
-      "candidatesTotal": 197,
+      "candidatesSelected": 12,
+      "candidatesTotal": 202,
       "detectorsEmitted": {
         "change_point": 68,
         "correlation": 0,
         "meta_gap_temporal": 3,
-        "motor1": 109,
+        "motor1": 114,
         "outlier_builder": 4,
         "steady_share": 4,
         "z9_hydration": 15,
@@ -163,7 +266,7 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
         "executive_compression": 0,
         "legacy_render_adapter": 0,
         "motor1_legacy": 0,
-        "motor2_registry_loop": 102,
+        "motor2_registry_loop": 107,
         "special_builder": 94,
         "unknown": 0,
       },
@@ -173,11 +276,10 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
             "currentRank": 1,
             "id": "special_builder:meta_gap_temporal:vendedor:cumplimiento_meta:Carlos Ramírez",
             "portfolioRank": 1,
-            "portfolioScore": 0.907,
+            "portfolioScore": 0.538,
             "reasons": [
               "economic_impact",
               "strategic_signal",
-              "diversity_preserved",
               "actionable",
               "causal_context",
             ],
@@ -185,10 +287,11 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
           {
             "currentRank": 2,
             "id": "special_builder:product_dead:producto:venta:Cacahuates 100g",
-            "portfolioRank": 8,
-            "portfolioScore": 0.713,
+            "portfolioRank": 2,
+            "portfolioScore": 0.501,
             "reasons": [
               "economic_impact",
+              "strategic_signal",
               "diversity_preserved",
               "actionable",
               "causal_context",
@@ -197,12 +300,11 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
           {
             "currentRank": 3,
             "id": "special_builder:meta_gap_temporal:vendedor:cumplimiento_meta:Miguel Ángel Díaz",
-            "portfolioRank": 2,
-            "portfolioScore": 0.836,
+            "portfolioRank": 3,
+            "portfolioScore": 0.385,
             "reasons": [
               "economic_impact",
               "strategic_signal",
-              "diversity_preserved",
               "actionable",
               "causal_context",
             ],
@@ -210,11 +312,10 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
           {
             "currentRank": 4,
             "id": "special_builder:outlier:cliente:frecuencia_compra:Mercado Central",
-            "portfolioRank": 3,
-            "portfolioScore": 0.732,
+            "portfolioRank": 7,
+            "portfolioScore": 0.318,
             "reasons": [
               "economic_impact",
-              "diversity_preserved",
               "actionable",
               "causal_context",
             ],
@@ -222,8 +323,8 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
           {
             "currentRank": 5,
             "id": "special_builder:stock_risk:producto:inventario:Té Helado 500ml",
-            "portfolioRank": 9,
-            "portfolioScore": 0.677,
+            "portfolioRank": 5,
+            "portfolioScore": 0.379,
             "reasons": [
               "economic_impact",
               "diversity_preserved",
@@ -234,14 +335,14 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
         ],
         "protectedCount": 9,
         "regularCap": 6,
-        "regularCount": 132,
+        "regularCount": 137,
         "regularSelected": 6,
         "selectedByOrigin": {
           "cross_engine": 0,
           "executive_compression": 0,
           "legacy_render_adapter": 0,
           "motor1_legacy": 0,
-          "motor2_registry_loop": 6,
+          "motor2_registry_loop": 7,
           "special_builder": 5,
           "unknown": 0,
         },
@@ -256,8 +357,8 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
         },
         "dedup": {
           "discardedCount": 50,
-          "inputCount": 197,
-          "outputCount": 147,
+          "inputCount": 202,
+          "outputCount": 152,
           "reason": null,
           "status": "ok",
         },
@@ -271,18 +372,54 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
         "motor2_registry_loop": {
           "discardedCount": null,
           "inputCount": 2767,
-          "outputCount": 102,
+          "outputCount": 107,
           "reason": null,
           "status": "ok",
         },
         "ranker": {
-          "discardedCount": 132,
-          "inputCount": 147,
+          "discardedCount": 137,
+          "inputCount": 152,
           "outputCount": 15,
           "reason": null,
           "status": "ok",
         },
         "special_builders": {
+          "builders": {
+            "change_point": {
+              "output": 68,
+            },
+            "cliente_dormido": {
+              "output": 2,
+            },
+            "co_decline": {
+              "output": 1,
+            },
+            "correlation": {
+              "output": 0,
+            },
+            "cross_delta": {
+              "discarded": 37,
+              "output": 9,
+            },
+            "inventory_stock": {
+              "output": 2,
+            },
+            "meta_gap_temporal": {
+              "output": 3,
+            },
+            "migration": {
+              "output": 0,
+            },
+            "outlier_builder": {
+              "output": 4,
+            },
+            "product_dead": {
+              "output": 1,
+            },
+            "steady_share": {
+              "output": 4,
+            },
+          },
           "discardedCount": null,
           "inputCount": 2767,
           "outputCount": 95,
@@ -310,13 +447,13 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
         "BAJA": 4,
         "MEDIA": 2,
       },
-      "passRate": 0.727,
+      "passRate": 0.667,
       "total": 8,
     },
     "poolReturnedByEngine": {
       "byDimension": {
         "categoria": 1,
-        "cliente": 5,
+        "cliente": 6,
         "producto": 2,
         "vendedor": 3,
       },
@@ -328,14 +465,14 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
         "outlier": 1,
         "product_dead": 1,
         "stock_risk": 1,
-        "trend": 1,
+        "trend": 2,
       },
       "bySeverity": {
-        "ALTA": 4,
+        "ALTA": 5,
         "BAJA": 4,
         "MEDIA": 3,
       },
-      "total": 11,
+      "total": 12,
     },
     "runtimeAudit": {
       "origins": {
@@ -343,7 +480,7 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
         "executive_compression": 0,
         "legacy_render_adapter": 0,
         "motor1_legacy": 0,
-        "motor2_registry_loop": 6,
+        "motor2_registry_loop": 7,
         "special_builder": 5,
         "unknown": 0,
       },
@@ -352,11 +489,10 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
           "currentRank": 1,
           "id": "special_builder:meta_gap_temporal:vendedor:cumplimiento_meta:Carlos Ramírez",
           "portfolioRank": 1,
-          "portfolioScore": 0.907,
+          "portfolioScore": 0.538,
           "reasons": [
             "economic_impact",
             "strategic_signal",
-            "diversity_preserved",
             "actionable",
             "causal_context",
           ],
@@ -364,10 +500,11 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
         {
           "currentRank": 2,
           "id": "special_builder:product_dead:producto:venta:Cacahuates 100g",
-          "portfolioRank": 8,
-          "portfolioScore": 0.713,
+          "portfolioRank": 2,
+          "portfolioScore": 0.501,
           "reasons": [
             "economic_impact",
+            "strategic_signal",
             "diversity_preserved",
             "actionable",
             "causal_context",
@@ -376,12 +513,11 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
         {
           "currentRank": 3,
           "id": "special_builder:meta_gap_temporal:vendedor:cumplimiento_meta:Miguel Ángel Díaz",
-          "portfolioRank": 2,
-          "portfolioScore": 0.836,
+          "portfolioRank": 3,
+          "portfolioScore": 0.385,
           "reasons": [
             "economic_impact",
             "strategic_signal",
-            "diversity_preserved",
             "actionable",
             "causal_context",
           ],
@@ -389,11 +525,10 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
         {
           "currentRank": 4,
           "id": "special_builder:outlier:cliente:frecuencia_compra:Mercado Central",
-          "portfolioRank": 3,
-          "portfolioScore": 0.732,
+          "portfolioRank": 7,
+          "portfolioScore": 0.318,
           "reasons": [
             "economic_impact",
-            "diversity_preserved",
             "actionable",
             "causal_context",
           ],
@@ -401,8 +536,8 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
         {
           "currentRank": 5,
           "id": "special_builder:stock_risk:producto:inventario:Té Helado 500ml",
-          "portfolioRank": 9,
-          "portfolioScore": 0.677,
+          "portfolioRank": 5,
+          "portfolioScore": 0.379,
           "reasons": [
             "economic_impact",
             "diversity_preserved",
@@ -421,8 +556,8 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
         },
         "dedup": {
           "discardedCount": 50,
-          "inputCount": 197,
-          "outputCount": 147,
+          "inputCount": 202,
+          "outputCount": 152,
           "reason": null,
           "status": "ok",
         },
@@ -434,8 +569,8 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
           "status": "skipped",
         },
         "gate": {
-          "discardedCount": 3,
-          "inputCount": 11,
+          "discardedCount": 4,
+          "inputCount": 12,
           "outputCount": 8,
           "reason": null,
           "status": "ok",
@@ -450,13 +585,13 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
         "motor2_registry_loop": {
           "discardedCount": null,
           "inputCount": 2767,
-          "outputCount": 102,
+          "outputCount": 107,
           "reason": null,
           "status": "ok",
         },
         "ranker": {
-          "discardedCount": 132,
-          "inputCount": 147,
+          "discardedCount": 137,
+          "inputCount": 152,
           "outputCount": 15,
           "reason": null,
           "status": "ok",
@@ -469,6 +604,42 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
           "status": "ok",
         },
         "special_builders": {
+          "builders": {
+            "change_point": {
+              "output": 68,
+            },
+            "cliente_dormido": {
+              "output": 2,
+            },
+            "co_decline": {
+              "output": 1,
+            },
+            "correlation": {
+              "output": 0,
+            },
+            "cross_delta": {
+              "discarded": 37,
+              "output": 9,
+            },
+            "inventory_stock": {
+              "output": 2,
+            },
+            "meta_gap_temporal": {
+              "output": 3,
+            },
+            "migration": {
+              "output": 0,
+            },
+            "outlier_builder": {
+              "output": 4,
+            },
+            "product_dead": {
+              "output": 1,
+            },
+            "steady_share": {
+              "output": 4,
+            },
+          },
           "discardedCount": null,
           "inputCount": 2767,
           "outputCount": 95,
@@ -478,8 +649,8 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
       },
       "summary": {
         "candidatesFiltered": 8,
-        "candidatesRejectedByGate": 3,
-        "candidatesReturned": 11,
+        "candidatesRejectedByGate": 4,
+        "candidatesReturned": 12,
         "chains": 0,
         "diagnosticBlocks": 8,
         "enrichedBlocks": 8,
@@ -622,13 +793,13 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
       "sales": 94838,
     },
     "engineStatus": {
-      "candidatesSelected": 11,
-      "candidatesTotal": 204,
+      "candidatesSelected": 12,
+      "candidatesTotal": 209,
       "detectorsEmitted": {
         "change_point": 68,
         "correlation": 0,
         "meta_gap_temporal": 3,
-        "motor1": 116,
+        "motor1": 121,
         "outlier_builder": 4,
         "steady_share": 4,
         "z9_hydration": 14,
@@ -638,7 +809,7 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
         "executive_compression": 0,
         "legacy_render_adapter": 0,
         "motor1_legacy": 0,
-        "motor2_registry_loop": 108,
+        "motor2_registry_loop": 113,
         "special_builder": 95,
         "unknown": 0,
       },
@@ -647,10 +818,11 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
           {
             "currentRank": 1,
             "id": "special_builder:product_dead:producto:venta:Chicharrón 120g",
-            "portfolioRank": 8,
-            "portfolioScore": 0.713,
+            "portfolioRank": 2,
+            "portfolioScore": 0.503,
             "reasons": [
               "economic_impact",
+              "strategic_signal",
               "diversity_preserved",
               "actionable",
               "causal_context",
@@ -660,12 +832,11 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
             "currentRank": 2,
             "id": "special_builder:meta_gap_temporal:vendedor:cumplimiento_meta:Carlos Ramírez",
             "portfolioRank": 1,
-            "portfolioScore": 0.925,
+            "portfolioScore": 0.553,
             "reasons": [
               "economic_impact",
               "strategic_signal",
               "high_confidence",
-              "diversity_preserved",
               "actionable",
               "causal_context",
             ],
@@ -673,8 +844,8 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
           {
             "currentRank": 3,
             "id": "special_builder:stock_risk:producto:inventario:Queso Fresco 400g",
-            "portfolioRank": 9,
-            "portfolioScore": 0.677,
+            "portfolioRank": 3,
+            "portfolioScore": 0.474,
             "reasons": [
               "economic_impact",
               "diversity_preserved",
@@ -685,11 +856,10 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
           {
             "currentRank": 4,
             "id": "special_builder:outlier:cliente:frecuencia_compra:Mercado Central",
-            "portfolioRank": 2,
-            "portfolioScore": 0.732,
+            "portfolioRank": 7,
+            "portfolioScore": 0.303,
             "reasons": [
               "economic_impact",
-              "diversity_preserved",
               "actionable",
               "causal_context",
             ],
@@ -697,11 +867,11 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
           {
             "currentRank": 5,
             "id": "motor2_registry_loop:migration:cliente:venta:Super Económico",
-            "portfolioRank": 10,
-            "portfolioScore": 0.655,
+            "portfolioRank": 6,
+            "portfolioScore": 0.313,
             "reasons": [
               "economic_impact",
-              "diversity_preserved",
+              "strategic_signal",
               "actionable",
               "causal_context",
             ],
@@ -709,14 +879,14 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
         ],
         "protectedCount": 8,
         "regularCap": 6,
-        "regularCount": 142,
+        "regularCount": 147,
         "regularSelected": 6,
         "selectedByOrigin": {
           "cross_engine": 0,
           "executive_compression": 0,
           "legacy_render_adapter": 0,
           "motor1_legacy": 0,
-          "motor2_registry_loop": 7,
+          "motor2_registry_loop": 8,
           "special_builder": 4,
           "unknown": 0,
         },
@@ -731,8 +901,8 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
         },
         "dedup": {
           "discardedCount": 47,
-          "inputCount": 204,
-          "outputCount": 157,
+          "inputCount": 209,
+          "outputCount": 162,
           "reason": null,
           "status": "ok",
         },
@@ -746,18 +916,54 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
         "motor2_registry_loop": {
           "discardedCount": null,
           "inputCount": 2767,
-          "outputCount": 108,
+          "outputCount": 113,
           "reason": null,
           "status": "ok",
         },
         "ranker": {
-          "discardedCount": 143,
-          "inputCount": 157,
+          "discardedCount": 148,
+          "inputCount": 162,
           "outputCount": 14,
           "reason": null,
           "status": "ok",
         },
         "special_builders": {
+          "builders": {
+            "change_point": {
+              "output": 68,
+            },
+            "cliente_dormido": {
+              "output": 2,
+            },
+            "co_decline": {
+              "output": 1,
+            },
+            "correlation": {
+              "output": 0,
+            },
+            "cross_delta": {
+              "discarded": 37,
+              "output": 9,
+            },
+            "inventory_stock": {
+              "output": 2,
+            },
+            "meta_gap_temporal": {
+              "output": 3,
+            },
+            "migration": {
+              "output": 1,
+            },
+            "outlier_builder": {
+              "output": 4,
+            },
+            "product_dead": {
+              "output": 1,
+            },
+            "steady_share": {
+              "output": 4,
+            },
+          },
           "discardedCount": null,
           "inputCount": 2767,
           "outputCount": 96,
@@ -784,12 +990,12 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
         "BAJA": 3,
         "MEDIA": 2,
       },
-      "passRate": 0.636,
+      "passRate": 0.583,
       "total": 7,
     },
     "poolReturnedByEngine": {
       "byDimension": {
-        "cliente": 6,
+        "cliente": 7,
         "producto": 2,
         "vendedor": 3,
       },
@@ -801,14 +1007,14 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
         "outlier": 1,
         "product_dead": 1,
         "stock_risk": 1,
-        "trend": 1,
+        "trend": 2,
       },
       "bySeverity": {
-        "ALTA": 4,
+        "ALTA": 5,
         "BAJA": 3,
         "MEDIA": 4,
       },
-      "total": 11,
+      "total": 12,
     },
     "runtimeAudit": {
       "origins": {
@@ -816,7 +1022,7 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
         "executive_compression": 0,
         "legacy_render_adapter": 0,
         "motor1_legacy": 0,
-        "motor2_registry_loop": 7,
+        "motor2_registry_loop": 8,
         "special_builder": 4,
         "unknown": 0,
       },
@@ -824,10 +1030,11 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
         {
           "currentRank": 1,
           "id": "special_builder:product_dead:producto:venta:Chicharrón 120g",
-          "portfolioRank": 8,
-          "portfolioScore": 0.713,
+          "portfolioRank": 2,
+          "portfolioScore": 0.503,
           "reasons": [
             "economic_impact",
+            "strategic_signal",
             "diversity_preserved",
             "actionable",
             "causal_context",
@@ -837,12 +1044,11 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
           "currentRank": 2,
           "id": "special_builder:meta_gap_temporal:vendedor:cumplimiento_meta:Carlos Ramírez",
           "portfolioRank": 1,
-          "portfolioScore": 0.925,
+          "portfolioScore": 0.553,
           "reasons": [
             "economic_impact",
             "strategic_signal",
             "high_confidence",
-            "diversity_preserved",
             "actionable",
             "causal_context",
           ],
@@ -850,8 +1056,8 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
         {
           "currentRank": 3,
           "id": "special_builder:stock_risk:producto:inventario:Queso Fresco 400g",
-          "portfolioRank": 9,
-          "portfolioScore": 0.677,
+          "portfolioRank": 3,
+          "portfolioScore": 0.474,
           "reasons": [
             "economic_impact",
             "diversity_preserved",
@@ -862,11 +1068,10 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
         {
           "currentRank": 4,
           "id": "special_builder:outlier:cliente:frecuencia_compra:Mercado Central",
-          "portfolioRank": 2,
-          "portfolioScore": 0.732,
+          "portfolioRank": 7,
+          "portfolioScore": 0.303,
           "reasons": [
             "economic_impact",
-            "diversity_preserved",
             "actionable",
             "causal_context",
           ],
@@ -874,11 +1079,11 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
         {
           "currentRank": 5,
           "id": "motor2_registry_loop:migration:cliente:venta:Super Económico",
-          "portfolioRank": 10,
-          "portfolioScore": 0.655,
+          "portfolioRank": 6,
+          "portfolioScore": 0.313,
           "reasons": [
             "economic_impact",
-            "diversity_preserved",
+            "strategic_signal",
             "actionable",
             "causal_context",
           ],
@@ -894,8 +1099,8 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
         },
         "dedup": {
           "discardedCount": 47,
-          "inputCount": 204,
-          "outputCount": 157,
+          "inputCount": 209,
+          "outputCount": 162,
           "reason": null,
           "status": "ok",
         },
@@ -907,8 +1112,8 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
           "status": "skipped",
         },
         "gate": {
-          "discardedCount": 4,
-          "inputCount": 11,
+          "discardedCount": 5,
+          "inputCount": 12,
           "outputCount": 7,
           "reason": null,
           "status": "ok",
@@ -923,13 +1128,13 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
         "motor2_registry_loop": {
           "discardedCount": null,
           "inputCount": 2767,
-          "outputCount": 108,
+          "outputCount": 113,
           "reason": null,
           "status": "ok",
         },
         "ranker": {
-          "discardedCount": 143,
-          "inputCount": 157,
+          "discardedCount": 148,
+          "inputCount": 162,
           "outputCount": 14,
           "reason": null,
           "status": "ok",
@@ -942,6 +1147,42 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
           "status": "ok",
         },
         "special_builders": {
+          "builders": {
+            "change_point": {
+              "output": 68,
+            },
+            "cliente_dormido": {
+              "output": 2,
+            },
+            "co_decline": {
+              "output": 1,
+            },
+            "correlation": {
+              "output": 0,
+            },
+            "cross_delta": {
+              "discarded": 37,
+              "output": 9,
+            },
+            "inventory_stock": {
+              "output": 2,
+            },
+            "meta_gap_temporal": {
+              "output": 3,
+            },
+            "migration": {
+              "output": 1,
+            },
+            "outlier_builder": {
+              "output": 4,
+            },
+            "product_dead": {
+              "output": 1,
+            },
+            "steady_share": {
+              "output": 4,
+            },
+          },
           "discardedCount": null,
           "inputCount": 2767,
           "outputCount": 96,
@@ -951,8 +1192,8 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
       },
       "summary": {
         "candidatesFiltered": 7,
-        "candidatesRejectedByGate": 4,
-        "candidatesReturned": 11,
+        "candidatesRejectedByGate": 5,
+        "candidatesReturned": 12,
         "chains": 0,
         "diagnosticBlocks": 7,
         "enrichedBlocks": 7,

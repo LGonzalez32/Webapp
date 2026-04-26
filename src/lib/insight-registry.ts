@@ -199,6 +199,24 @@ export const METRIC_REGISTRY: MetricDef[] = [
     compute: (records) => new Set(records.map(r => r.cliente).filter(Boolean)).size,
     compatibleInsights: [],
   },
+  // skus_activos: amplitud de catálogo vendido en el período. Detecta cuando un
+  // vendedor o cliente concentra compras en pocos SKUs (portfolio shrinkage).
+  // Requiere columna `producto`; retorna null si no está disponible o no hay filas.
+  {
+    id: 'skus_activos',
+    label: 'SKUs activos',
+    unit: 'count',
+    higherIsBetter: true,
+    // trend: ¿está cayendo el catálogo del vendedor mes a mes?
+    // change: ¿hubo una caída abrupta de SKUs respecto al período anterior?
+    // dominance/contribution/proportion_shift no tienen significado sobre un conteo de distintos.
+    mainLoopInsightTypes: ['trend', 'change'],
+    compute: (records) => {
+      if (records.length === 0) return null
+      const skus = new Set(records.map(r => r.producto).filter(Boolean))
+      return skus.size > 0 ? skus.size : null
+    },
+  },
   // [PR-FIX.8] ventas_por_cliente: métrica derivada usada por el outlier builder
   // (anteriormente hardcodeada). Σventa_neta / # clientes únicos del grupo.
   {

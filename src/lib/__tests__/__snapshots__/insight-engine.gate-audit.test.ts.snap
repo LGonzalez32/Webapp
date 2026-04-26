@@ -65,12 +65,37 @@ exports[`insight-engine gate failure audit (demo dataset, Fase 7.2) > UDS: rule-
       "severity": "CRITICA",
       "title": "📈 Pulpería San José — tendencia creciente",
     },
+    {
+      "accion": null,
+      "description": "Mayoreo Santa Ana muestra una tendencia creciente en SKUs activos en los últimos 3 meses (6 → 14, +133.3%) Cliente atendido por Ana González en Santa Ana.",
+      "dimensionId": "cliente",
+      "failedRules": [
+        "materiality",
+        "pareto",
+        "narrativeCoherence",
+      ],
+      "impactoUsdRounded": 196,
+      "impactoUsdSource": "cross_varAbs",
+      "insightTypeId": "trend",
+      "member": "Mayoreo Santa Ana",
+      "metricId": "skus_activos",
+      "rank": 12,
+      "scoreRounded": 1,
+      "severity": "ALTA",
+      "title": "📈 Mayoreo Santa Ana — tendencia creciente",
+    },
   ],
   "failsByMetricAndRule": {
     "frecuencia_compra": {
       "materiality": 1,
       "monetaryCoherence": 0,
       "narrativeCoherence": 0,
+      "pareto": 1,
+    },
+    "skus_activos": {
+      "materiality": 1,
+      "monetaryCoherence": 0,
+      "narrativeCoherence": 1,
       "pareto": 1,
     },
     "venta": {
@@ -87,10 +112,10 @@ exports[`insight-engine gate failure audit (demo dataset, Fase 7.2) > UDS: rule-
     },
   },
   "failsByRule": {
-    "materiality": 3,
+    "materiality": 4,
     "monetaryCoherence": 0,
-    "narrativeCoherence": 2,
-    "pareto": 3,
+    "narrativeCoherence": 3,
+    "pareto": 4,
   },
   "failsByTypeAndRule": {
     "change": {
@@ -106,20 +131,20 @@ exports[`insight-engine gate failure audit (demo dataset, Fase 7.2) > UDS: rule-
       "pareto": 1,
     },
     "trend": {
-      "materiality": 1,
+      "materiality": 2,
       "monetaryCoherence": 0,
-      "narrativeCoherence": 1,
-      "pareto": 1,
+      "narrativeCoherence": 2,
+      "pareto": 2,
     },
   },
-  "gateFailCount": 3,
+  "gateFailCount": 4,
   "gatePassCount": 8,
   "gateRescuedByContributionUpException": 0,
   "onlyMonetaryCoherenceFails": {
     "items": [],
     "total": 0,
   },
-  "poolSize": 11,
+  "poolSize": 12,
   "usdSourceDistributionInR3Fails": {},
 }
 `;
@@ -209,6 +234,25 @@ exports[`insight-engine gate failure audit (demo dataset, Fase 7.2) > USD: rule-
     },
     {
       "accion": null,
+      "description": "Mayoreo Santa Ana muestra una tendencia creciente en SKUs activos en los últimos 3 meses (6 → 14, +133.3%) Cliente atendido por Ana González en Santa Ana.",
+      "dimensionId": "cliente",
+      "failedRules": [
+        "materiality",
+        "pareto",
+        "narrativeCoherence",
+      ],
+      "impactoUsdRounded": 196,
+      "impactoUsdSource": "cross_varAbs",
+      "insightTypeId": "trend",
+      "member": "Mayoreo Santa Ana",
+      "metricId": "skus_activos",
+      "rank": 11,
+      "scoreRounded": 1,
+      "severity": "ALTA",
+      "title": "📈 Mayoreo Santa Ana — tendencia creciente",
+    },
+    {
+      "accion": null,
       "description": "Mercado Central: $2.10 vs $1.41 en el mismo período del año anterior (+49.0%) Cliente atendido por Ana González en Ahuachapán.",
       "dimensionId": "cliente",
       "failedRules": [
@@ -221,7 +265,7 @@ exports[`insight-engine gate failure audit (demo dataset, Fase 7.2) > USD: rule-
       "insightTypeId": "change",
       "member": "Mercado Central",
       "metricId": "precio_unitario",
-      "rank": 11,
+      "rank": 12,
       "scoreRounded": 1,
       "severity": "MEDIA",
       "title": "↑ Mercado Central — cambio en Precio unitario",
@@ -235,6 +279,12 @@ exports[`insight-engine gate failure audit (demo dataset, Fase 7.2) > USD: rule-
       "pareto": 1,
     },
     "precio_unitario": {
+      "materiality": 1,
+      "monetaryCoherence": 0,
+      "narrativeCoherence": 1,
+      "pareto": 1,
+    },
+    "skus_activos": {
       "materiality": 1,
       "monetaryCoherence": 0,
       "narrativeCoherence": 1,
@@ -254,10 +304,10 @@ exports[`insight-engine gate failure audit (demo dataset, Fase 7.2) > USD: rule-
     },
   },
   "failsByRule": {
-    "materiality": 4,
+    "materiality": 5,
     "monetaryCoherence": 0,
-    "narrativeCoherence": 3,
-    "pareto": 4,
+    "narrativeCoherence": 4,
+    "pareto": 5,
   },
   "failsByTypeAndRule": {
     "change": {
@@ -273,20 +323,20 @@ exports[`insight-engine gate failure audit (demo dataset, Fase 7.2) > USD: rule-
       "pareto": 1,
     },
     "trend": {
-      "materiality": 1,
+      "materiality": 2,
       "monetaryCoherence": 0,
-      "narrativeCoherence": 1,
-      "pareto": 1,
+      "narrativeCoherence": 2,
+      "pareto": 2,
     },
   },
-  "gateFailCount": 4,
+  "gateFailCount": 5,
   "gatePassCount": 7,
   "gateRescuedByContributionUpException": 1,
   "onlyMonetaryCoherenceFails": {
     "items": [],
     "total": 0,
   },
-  "poolSize": 11,
+  "poolSize": 12,
   "usdSourceDistributionInR3Fails": {},
 }
 `;
