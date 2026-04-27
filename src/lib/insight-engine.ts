@@ -6282,8 +6282,17 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
         const dimId = DIM_PRIORITY.find(d => filledDims.some(f => f.key === d)) ?? filledDims[0].key
         const memberRecord = filledDims.find(f => f.key === dimId)!
 
-        // Combo signature for narrative
+        // [Z.12.V-7] Narrativa en lenguaje natural. comboTxt original
+        // ('vendedor=X · canal=Y') sigue persistido en detail.comboTxt
+        // para trazabilidad/audit, pero NO se usa en title/description
+        // — un gerente comercial no entiende sintaxis tipo SQL/filtro.
+        // _comboNatural: protagonista narrowest + contexto en 'en'.
         const comboTxt = filledDims.map(f => `${f.key}=${f.value}`).join(' · ')
+        const _otrosDims = filledDims.filter(f => f.key !== dimId)
+        const _comboNatural = _otrosDims.length === 0
+          ? memberRecord.value
+          : `${memberRecord.value} en ${_otrosDims.map(f => f.value).join(' · ')}`
+
         const ventaFmt = tipoMetaActivo === 'usd'
           ? `$${Math.round(venta).toLocaleString('en-US')}`
           : `${Math.round(venta).toLocaleString('en-US')} uds`
@@ -6295,12 +6304,10 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
         const arrow = direction === 'up' ? '↑' : '↓'
         const verbo = direction === 'up' ? 'sobrecumplió' : 'incumplió'
 
-        const title = filledDims.length === 1
-          ? `${arrow} ${memberRecord.value}: ${cumplPct.toFixed(0)}% de meta`
-          : `${arrow} ${comboTxt}: ${cumplPct.toFixed(0)}% de meta`
+        const title = `${arrow} ${_comboNatural}: ${cumplPct.toFixed(0)}% de meta`
 
         const description =
-          `${comboTxt}: ${ventaFmt} vs meta ${metaFmt} (${cumplPct.toFixed(1)}%). ` +
+          `${_comboNatural}: ${ventaFmt} vs meta ${metaFmt} (${cumplPct.toFixed(1)}%). ` +
           `${verbo} la meta del período por ${Math.abs(gap).toLocaleString('en-US')}${tipoMetaActivo === 'usd' ? ' USD' : ' uds'}.`
 
         // Score: brechas grandes valen más
@@ -6644,7 +6651,10 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
 
         const _fmt = (n: number) => Math.round(n).toLocaleString('en-US')
 
-        // Path display: "vendedor=Carlos · cliente=ACME · producto=Yogurt"
+        // [Z.12.V-7] Path display en lenguaje natural. pathTxt original
+        // ('vendedor=X · cliente=Y') queda persistido en detail.dimensionPath
+        // y en cross_context para audit/trazabilidad. Headline usa la versión
+        // protagonista + 'en' separator.
         const pathTxt = combo.map((d, i) => `${d}=${path[i]}`).join(' · ')
         // Most granular member para member field (mayor cardinalidad = más narrow)
         const granularDim = [...combo].sort(
@@ -6652,10 +6662,16 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
         )[0]
         const granularIdx = combo.indexOf(granularDim)
         const granularMember = path[granularIdx]
+        const _otrosMembers = combo
+          .map((d, i) => ({ dim: d, member: path[i] }))
+          .filter(p => p.dim !== granularDim)
+        const _pathNatural = _otrosMembers.length === 0
+          ? granularMember
+          : `${granularMember} en ${_otrosMembers.map(p => p.member).join(' · ')}`
 
-        const title = `${arrow} ${pathTxt} ${direction === 'up' ? 'creció' : 'cayó'} $${_fmt(absDelta)}`
+        const title = `${arrow} ${_pathNatural} ${direction === 'up' ? 'creció' : 'cayó'} $${_fmt(absDelta)}`
         const description =
-          `${pathTxt}: $${_fmt(prev)} → $${_fmt(cur)} ` +
+          `${_pathNatural}: $${_fmt(prev)} → $${_fmt(cur)} ` +
           `(${direction === 'up' ? '+' : ''}${Math.round(pctChange * 1000) / 10}%). ` +
           `Representa ${Math.round(pctSobreNegocio * 10000) / 100}% del negocio del período.`
 

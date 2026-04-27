@@ -197,7 +197,7 @@ exports[`insight-engine gate failure audit (demo dataset, Fase 7.2) > USD: rule-
   "failingItems": [
     {
       "accion": "Replicar el patrón de Snacks en otras combinaciones similares.",
-      "description": "categoria=Snacks: $1,273 vs meta $522 (243.9%). sobrecumplió la meta del período por 751.3 USD.",
+      "description": "Snacks: $1,273 vs meta $522 (243.9%). sobrecumplió la meta del período por 751.3 USD.",
       "dimensionId": "categoria",
       "failedRules": [
         "materiality",
