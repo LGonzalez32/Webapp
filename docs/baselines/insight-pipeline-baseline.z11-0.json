@@ -1,0 +1,294 @@
+{
+  "version": "z11-0",
+  "captured_at": "2026-04-26T16:35:00-06:00",
+  "branch": "motorinsights",
+  "scope": "Repo-side autonomous baseline. Runtime sections pending DevTools capture.",
+  "validation": {
+    "tsc": { "command": "npx tsc --noEmit", "errors": 0 },
+    "vitest": { "command": "npx vitest run", "files": 5, "tests_total": 105, "tests_passing": 105 }
+  },
+  "doc_reconciliation": {
+    "current_truth": { "tests": 105, "files": 5 },
+    "historical_references": [
+      { "doc": "docs/ROADMAP-INGESTA-REGISTRY.md", "value": "106/106", "scope": "cierre A→F.2", "status": "marked historico" },
+      { "doc": "docs/ROADMAP-MOTOR-VISIBILITY.md", "value": "110/110", "scope": "cierre A→F", "status": "marked historico" }
+    ]
+  },
+  "usd_resolver_inventory": {
+    "canonical_declared": {
+      "name": "resolveImpactoUsd",
+      "file": "src/lib/insightStandard.ts",
+      "lines": "2610-2656",
+      "exported": true,
+      "imported_by": ["src/lib/insight-engine.ts:116"],
+      "invoked_by": [],
+      "status": "DEAD CODE — exported and imported, never called"
+    },
+    "active_inline": {
+      "file": "src/lib/insight-engine.ts",
+      "lines": "7124-7172",
+      "context": "runInsightEngine, post-hydratarCandidatoZ9, pre-ranker",
+      "mutates": ["c.impacto_usd_normalizado", "c.impacto_usd_source", "c.render_priority_score_base", "c.render_priority_score_impacto_factor", "c.render_priority_score"],
+      "status": "ACTIVE — only path that sets impacto_usd_* in motor 2"
+    },
+    "functional_diff": {
+      "rule_4_typed_amount_via_calcularImpactoValor": {
+        "in_canonical_dead": true,
+        "in_active_inline": false,
+        "consequence": "Active resolver depends on hydratarCandidatoZ9 having populated impacto_recuperable beforehand. If hydration produces 0/null, resolver falls to 'unavailable' instead of recovering via typed formula."
+      }
+    },
+    "chain_per_terminal_type": {
+      "cliente_dormido": {
+        "builder_sets_usd": false,
+        "builder_lines": "5341-5362",
+        "metricId": "dias_sin_compra",
+        "hydration_formula": "calcularImpactoValor → detail.impactoVentaHistorica ?? detail.valor_yoy_usd",
+        "fragility": "If both detail keys are 0/missing → impacto_recuperable=0 → resolver inline → 'unavailable' → Z.11 'sin-usd'"
+      },
+      "cliente_perdido": {
+        "builder_sets_usd": true,
+        "builder_lines": "5414-5440",
+        "builder_sets": { "impacto_usd_normalizado": "impacto > 0 ? impacto : null", "impacto_usd_source": "'recuperable' | 'non_monetary'" },
+        "metricId": "dias_sin_compra",
+        "hydration_formula": "calcularImpactoValor → detail.impactoVentaHistorica ?? detail.valor_yoy_usd",
+        "overwrite_warning": "Resolver inline (line 7170-7171) UNCONDITIONALLY overwrites builder-set values via c.impacto_usd_normalizado = usd; c.impacto_usd_source = src — even when builder set them correctly."
+      },
+      "stock_risk": {
+        "builder_sets_usd": false,
+        "builder_lines": "5527-5554 (loop sobre _invTypes)",
+        "metricId": "inventario",
+        "hydration_formula": "items[0].ventaYTD ?? calcularImpactoValor → detail.impactoTotal ?? mult('unidades')",
+        "fragility": "Depends on invType.detect output containing 'items' array with ventaYTD field"
+      },
+      "stock_excess": {
+        "builder_sets_usd": false,
+        "builder_lines": "5527-5554 (loop sobre _invTypes)",
+        "metricId": "inventario",
+        "hydration_formula": "top[0].ventaYTD ?? calcularImpactoValor → detail.totalCapital ?? mult('unidades_excedente')",
+        "fragility": "Depends on invType.detect output containing 'top' array with ventaYTD field"
+      }
+    }
+  },
+  "lists_inventory": {
+    "Z11_ROOT_STRONG_TYPES": {
+      "file": "src/lib/insight-engine.ts",
+      "line": 4631,
+      "members": ["meta_gap_temporal", "product_dead", "migration", "cliente_perdido", "cliente_dormido", "meta_gap", "cross_delta"],
+      "size": 7,
+      "used_by": ["_z11EvaluarSupervivencia rule C (4680)", "tipo-debil label (4690)"]
+    },
+    "Z12_ROOT_STRONG_TYPES": {
+      "file": "src/lib/insightStandard.ts",
+      "line": 2563,
+      "members": ["meta_gap_temporal", "product_dead", "migration", "cliente_perdido", "cliente_dormido", "stock_risk", "stock_excess", "meta_gap", "cross_delta"],
+      "size": 9,
+      "used_by": ["evaluateInsightCandidate isRootStrong check (2684) when crossCount >= 2"]
+    },
+    "Z12_VALID_USD_SOURCES": {
+      "file": "src/lib/insightStandard.ts",
+      "line": 2582,
+      "members": ["gap_meta", "cross_varAbs", "recuperable", "detail_monto", "detail_magnitud", "detail_totalCaida", "cross_delta_yoy"],
+      "excluded_by_design": ["non_monetary", "unavailable"]
+    },
+    "Z12_NON_MONETARY_METRIC_IDS": {
+      "file": "src/lib/insightStandard.ts",
+      "line": 2597,
+      "members": ["num_transacciones", "ticket_promedio", "cumplimiento_meta", "pct_participacion", "num_clientes_activos", "precio_unitario", "frecuencia_compra", "ventas_por_cliente", "skus_activos", "margen_pct"],
+      "size": 10
+    },
+    "NON_MONETARY_METRIC_IDS": {
+      "file": "src/lib/insight-engine.ts",
+      "line": 3088,
+      "members": ["num_transacciones", "ticket_promedio", "cumplimiento_meta", "pct_participacion", "num_clientes_activos", "precio_unitario", "frecuencia_compra", "ventas_por_cliente"],
+      "size": 8
+    },
+    "EVENT_TYPES_EXEMPT": {
+      "file": "src/lib/insight-engine.ts",
+      "line": 3085,
+      "members": ["stock_risk", "stock_excess", "migration", "co_decline", "product_dead", "seasonality", "outlier", "change_point", "steady_share", "correlation", "meta_gap_temporal"]
+    },
+    "ALWAYS_PROTECTED_CAPS": {
+      "file": "src/lib/insight-engine.ts",
+      "line": 6649,
+      "entries": {
+        "stock_risk": 2, "product_dead": 3, "migration": 2, "outlier": 1,
+        "change_point": 2, "steady_share": 1, "correlation": 1, "meta_gap_temporal": 2,
+        "cliente_perdido": 1, "cliente_dormido": 2, "meta_gap": 2, "cross_delta": 2,
+        "stock_excess": 1, "co_decline": 1
+      },
+      "ranker_params": { "MIN_REGULAR_SLOTS": 6, "RANKER_TOTAL_CAP": 12 }
+    }
+  },
+  "list_divergences": [
+    {
+      "pair": ["Z11_ROOT_STRONG_TYPES", "Z12_ROOT_STRONG_TYPES"],
+      "only_in_Z12": ["stock_risk", "stock_excess"],
+      "only_in_Z11": [],
+      "consequence": "stock_risk and stock_excess receive Z.12 root-strong rescue (with crossCount>=2) but NO Z.11 rescue when usd==null. Z.11 labels them 'tipo-debil(stock_risk)' and suppresses them."
+    },
+    {
+      "pair": ["NON_MONETARY_METRIC_IDS", "Z12_NON_MONETARY_METRIC_IDS"],
+      "only_in_Z12": ["skus_activos", "margen_pct"],
+      "only_in_engine": [],
+      "consequence": "Candidates with metricId='skus_activos' or 'margen_pct' fall to 'unavailable' in inline resolver but Z.12 would have treated them as non-monetary (Pareto-skip). Mismatch may cause Z.11 to suppress them via 'sin-usd' before Z.12 ever evaluates them."
+    }
+  ],
+  "tipo_debil_status": {
+    "is_formal_list": false,
+    "is_derived": true,
+    "derived_from": "negation of Z11_ROOT_STRONG_TYPES",
+    "code_location": "src/lib/insight-engine.ts:4690-4692",
+    "code_excerpt": "if (!Z11_ROOT_STRONG_TYPES.has(c.insightTypeId) && usd == null) { razones.push(`tipo-debil(${c.insightTypeId})`) }",
+    "label_when": ["c.impacto_usd_normalizado == null", "c.insightTypeId NOT in Z11_ROOT_STRONG_TYPES"]
+  },
+  "two_gates_clarification": {
+    "Z11_quality_gate": {
+      "function": "_z11EvaluarSupervivencia",
+      "file": "src/lib/insight-engine.ts",
+      "lines": "4665-4694",
+      "invoked_at": "src/lib/insight-engine.ts:7252 (inside runInsightEngine)",
+      "rules": [
+        "A: usd != null && |usd| >= 200",
+        "B: 30 <= |usd| < 200 && cross >= 2 && !accionGenerica",
+        "C: usd == null && Z11_ROOT_STRONG_TYPES.has(tid) && cross >= 2"
+      ],
+      "telemetry": "console.debug('[Z.11.1] quality_gate:', ...)"
+    },
+    "Z12_executive_gate": {
+      "function": "evaluateInsightCandidate",
+      "file": "src/lib/insightStandard.ts",
+      "lines": "2675+",
+      "invoked_by": "filtrarConEstandar (insight-engine.ts:3968)",
+      "rules": [
+        "r1: materiality bi-nivel (>=2% strict, 1-2% paretoOrRootStrong, <1% rootStrong)",
+        "r2: Pareto real (skipped for non-monetary metrics)",
+        "r3: monetary coherence (usd present + source in Z12_VALID_USD_SOURCES) OR isRootStrong",
+        "r4: narrative coherence (title+desc+action concrete)"
+      ],
+      "telemetry": "various [Z.12], [Z.10.5b], [Z.12.x] debug logs"
+    },
+    "explanation_of_old_audit_contradiction": "The runtime audit reporting 'sin-usd dominante' was measuring Z.11. The test goldens reporting 'monetaryCoherence: 0' were measuring Z.12. They are two independent gates with different lists and different rules. The contradiction was apparent only because both were lumped together as 'the gate'."
+  },
+  "runtime_capture": {
+    "captured_at": "2026-04-26T22:42:46.566Z",
+    "captured_by": "Claude in Chrome (DevTools console)",
+    "scenario": "Los Pinos demo, /dashboard, selectedPeriod={year:2026,month:3}, tipoMetaActivo='uds'",
+    "caveats": [
+      "window.useAppStore not exposed — store_state obtained via React fiber walking (__STORE__ fallback)",
+      "window.__INSIGHT_AUDIT__ not exposed — audit_global=null",
+      "Worker log key is [PR-L1] motor2_insights (NOT [Step B] as the doc expected). Step B worker change may not be deployed in this build, or [PR-L1] coexists",
+      "DOM card_counts queried selectors that don't exist in current DOM — all 0",
+      "JSON deepClone limited to depth 12 (sufficient for observed payloads)"
+    ],
+    "store_state": {
+      "insights_length": 8,
+      "insights_por_tipo": { "riesgo_meta": 3, "riesgo_producto": 1, "cruzado": 4 },
+      "insights_por_prioridad": { "BAJA": 6, "MEDIA": 1, "ALTA": 1 },
+      "sales_length": 94969,
+      "metas_length": 2340,
+      "inventory_length": 20,
+      "vendorAnalysis_length": 8,
+      "clientesDormidos_length": 2,
+      "categoriasInventario_length": 20,
+      "selectedPeriod": { "year": 2026, "month": 3 },
+      "tipoMetaActivo": "uds"
+    },
+    "worker_summary": {
+      "candidates_total": 3,
+      "blocks_final": 4,
+      "por_tipo": { "migration": 2, "cross_delta": 1 },
+      "por_dimension": { "producto": 1, "cliente": 1, "departamento": 1 },
+      "tiempo_ms": 11
+    },
+    "z11_runs": {
+      "total_runs_captured": 6,
+      "last_run": {
+        "entrada": 23,
+        "sobreviven": 16,
+        "suprimidos": 7,
+        "pass_rate": 0.6957,
+        "suprimidosDetalle": [
+          { "tid": "meta_gap",      "metric": "cumplimiento_meta", "member": "Limpieza",         "regla": "sin-usd|cross-pobre(1)" },
+          { "tid": "meta_gap",      "metric": "cumplimiento_meta", "member": "Refrescos",        "regla": "sin-usd|cross-pobre(1)" },
+          { "tid": "meta_gap",      "metric": "cumplimiento_meta", "member": "Lácteos",          "regla": "sin-usd|cross-pobre(1)" },
+          { "tid": "stock_excess",  "metric": "inventario",        "member": "Cacahuates 100g",  "regla": "sin-usd|cross-pobre(0)|tipo-debil(stock_excess)" },
+          { "tid": "change_point",  "metric": "ticket_promedio",   "member": "Snacks",           "regla": "sin-usd|cross-pobre(0)|accion-generica|tipo-debil(change_point)" },
+          { "tid": "change_point",  "metric": "ticket_promedio",   "member": "Miguel Ángel Díaz","regla": "sin-usd|accion-generica|tipo-debil(change_point)" },
+          { "tid": "contribution",  "metric": "num_transacciones", "member": "Autoservicio",     "regla": "sin-usd|cross-pobre(0)|tipo-debil(contribution)" }
+        ]
+      }
+    },
+    "z12_runs": {
+      "total_runs_captured": 6,
+      "last_run": {
+        "ventaTotalNegocio": 40995.85,
+        "floorAbsAlto": 819.92,
+        "floorPct": 0.02,
+        "executiveTopN": 4,
+        "surviving": 9,
+        "suppressed": 7,
+        "relaxed_survivors": 2,
+        "suppressedDetail_grouped_by_failure": {
+          "materiality_only": [
+            { "member": "Supermercado Nacional", "tid": "outlier", "usd": 310.34, "pct": 0.0076, "cross": 4, "source": "cross_varAbs" }
+          ],
+          "materiality_and_narrative": [
+            { "member": "Pulpería San José", "tid": "trend", "usd": 173.79, "pct": 0.0042, "cross": 4, "source": "cross_varAbs" },
+            { "member": "Mayoreo Santa Ana", "tid": "trend", "usd": 177.23, "pct": 0.0043, "cross": 4, "source": "cross_varAbs" }
+          ],
+          "materiality_and_pareto": [
+            { "member": "Tienda El Progreso", "tid": "cliente_perdido", "usd": 819.12, "pct": 0.0200, "cross": 0, "source": "recuperable", "note": "barely above floor (1.99% rounded), but Z12 root-strong rescue requires cross>=2 which is 0 here" }
+          ],
+          "pareto_only": [
+            { "member": "Té Helado 500ml", "tid": "stock_risk", "usd": 6665, "pct": 0.1626, "cross": 0, "source": "recuperable", "note": "16.26% of business — passes materiality but fails pareto. Z12 root-strong rescue requires cross>=2 which is 0" }
+          ],
+          "pareto_and_narrative": [
+            { "member": "Supermercado López", "tid": "cliente_dormido", "usd": 1633.26, "pct": 0.0398, "cross": 0, "source": "recuperable" },
+            { "member": "Roberto Méndez", "tid": "contribution", "usd": 1321, "pct": 0.0322, "cross": 0, "source": "recuperable" }
+          ]
+        },
+        "z12_monetaryCoherence_failures": 0
+      }
+    },
+    "z105_last": {
+      "source_dist": { "non_monetary": 7, "recuperable": 5, "unavailable": 3, "cross_varAbs": 6, "gap_meta": 2 },
+      "weight": 0.15,
+      "referencia": 500,
+      "shifts_notables": [
+        { "tipo": "meta_gap_temporal", "member": "Carlos Ramírez", "usd": 35514, "factor": 1.642, "rps_antes": 2.44, "rps_despues": 4.01 },
+        { "tipo": "meta_gap_temporal", "member": "Luis Hernández", "usd": 16989, "factor": 1.533, "rps_antes": 2.29, "rps_despues": 3.51 },
+        { "tipo": "co_decline",       "member": "Palomitas 80g",   "usd": 7633,  "factor": 1.418, "rps_antes": 1.51, "rps_despues": 2.15 },
+        { "tipo": "stock_risk",       "member": "Té Helado 500ml", "usd": 6665,  "factor": 1.399, "rps_antes": 1.10, "rps_despues": 1.53 },
+        { "tipo": "product_dead",     "member": "Cacahuates 100g", "usd": 2000,  "factor": 1.241, "rps_antes": 2.05, "rps_despues": 2.54 }
+      ]
+    }
+  },
+  "verdict": {
+    "stale_audit_invalidated": {
+      "old_claim": "Z.11 pass rate 16.7%, sin-usd dominante",
+      "new_measurement": "Z.11 pass rate 69.57% (16/23 sobreviven), sin-usd still dominant in supressed but the cohort is much smaller",
+      "implication": "The original Sprint Z.11.x brief was solving a problem that has been partially fixed already. Real bottleneck is now Z.12, not Z.11."
+    },
+    "real_bottlenecks_observed": [
+      {
+        "stage": "Z.11",
+        "still_kills": ["meta_gap (×3)", "stock_excess (×1)", "change_point (×2)", "contribution (×1)"],
+        "root_cause": "These types are NOT in Z11_ROOT_STRONG_TYPES AND their hydration produces impacto_recuperable=null/0. Specifically: meta_gap formula returns null (insightStandard.ts:1882), stock_excess depends on top[0].ventaYTD which may be missing, change_point/contribution use ratio metrics with no inline USD."
+      },
+      {
+        "stage": "Z.12",
+        "still_kills": ["cliente_perdido", "cliente_dormido", "stock_risk", "contribution", "outlier", "trend (×2)"],
+        "root_cause": "ALL z12 suppressions have monetaryCoherence=true. Failures are materiality (small USD) and pareto. Z12 root-strong rescue requires crossCount>=2; many real cases have cross=0 (cliente_perdido isolated, stock_risk single product) so the rescue never fires.",
+        "most_egregious": "stock_risk Té Helado 500ml — USD=$6665, 16.26% of business — fails Z12 by pareto only. cross=0 so root-strong rescue blocked. A 16% impact item dies because it's not in the Pareto top list and has no cross-context."
+      }
+    ],
+    "structural_findings_confirmed": [
+      "resolveImpactoUsd is dead code (never invoked). Inline resolver in insight-engine.ts:7124-7172 is the only active path.",
+      "tipo-debil is derived from negation of Z11_ROOT_STRONG_TYPES (not a formal list).",
+      "Z.11 and Z.12 are independent gates with divergent lists. Old audits measured different gates which is why they 'contradicted'.",
+      "Worker emits 4 blocks_final via the worker-side pipeline; page-side reruns motor 2 with full pipeline (23 candidates → Z.11 → Z.12 → exec compression → 4-9 cards). Two runtime truths exist as predicted.",
+      "store.insights = 8 (from worker's adapter output). DOM card counts unmeasurable due to selector mismatch."
+    ]
+  }
+}
