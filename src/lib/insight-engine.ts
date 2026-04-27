@@ -3236,14 +3236,25 @@ function classifyDireccionFromCandidate(c: InsightCandidate): 'recuperable' | 'p
       if (mc === 0) return 'neutral'
       return mc < 0 ? 'recuperable' : 'positivo'
     }
-    // Siempre-recuperables: riesgo, brecha de meta, cliente dormido, co_decline, migration, product_dead
+    // Siempre-recuperables: riesgo, cliente dormido, co_decline, migration, product_dead
     case 'stock_risk':
-    case 'meta_gap':
     case 'cliente_dormido':
     case 'co_decline':
     case 'migration':
     case 'product_dead':
       return 'recuperable'
+    // [Z.13.V-2] meta_gap es direction-aware: sobrecumplimiento es positivo,
+    // subcumplimiento es recuperable. Pre-Z.13: siempre 'recuperable' →
+    // María Castillo y Roberto Cruz (sobrecumpl) se agrupaban con Carlos
+    // (subcumpl) bajo "vendedores estancados". UX cliente: contradictorio.
+    case 'meta_gap':
+    case 'meta_gap_temporal': {
+      if (c.direction === 'up') return 'positivo'
+      if (c.direction === 'down') return 'recuperable'
+      // Fallback por detail.cumplPct si direction no está poblada
+      const cumplPct = typeof det.cumplPct === 'number' ? det.cumplPct : 100
+      return cumplPct >= 100 ? 'positivo' : 'recuperable'
+    }
     // [PR-M4c'] seasonality es patrón observacional (no gap recuperable)
     case 'seasonality':
       return 'neutral'
@@ -3538,11 +3549,18 @@ export function candidatesToDiagnosticBlocks(
       // [Z.7 T1.5] sections: NB_SECTION_LABEL para conclusión (buildPorQueImporta la detecta
       // directamente sin concatenar todos los bullets). summaryShort queda con c.description
       // → quePaso = descripción, porQueImporta = conclusión, sin duplicación.
+      // [Z.13.V-3] Aceptar accion tanto como objeto {texto} como string plano.
+      // Antes solo leía objeto → meta_gap_combo emite string → "Acción" section
+      // quedaba vacía → diagnostic-generator caía a "Sin acciones sugeridas".
+      // Caso runtime confirmado: Roberto Méndez 65% (supervisor) y otros sujetos
+      // no-vendedor mostraban contradicción (urgente sin acción).
       const accionObj = typeof c.accion === 'object' && c.accion !== null ? c.accion : null
+      const accionTextoPlano = typeof c.accion === 'string' ? c.accion.trim() : ''
       const porQueBullets: string[] = []
       if (c.conclusion) porQueBullets.push(c.conclusion)
       const accionBullets: string[] = []
       if (accionObj?.texto) accionBullets.push(`→ ${accionObj.texto}`)
+      else if (accionTextoPlano) accionBullets.push(`→ ${accionTextoPlano}`)
       const sections: DiagnosticSection[] = [
         ...(porQueBullets.length > 0
           ? [{ label: NB_SECTION_LABEL, type: 'bullet' as const, items: porQueBullets }]
@@ -6313,12 +6331,19 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
           _emittedHechos.delete(_dk)
         }
 
-        // Severity
+        // [Z.13.V-1] Severity por dirección. Sobrecumplimiento extremo
+        // (>200%) NO debería ser ALTA roja: indica probablemente meta mal
+        // calibrada, no problema operativo. Subcumplimiento extremo SÍ
+        // requiere atención urgente. Caso runtime: Lácteos 741%, Limpieza
+        // 908%, Refrescos 843% — todas ALTA rojas. UX cliente: confunde
+        // ("¿por qué un sobrecumplimiento de 900% es urgente?").
         let severity: 'CRITICA' | 'ALTA' | 'MEDIA' | 'BAJA' = 'MEDIA'
-        if (cumplPct < 50)            severity = 'CRITICA'
-        else if (cumplPct < 75)       severity = 'ALTA'
-        else if (cumplPct > 150)      severity = 'ALTA'
-        else if (offBy >= 30)         severity = 'ALTA'
+        if (cumplPct < 50)            severity = 'CRITICA'   // sub-meta crítica
+        else if (cumplPct < 70)       severity = 'ALTA'      // sub-meta seria
+        else if (cumplPct < 80)       severity = 'MEDIA'     // sub-meta moderada
+        else if (cumplPct > 200)      severity = 'BAJA'      // sobrecumpl masivo → revisar meta, baja urgencia operativa
+        else if (cumplPct > 150)      severity = 'MEDIA'     // sobrecumpl alto → notable, no urgente
+        else if (offBy >= 30)         severity = 'ALTA'      // gap moderado pero sostenido
 
         // Pick narrowest dim como dimensionId
         const dimId = DIM_PRIORITY.find(d => filledDims.some(f => f.key === d)) ?? filledDims[0].key

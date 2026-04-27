@@ -1072,6 +1072,15 @@ function _extractTipoDim(b: DiagnosticBlock): { tipo: string; dimension: string 
 }
 
 function _getDir(b: DiagnosticBlock): 'neg' | 'pos' | 'info' {
+  // [Z.13.V-2] Inspeccionar block.direccion ANTES de severity. Caso runtime:
+  // María Castillo (sobrecumpl 163%) y Roberto Cruz (sobrecumpl 207%) tienen
+  // severity 'info' (post Z.13.V-1) pero direccion='positivo' o el candidate
+  // tiene direction='up'. Sin esta lectura, se agruparían con un Carlos
+  // (direction='down') sólo porque ambos tenían severity 'info' o
+  // similar — produciendo "X vendedores estancados" mezclando ganadores
+  // y perdedores.
+  if (b.direccion === 'positivo') return 'pos'
+  if (b.direccion === 'recuperable') return 'neg'
   if (b.severity === 'positive') return 'pos'
   if (b.severity === 'critical' || b.severity === 'warning') return 'neg'
   return 'info'
