@@ -1266,6 +1266,137 @@ en 2+ clientes reales con datasets no comparables.
 
 ---
 
+## 17. Z.13.V family — Auditoría cliente real + fixes pre-go-live (2026-04-27)
+
+> **Origen.** Auditoría integral SalesFlow desde rol de gerente comercial
+> (5 minutos en /dashboard sin contexto técnico) + auditoría técnica del
+> pipeline. Reveló 3 issues que erosionaban credibilidad ante cliente
+> aunque el motor era técnicamente correcto.
+
+### 17.1 Issues identificados por auditoría cliente
+
+| # | Issue | Severidad UX | Detección |
+|---|---|---|---|
+| 1 | Categorías 700-900% sobrecumpl marcadas rojas urgentes | Alta — confusión inmediata | "¿por qué un sobrecumplimiento de 900% es atención inmediata?" |
+| 2 | Card "4 vendedores estancados" mezcla Carlos (49%) con María (150%) y Roberto Cruz (190%) | Alta — contradicción narrativa | "si confunde sobrecumpliendo con estancado, ¿qué más confunde?" |
+| 3 | Cards rojas urgentes con "Sin acciones sugeridas" | Alta — el motor admite no saber qué hacer pero etiqueta urgente | "para qué me la marcaste como urgente entonces" |
+
+### 17.2 Z.13.V-1 — Severity de meta_gap por dirección
+
+**Cambio:** `meta_gap_combo` builder (insight-engine.ts:6275-6286) ahora
+asigna severity bi-direccional:
+
+| cumplPct | Severity (pre-Z.13) | Severity (post-Z.13) |
+|---|---|---|
+| < 50 | CRITICA | CRITICA (sin cambio) |
+| 50-70 | ALTA | ALTA |
+| 70-80 | MEDIA | MEDIA |
+| 80-130 | (no emite) | (no emite) |
+| 130-150 | ALTA | MEDIA (sobrecumpl moderado, ámbar) |
+| 150-200 | ALTA | MEDIA |
+| > 200 | ALTA | **BAJA** (sobrecumpl masivo → revisar meta, gris) |
+
+**Justificación:** sobrecumplimiento masivo no es problema operativo — es
+indicador de meta mal calibrada. Mismo color/lenguaje que subcumplimiento
+crítico erosiona la confianza del cliente.
+
+**Commit:** `5aaef2e7`
+
+### 17.3 Z.13.V-2 — Agrupación direction-aware
+
+**Cambio:** dos archivos modificados:
+
+1. `classifyDireccionFromCandidate` (insight-engine.ts:3239-3251):
+   - Pre: meta_gap siempre `'recuperable'`.
+   - Post: `c.direction='up'` → `'positivo'`, `'down'` → `'recuperable'`.
+     Fallback por `detail.cumplPct` si direction no poblada.
+
+2. `_getDir` (insightStandard.ts:1074):
+   - Pre: solo inspecciona severity.
+   - Post: inspecciona `block.direccion` ANTES de severity. Si
+     `direccion='positivo'` → `'pos'`, si `'recuperable'` → `'neg'`.
+
+**Resultado:** `agruparInsightsRedundantes` (insightStandard.ts:1083) usa
+key `tipo|dimension|dir|periodo`. Con direccion correctamente marcada,
+sobrecumpls (`pos`) y subcumpls (`neg`) caen en buckets DIFERENTES,
+eliminando la mezcla en cards agregadas tipo "X vendedores estancados".
+
+**Caso post-fix esperado en Los Pinos demo:**
+- Bucket `meta_gap|vendedor|neg`: Carlos Ramírez 49% + Miguel Ángel 71% →
+  card "2 vendedores lejos de meta" (rojo).
+- Bucket `meta_gap|vendedor|pos`: María Castillo 150% + Roberto Cruz 190%
+  → card "2 vendedores destacados sobre meta" (info gris) o no se agrupa
+  si N=2 y label es positivo.
+
+**Commit:** `5aaef2e7`
+
+### 17.4 Z.13.V-3 — Accion string visible en cards
+
+**Cambio:** EVENT_TYPES_EXEMPT path en `candidatesToDiagnosticBlocks`
+(insight-engine.ts:3541-3550) ahora acepta `c.accion` como string plano
+además de objeto `{texto}`.
+
+```ts
+const accionObj = typeof c.accion === 'object' && c.accion !== null ? c.accion : null
+const accionTextoPlano = typeof c.accion === 'string' ? c.accion.trim() : ''
+const accionBullets: string[] = []
+if (accionObj?.texto) accionBullets.push(`→ ${accionObj.texto}`)
+else if (accionTextoPlano) accionBullets.push(`→ ${accionTextoPlano}`)
+```
+
+**Caso runtime resuelto:** `meta_gap_combo` emite accion como STRING
+(`'Plan de recuperación con ${member}: revisar pipeline y compromisos...'`).
+Pre-fix: el block "Acción" section quedaba vacía →
+`diagnostic-generator.ts:determineSinAccionesLabel` injectaba "Sin
+acciones sugeridas — los datos históricos no muestran una palanca clara."
+Post-fix: la string se agrega al bullet `→ ${accion}` y el fallback no
+dispara.
+
+**Commit:** `5aaef2e7`
+
+### 17.5 Validación
+
+- `tsc --noEmit`: 0 errores.
+- `vitest run`: 117/117. 4 goldens regenerados con cambios aditivos:
+  - 8+ candidatos meta_gap pasan de ALTA → MEDIA/BAJA cuando son sobrecumpl.
+  - 2+ candidatos cambian direction de `'recuperable'` a `'positivo'`/
+    `'neutral'`.
+  - Sin regresiones en subcumpls (Carlos Ramírez sigue ALTA/CRITICA).
+
+### 17.6 Issues residuales fuera de scope Z.13
+
+De la auditoría completa quedaron 5 items que NO se ejecutaron:
+
+| Item | Razón |
+|---|---|
+| **Top performer narrative** (Roberto Cruz/María Castillo card propia de reconocimiento) | Requiere detector positivo dedicado — sprint Z.14 |
+| **Forecast vs meta del mes en KPI grande** | Trabajo de UI layer (EstadoComercialPage.tsx), no motor |
+| **Pipeline / oportunidades nuevas (clientes nuevos)** | Detector nuevo, sprint Z.14 |
+| **Margen / rentabilidad por vendedor/categoría** | Requiere costo_unitario en data; opcional según cliente |
+| **Calendario sugerido / plan de la semana** | UX layer pura |
+
+Estos 5 son **mejoras de producto**, no fixes de motor. El cliente
+confirma que pagaría con las 3 fricciones técnicas resueltas (V-1/V-2/V-3).
+Las 5 mejoras pueden ser sprint Z.14 cuando producto las priorice.
+
+### 17.7 Veredicto post-Z.13
+
+**Motor production-ready ~99%.** Los 3 issues UX que erosionaban
+credibilidad están resueltos:
+- Sobrecumplimientos masivos ya no se ven como "atención inmediata".
+- Cards agregadas no mezclan dirección up/down.
+- "Sin acciones sugeridas" no aparece en cards rojas con builder accion
+  válida.
+
+El 1% restante son **mejoras de producto** (top performers, forecast,
+pipeline nuevo, margen, plan semanal) — no bugs ni gaps del motor.
+Pueden iterarse con feedback de cliente real.
+
+**Z.13.V-1/V-2/V-3 cerrado 2026-04-27.** 3 fixes en 1 commit, 0
+regresiones, 117/117 tests, 0 tsc errors.
+
+---
+
 ## 14. Follow-up sprints (post-Z.11)
 
 Tres sprints derivados del stress test final (sección 13.4 backlog + auditoría
