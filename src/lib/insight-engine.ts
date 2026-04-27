@@ -6322,6 +6322,124 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
     }
   }
 
+  // [Z.12.V-3] Fallback agregado por vendedor.
+  //
+  // Stress test detectó que vendedores con cumplimiento extremo a nivel
+  // AGREGADO (Miguel Ángel Díaz, cumpl=68.7%) no surfacean cuando sus metas
+  // tienen combo dim filled (e.g., vendedor+canal): meta_gap_combo emite
+  // por combo, no por vendor agregado, así que cumpl-por-combo puede ser
+  // distinto al cumpl-agregado y no triggerear el threshold (<75 ó >130).
+  //
+  // Este builder lee vendorAnalysis (agregado canónico) y emite un meta_gap
+  // de granularidad vendedor cuando hay extremo y no fue cubierto por
+  // meta_gap_combo. cap del ranker (meta_gap:vendedor=2) limita el output.
+  _builderStats['meta_gap_aggregate_vendedor'] = { ms: 0, input: 0, output: 0 }
+  if (params.vendorAnalysis && params.vendorAnalysis.length > 0) {
+    const _t0_mgav = performance.now(); const _in_mgav = allCandidates.length
+    try {
+      // Members ya cubiertos por meta_gap_combo a granularidad vendedor.
+      const _coveredVendors = new Set<string>()
+      for (const c of allCandidates) {
+        if (c.insightTypeId === 'meta_gap' && c.dimensionId === 'vendedor' && c.member) {
+          _coveredVendors.add(c.member)
+        }
+      }
+
+      for (const v of params.vendorAnalysis) {
+        const cumplPct = v.cumplimiento_pct
+        if (typeof cumplPct !== 'number' || !Number.isFinite(cumplPct)) continue
+        if (_coveredVendors.has(v.vendedor)) continue
+        if (cumplPct >= 70 && cumplPct <= 130) continue   // no extremo
+
+        // direction + severity análogos a meta_gap_combo
+        const direction: 'up' | 'down' = cumplPct >= 100 ? 'up' : 'down'
+        const arrow = direction === 'up' ? '↑' : '↓'
+        const verbo = direction === 'up' ? 'sobrecumplió' : 'incumplió'
+        let severity: 'CRITICA' | 'ALTA' | 'MEDIA' | 'BAJA' = 'MEDIA'
+        if (cumplPct < 50)            severity = 'CRITICA'
+        else if (cumplPct < 70)       severity = 'ALTA'
+        else if (cumplPct > 150)      severity = 'ALTA'
+
+        // Score análogo: brechas grandes valen más; cap 0.95 para no dominar.
+        const offBy = Math.abs(100 - cumplPct)
+        const score = Math.min(0.95, 0.5 + (offBy / 100) * 0.5)
+
+        // Métricas para narrativa.
+        // ventas_periodo es USD si tipoMetaActivo='usd', uds si 'uds'.
+        // unidades_periodo siempre es uds. Para anchor USD en gate, usar ytd_actual_usd
+        // como proxy mensual (aproximación: ytd / mesesYTD); si no, ventas_periodo cuando uds.
+        const ventaActualUds = v.unidades_periodo ?? 0
+        const ventaActualPeriodo = v.ventas_periodo ?? 0
+        const ventaUsd = tipoMetaActivo === 'usd'
+          ? ventaActualPeriodo
+          : (typeof v.ytd_actual_usd === 'number' && v.ytd_actual_usd > 0
+              ? v.ytd_actual_usd / Math.max(1, month + 1)
+              : 0)
+
+        const ventaFmt = tipoMetaActivo === 'usd'
+          ? `$${Math.round(ventaActualPeriodo).toLocaleString('en-US')}`
+          : `${ventaActualUds.toLocaleString('en-US')} uds`
+
+        const title = `${arrow} ${v.vendedor}: ${cumplPct.toFixed(0)}% de meta`
+        const description =
+          `${v.vendedor} cierra el período con ${ventaFmt} (${cumplPct.toFixed(1)}% de meta). ` +
+          `${verbo} su meta agregada considerando todos sus canales y rutas. ` +
+          (typeof v.variacion_ytd_uds_pct === 'number' && Math.abs(v.variacion_ytd_uds_pct) >= 5
+            ? `Variación YTD: ${v.variacion_ytd_uds_pct > 0 ? '+' : ''}${v.variacion_ytd_uds_pct.toFixed(1)}%.`
+            : '')
+        const accion = direction === 'down'
+          ? `Plan de recuperación con ${v.vendedor}: revisar pipeline y compromisos del mes.`
+          : `Replicar el patrón de ${v.vendedor} en otras combinaciones similares.`
+
+        allCandidates.push({
+          _origin:       'special_builder',
+          metricId:      'cumplimiento_meta',
+          dimensionId:   'vendedor',
+          insightTypeId: 'meta_gap',
+          member:        v.vendedor,
+          score,
+          severity,
+          title,
+          description,
+          detail: {
+            cumplPct,
+            ventaActual:    ventaActualUds,
+            ventaUsd,
+            comparison:     'meta_aggregate_vendedor',
+            variacion_ytd:  v.variacion_ytd_uds_pct ?? null,
+            variacion_mom:  v.variacion_pct ?? null,
+            cross_context: { vendedor: v.vendedor },
+            // gap aproximado: si tipoMetaActivo='usd' usar ventaUsd como
+            // proxy USD del impacto (mismo criterio que meta_gap_combo uds-mode)
+            gap: 0,
+            tipoMetaActivo,
+          },
+          conclusion: title,
+          accion,
+          direction,
+          impacto_usd_normalizado: ventaUsd > 0 ? ventaUsd : null,
+          impacto_usd_source: ventaUsd > 0 ? 'gap_meta' : 'non_monetary',
+        })
+        _coveredVendors.add(v.vendedor)
+      }
+
+      _builderStats['meta_gap_aggregate_vendedor'] = {
+        ms: performance.now() - _t0_mgav,
+        input: _in_mgav,
+        output: allCandidates.length - _in_mgav,
+      }
+      if (import.meta.env.DEV) {
+        console.debug('[Z.12.V-3] meta_gap_aggregate_vendedor:', {
+          vendedores_evaluados: params.vendorAnalysis.length,
+          emitidos: allCandidates.length - _in_mgav,
+        })
+      }
+    } catch (e) {
+      _builderStats['meta_gap_aggregate_vendedor'] = { ms: 0, input: 0, output: 0 }
+      if (import.meta.env.DEV) console.warn('[Z.12.V-3] meta_gap_aggregate_vendedor fallback:', e)
+    }
+  }
+
   // [Z.13.3 + auto-combo] Detector cross_delta — descomposición combinatoria N-tupla.
   // Antes: 7 pares hardcodeados. Ahora: análisis previo de relaciones funcionales
   // entre dims (dim-relationships.ts) genera automáticamente todos los combos
@@ -6675,7 +6793,7 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
     // Resolución: split por dimensionId con caps acotados pero suficientes.
     // Lookup vía helper _capKey(c) en lugar de c.insightTypeId directo.
     ['meta_gap:categoria',  4],   // 4 categorías ≥extremas se ven todas
-    ['meta_gap:vendedor',   2],   // top-2 vendedores en cumplimiento extremo
+    ['meta_gap:vendedor',   3],   // [Z.12.V-3] top-3: cubre Carlos/Roberto + 1 más
     ['meta_gap:canal',      1],   // 1 canal extremo por run
     ['meta_gap:supervisor', 1],   // 1 supervisor extremo por run
     ['cross_delta',     2],   // auto-combo emite muchos; tomar top-2 por score
