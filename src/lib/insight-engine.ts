@@ -6661,11 +6661,27 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
     // desbalancear; el filtro del builder + score se encarga del resto.
     ['cliente_perdido', 1],   // 1 cliente perdido relevante por run típicamente
     ['cliente_dormido', 2],   // se nos pasó histórico, también merece caps
-    ['meta_gap',        2],   // emitido por meta_gap_combo (Phase C ingesta)
+    // [Z.12.V-1] meta_gap dim-aware: el cap único de 2 saturaba el slot con
+    // 1 categoría + 1 vendedor + 0 canal + 0 supervisor. En datasets con
+    // múltiples categorías de cumplimiento extremo (Los Pinos demo: 4
+    // categorías ≥290%) las 3 menos prioritarias por score quedaban
+    // invisibles — no es problema de gate (lo pasan), es del cap del ranker.
+    // Resolución: split por dimensionId con caps acotados pero suficientes.
+    // Lookup vía helper _capKey(c) en lugar de c.insightTypeId directo.
+    ['meta_gap:categoria',  4],   // 4 categorías ≥extremas se ven todas
+    ['meta_gap:vendedor',   2],   // top-2 vendedores en cumplimiento extremo
+    ['meta_gap:canal',      1],   // 1 canal extremo por run
+    ['meta_gap:supervisor', 1],   // 1 supervisor extremo por run
     ['cross_delta',     2],   // auto-combo emite muchos; tomar top-2 por score
     ['stock_excess',    1],   // ya estaba en EVENT_TYPES_EXEMPT pero sin cap
     ['co_decline',      1],   // cluster de productos en declive
   ])
+
+  // [Z.12.V-1] Helper de lookup. meta_gap usa clave compuesta type:dim para
+  // que cada dimensión tenga su propio cap. Otros tipos siguen con clave =
+  // insightTypeId solo.
+  const _capKey = (c: InsightCandidate): string =>
+    c.insightTypeId === 'meta_gap' ? `meta_gap:${c.dimensionId}` : c.insightTypeId
   const MIN_REGULAR_SLOTS = 6
   const RANKER_TOTAL_CAP  = 12
 
@@ -6673,12 +6689,14 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   _beginStage('ranker')
 
   // Agrupar candidates de tipos con cap upstream
+  // [Z.12.V-1] _capKey: para meta_gap usa "meta_gap:${dim}" para split por dim.
   const _byProtectedType = new Map<string, InsightCandidate[]>()
   for (const c of _allDedup) {
-    if (ALWAYS_PROTECTED_CAPS.has(c.insightTypeId)) {
-      const arr = _byProtectedType.get(c.insightTypeId) ?? []
+    const key = _capKey(c)
+    if (ALWAYS_PROTECTED_CAPS.has(key)) {
+      const arr = _byProtectedType.get(key) ?? []
       arr.push(c)
-      _byProtectedType.set(c.insightTypeId, arr)
+      _byProtectedType.set(key, arr)
     }
   }
 
@@ -6736,8 +6754,11 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   _protectedCands.sort((a, b) => b.score - a.score)
 
   // REGULAR = no-protegidos + overflow de protegidos
+  // [Z.12.V-1] _capKey: meta_gap usa "meta_gap:${dim}" — sin esto, cualquier
+  // candidate meta_gap caería al regular bucket (porque ALWAYS_PROTECTED_CAPS
+  // ya no tiene 'meta_gap' bare).
   const _regularCands = _allDedup
-    .filter(c => !ALWAYS_PROTECTED_CAPS.has(c.insightTypeId))
+    .filter(c => !ALWAYS_PROTECTED_CAPS.has(_capKey(c)))
     .concat(_overflowToRegular)
 
   // [PR-M7e] Normalización de score por métrica ANTES del sort + ranker.
@@ -7175,11 +7196,12 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   // preservando invariante protected-first. Mutación in-place para no romper
   // referencias externas al array.
   {
+    // [Z.12.V-1] _capKey: meta_gap usa clave compuesta type:dim.
     const _protectedSet = new Set(ALWAYS_PROTECTED_CAPS.keys())
     const _protectedBucket: InsightCandidate[] = []
     const _regularBucket: InsightCandidate[] = []
     for (const c of selected) {
-      if (_protectedSet.has(c.insightTypeId)) _protectedBucket.push(c)
+      if (_protectedSet.has(_capKey(c))) _protectedBucket.push(c)
       else _regularBucket.push(c)
     }
     // [Z.10.5b-fix2] sub-orden del bucket P por (hasUsd desc, rps desc).
