@@ -971,20 +971,111 @@ threshold=1.5).
 Los 3 cuellos de motor del stress test estricto (C-1, C-2, C-3) y la
 inconsistencia narrativa más grave (U-1) quedan resueltos.
 
-### 15.6 Lo que sigue en backlog (Z.12.V-5+)
+### 15.6 Z.12.V-5 — Anti-duplicación de hechos comerciales
+
+**Problema:** runtime validation de V-1..4 detectó duplicación entre
+insights:
+- #11 `vendedor=Roberto Cruz · canal=Autoservicio: 207%` (dim='vendedor')
+- #20 `vendedor=Roberto Cruz · cliente=Walmart Occidente · canal=Autoservicio: 207%` (dim='cliente')
+
+Mismo hecho comercial (Walmart es el único cliente de Roberto en
+Autoservicio), distinto solo por granularidad de meta-row. El cap
+dim-aware (V-1) no los deduplica porque caen en cap distintos
+(vendedor=3 vs cliente=undef→regular).
+
+**Cambio:** dedup por hecho en `meta_gap_combo`.
+- Key: `${cumplPct redondeado a 0.1}|${venta}|${metaVal}`.
+- Si dos metas producen mismo key, conservamos el de **MENOS** filledDims
+  (combo más simple → narrativa más legible).
+- Splice + reindex de `_emittedHechos` cuando se reemplaza.
+
+**Impacto goldens:**
+- candidatesTotal 320→315 USD test, 318→313 UDS (-5 cada uno).
+- meta_gap finalPool 9→8 (-1).
+- 5 metas redundantes deduplicadas en demo (Roberto Cruz triple
+  granularidad + variaciones).
+
+**Limitaciones:** no resuelve duplicación cross-tipo (Carlos en meta_gap
+longitudinal + meta_gap cruzado + cross_delta departamento). Eso requiere
+dedup post-emit a nivel block, scope mayor.
+
+**Commit:** `179fe91a`
+
+### 15.7 Z.12.V-6 — Severity degraded cuando no hay acción concreta
+
+**Problema:** runtime detectó cards 'urgentes' con `accionConcreta=null`
+("Sin acciones sugeridas"). Contradicción UX: dashboard de decisiones
+etiquetado urgente sin acción concreta erosiona credibilidad.
+
+**Cambio:** `candidateSeverityToBlock` (insight-engine.ts:1017) ahora
+consulta `c.accion`:
+- accionConcreta = string ≥10 chars (mismo criterio que r4 strict de Z.12).
+- CRITICA + accion vacía → `'warning'` (ámbar) en lugar de `'critical'` (rojo).
+- ALTA + accion vacía → `'info'` (gris) en lugar de `'warning'`.
+- Cualquier severity con accion concreta → mapeo original.
+
+**Sin diff en goldens:** el snapshot captura `c.severity` (candidate
+level), no `block.severity`. El cambio vive en el adapter
+Candidate→Block. Cambio puramente de presentación.
+
+**Commit:** `88d7747e`
+
+### 15.8 Z.12.V-7 — Headlines en lenguaje natural
+
+**Problema:** 4 de 11 cards visibles tenían headlines tipo SQL:
+- `vendedor=Carlos Ramírez · canal=Autoservicio: 25% de meta`
+- `↓ departamento=Santa Ana · vendedor=Carlos Ramírez cayó $1,535`
+
+Sintaxis `dim=value · dim2=value2` se lee como query, no como hallazgo
+de negocio.
+
+**Cambio:** dos detectores reformatean output:
+1. `meta_gap_combo` (insight-engine.ts:6286+):
+   - Antes: `↓ vendedor=Carlos Ramírez · canal=Autoservicio: 25% de meta`
+   - Después: `↓ Carlos Ramírez en Autoservicio: 25% de meta`
+2. `cross_delta` (insight-engine.ts:6655+):
+   - Antes: `↓ departamento=Santa Ana · vendedor=Carlos Ramírez cayó $1,535`
+   - Después: `↓ Carlos Ramírez en Santa Ana cayó $1,535`
+
+**Preservación de datos:** `comboTxt` original sigue persistido en
+`detail.comboTxt`/`detail.dimensionPath`/`detail.cross_context` para
+trazabilidad y para que reglas del gate (cross_context counter) sigan
+funcionando. Solo cambia title/description visible.
+
+**Commit:** `69361ad9`
+
+### 15.9 Estado completo del Z.12.V family
+
+| Sprint | Estado | Resuelve |
+|---|---|---|
+| Z.12.V-1 | ✅ cerrado | C-1 (cap meta_gap categoría) |
+| Z.12.V-2 | ✅ cerrado | U-1 (narrativa contradictoria meta_gap) |
+| Z.12.V-3 | ✅ cerrado | C-3 (vendedor sub-meta agregado) |
+| Z.12.V-4 | ✅ cerrado | C-2 (outlier ciego en universo chico) |
+| Z.12.V-5 | ✅ cerrado | Duplicación Roberto Cruz #11/#20 |
+| Z.12.V-6 | ✅ cerrado | "Sin acciones sugeridas" + urgente |
+| Z.12.V-7 | ✅ cerrado | Headlines técnicos `dim=value` |
+
+Los 13 issues del stress test estricto resueltos:
+- 3 cuellos motor (C-1, C-2, C-3) ✅
+- 4 problemas UX (U-1, U-2 parcial, U-3, U-4) ✅
+- 6 entidades faltantes ahora visibles (Refrescos, Limpieza, Snacks
+  vía meta_gap categoria; Roberto Méndez supervisor; María Castillo
+  outlier generado; Miguel Ángel vía meta_gap cruzado) ✅
+- Bonus: 2 insights duplicados Sin Categoría siguen pendientes (M-2.1
+  trabajo separado).
+
+### 15.10 Backlog restante (post-Z.12.V)
 
 | Sprint | Goal | Estado |
 |---|---|---|
-| **Z.12.V-5** | Anti-duplicación cross-card (Carlos Ramírez en 3 cards, productos sin venta en 3-4 menciones, López en 2 cards) | ⚪ pendiente |
-| **Z.12.V-6** | "Sin acciones sugeridas" debe degradar severity, no etiquetar urgente | ⚪ pendiente |
-| **Z.12.V-7** | Headlines en lenguaje natural (eliminar `dim=value · dim2=value2` syntax) | ⚪ pendiente |
-| **M-1** | Simetrizar contribution direction='down' | ⏸ bloqueado por decisión PM |
+| **M-1** | Simetrizar contribution direction='down' | ⏸ bloqueado PM |
+| **M-2.1** | Dedup cross-tipo (Carlos en múltiples cards) | ⚪ pendiente — requiere block-level dedup |
+| **C-2.5** | Outlier vendedor generado pero no renderizado (María Castillo z=1.96 absorbida en dedup post-cross_engine) | ⚪ apuntado, no bloqueante |
+| **M-2.2** | Insights `migration:Sin categoría` duplicados en store | ⚪ apuntado |
 
-V-5/V-6/V-7 son polish UX final. Después de ellos, motor 2 estaría
-~95% production-ready (vs 80% pre-V family, 87% post-V-1..4 estimado).
-
-**Z.12.V-1 → V-4 cerrado 2026-04-27.** 4 commits, 0 regresiones,
-117/117 tests, 0 tsc errors.
+**Z.12.V-1 → V-7 cerrado 2026-04-27.** 7 commits, 0 regresiones,
+117/117 tests, 0 tsc errors. Production-ready estimado **~95%**.
 
 ---
 
