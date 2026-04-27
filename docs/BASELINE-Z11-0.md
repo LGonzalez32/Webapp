@@ -598,3 +598,107 @@ Con Z.11.2 cerrado, el roadmap Z.11 queda:
 
 **Z.11.2 cerrado 2026-04-27. Tests 105/105, tsc 0 errors.**
 
+---
+
+## 10. Z.11.3 — Política tipos terminales aislados (2026-04-27)
+
+### 10.1 Problema documentado en Z.11.2
+
+Z.11.2 dejó pass rate Z.11 en 87% (techo natural). Pero Z.12 seguía con 6
+supresiones, 3 de ellas accionables y suprimidas por una asimetría
+estructural:
+
+- `cliente_perdido` Tienda El Progreso ($819, 1.99%, cross=0): muere por
+  `materiality + pareto` — apenas debajo del 2% floor + bloqueo Pareto.
+- `cliente_dormido` Supermercado López ($1633, 3.98%, cross=0): muere por
+  `pareto + narrativeCoherence` — pareto bloqueado, narrative requería acción
+  concreta.
+- (Roberto Méndez contribution + 3 trend/outlier legítimas son trabajo
+  separado.)
+
+Las dos primeras son tipos **terminales por construcción**: la entidad
+protagonista (el cliente) ES la señal completa. No hay dimensiones cruzables
+naturales. El `Z12_ROOT_STRONG_TYPES` rescue requería `crossCount >= 2`,
+diseño hecho para tipos como `cross_delta` o `meta_gap_combo` que son
+multi-dim por naturaleza.
+
+### 10.2 Solución aplicada
+
+Nueva constante `Z12_TERMINAL_TYPES` en insightStandard.ts:2589-2592:
+
+```ts
+const Z12_TERMINAL_TYPES = new Set([
+  'cliente_perdido',
+  'cliente_dormido',
+])
+```
+
+`isRootStrong` modificado en `evaluateInsightCandidate` (línea 2706-2711):
+
+```ts
+const isRootStrong =
+  Z12_ROOT_STRONG_TYPES.has(c.insightTypeId) && (
+    ctx.crossCount >= 2 ||
+    Z12_TERMINAL_TYPES.has(c.insightTypeId)   // [Z.11.3] terminales saltan cross req
+  )
+```
+
+Sin cambios en r1/r2/r3/r4. Solo se relaja el qualifying condition de
+isRootStrong para tipos terminales. Side effect intencional:
+
+- r1 (materiality): tercera rama (`isRootStrong`) ahora deja pasar terminales
+  con USD < 1% del negocio. Riesgo controlado por:
+  - Detector ya filtra por `recovery_label`/`umbralDias` antes del gate.
+  - `ALWAYS_PROTECTED_CAPS`: cliente_perdido cap=1, cliente_dormido cap=2.
+- r2 (pareto): isRootStrong ahora rescata terminales con cross=0.
+- r3 (monetaryCoherence): inocuo para terminales — Z.11.2 ya garantiza
+  source='recuperable' valida.
+
+### 10.3 Archivos modificados
+
+- `src/lib/insightStandard.ts:2589-2592` — nueva constante `Z12_TERMINAL_TYPES`.
+- `src/lib/insightStandard.ts:2706-2711` — isRootStrong extendido.
+- 6 snapshots regenerados (cambios aditivos: 2 supervivientes nuevos en USD test, 2 en UDS test, contadores derivados).
+
+### 10.4 Impacto medido en goldens
+
+| Métrica         | Z.11.2 → Z.11.3 (USD test) | Z.11.2 → Z.11.3 (UDS test) |
+|-----------------|---------------------------:|---------------------------:|
+| `gatePassCount` | 16 → **18** (+2)           | 14 → **16** (+2)           |
+| `gateFailCount` | 4 → **2** (-2)             | 6 → **4** (-2)             |
+| Tipos rescatados | cliente_perdido + cliente_dormido | idem                  |
+
+### 10.5 Validación
+
+- `npx tsc --noEmit`: 0 errores.
+- `npx vitest run`: 105/105 passing. 6 goldens regenerados (cambios aditivos).
+- Sin regresiones: todos los candidatos pre-existentes mantienen su estado
+  pasa/falla (excepto los 2 nuevos terminales).
+
+### 10.6 Pass rate Z.12 proyectado runtime
+
+Pre-Z.11.3: Z.12 surviving 14, suppressed 6 (66% pass).
+Post-Z.11.3: Z.12 surviving 16, suppressed 4 (80% pass).
+
+Las 4 supresiones residuales son **legítimas y NO son trabajo de Z.11.3**:
+- `Roberto Méndez` (contribution) — caso aparte, no terminal. Backlog.
+- `outlier Supermercado Nacional` $310 (0.76%) — USD chico, ruido válido.
+- `trend Pulpería San José` $174 (0.42%) — idem.
+- `trend Mayoreo Santa Ana` $177 (0.43%) — idem.
+
+### 10.7 Estado del roadmap
+
+Z.11 sprint family casi cerrado:
+
+| Sprint | Estado | Entregable |
+|---|---|---|
+| Z.11.0 | ✅ cerrado | Baseline forense |
+| Z.11.1 | ✅ cerrado | 3 fixes de gate |
+| Z.11.2 | ✅ cerrado | Formula USD para meta_gap |
+| Z.11.3 | ✅ cerrado | Política tipos terminales |
+| Z.11.4 | ✅ cerrado | Single source of truth motor 2 |
+| Z.11.5 | ⚪ pendiente | Reconciliar listas non_monetary |
+| Z.11.6 | ⚪ apuntado | Cap adapter para meta_gap:categoria multi-miembro |
+
+**Z.11.3 cerrado 2026-04-27. Tests 105/105, tsc 0 errors.**
+

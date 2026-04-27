@@ -2592,6 +2592,20 @@ const Z12_ROOT_STRONG_TYPES: ReadonlySet<string> = new Set([
   'cross_delta',      // auto-combo dim×dim×... con cross_context completo
 ])
 
+// [Z.11.3] Tipos terminales por construcción: la entidad protagonista es la
+// señal completa, sin dimensiones cruzables (cliente perdido = el cliente
+// mismo). Para estos, el gate root-strong NO requiere crossCount >= 2
+// porque cross=0 es el valor esperado, no una deficiencia narrativa.
+//
+// Antes de Z.11.3: cliente_dormido López ($1633, 4% del negocio) y
+// cliente_perdido Tienda El Progreso ($819, 2%) morían en Z.12 por r2 (Pareto)
+// + r4 (narrative) porque cross=0 bloqueaba el rescate root-strong, aunque
+// USD era materialmente significativo y la narrativa interna era concreta.
+const Z12_TERMINAL_TYPES: ReadonlySet<string> = new Set([
+  'cliente_perdido',
+  'cliente_dormido',
+])
+
 // [Z.12] Sources de impacto_usd_normalizado considerados monetariamente coherentes.
 // `non_monetary` y `unavailable` quedan fuera por diseño.
 const Z12_VALID_USD_SOURCES: ReadonlySet<string> = new Set([
@@ -2696,7 +2710,14 @@ export function evaluateInsightCandidate(
   const floorAbsAlto = ventaTotal * MATERIALITY_FLOOR_EXECUTIVE             // 2%
   const floorAbsBajo = ventaTotal * (MATERIALITY_FLOOR_EXECUTIVE / 2)       // 1%
 
-  const isRootStrong = Z12_ROOT_STRONG_TYPES.has(c.insightTypeId) && ctx.crossCount >= 2
+  // [Z.11.3] Tipos terminales (cliente_perdido/cliente_dormido) saltan el
+  // requisito cross>=2 porque son single-entity por construcción. Otros tipos
+  // root-strong siguen requiriendo cross>=2 para activar el rescue.
+  const isRootStrong =
+    Z12_ROOT_STRONG_TYPES.has(c.insightTypeId) && (
+      ctx.crossCount >= 2 ||
+      Z12_TERMINAL_TYPES.has(c.insightTypeId)
+    )
   const esParetoReal = !!c.member && esEntidadPareto(c.member, ctx.paretoList)
 
   // Regla 1 — materialidad bi-nivel

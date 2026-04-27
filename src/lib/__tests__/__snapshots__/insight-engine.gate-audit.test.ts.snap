@@ -10,41 +10,6 @@ exports[`insight-engine gate failure audit (demo dataset, Fase 7.2) > UDS: rule-
   },
   "failingItems": [
     {
-      "accion": "Decidir cierre de cuenta o intento final de recuperación con Tienda El Progreso.",
-      "description": "Tienda El Progreso lleva 55 días sin comprar (compraba cada 1 días). Aportaba $819 históricamente. Decidir entre cierre de cuenta o último intento de recuperación antes de seguir …",
-      "dimensionId": "cliente",
-      "failedRules": [
-        "pareto",
-      ],
-      "impactoUsdRounded": 819,
-      "impactoUsdSource": "recuperable",
-      "insightTypeId": "cliente_perdido",
-      "member": "Tienda El Progreso",
-      "metricId": "dias_sin_compra",
-      "rank": 6,
-      "scoreRounded": 0.95,
-      "severity": "CRITICA",
-      "title": "✗ Tienda El Progreso — probablemente perdido",
-    },
-    {
-      "accion": null,
-      "description": "Supermercado López no compra hace 55 días (umbral actual: 45). Aportaba $1,633 en abril 2025.",
-      "dimensionId": "cliente",
-      "failedRules": [
-        "pareto",
-        "narrativeCoherence",
-      ],
-      "impactoUsdRounded": 1633,
-      "impactoUsdSource": "recuperable",
-      "insightTypeId": "cliente_dormido",
-      "member": "Supermercado López",
-      "metricId": "dias_sin_compra",
-      "rank": 11,
-      "scoreRounded": 0.75,
-      "severity": "MEDIA",
-      "title": "↓ Supermercado López — sin compras hace 55 días",
-    },
-    {
       "accion": "Contactar a Mercado Central para entender la caída de frecuencia — confirmar si es estacional o requiere atención comercial.",
       "description": "Mercado Central tiene una frecuencia de compra de 13.00, 2.8σ por debajo del promedio del grupo (19.75). Cliente atendido por Ana González en Ahuachapán.",
       "dimensionId": "cliente",
@@ -118,12 +83,6 @@ exports[`insight-engine gate failure audit (demo dataset, Fase 7.2) > UDS: rule-
     },
   ],
   "failsByMetricAndRule": {
-    "dias_sin_compra": {
-      "materiality": 0,
-      "monetaryCoherence": 0,
-      "narrativeCoherence": 1,
-      "pareto": 2,
-    },
     "frecuencia_compra": {
       "materiality": 1,
       "monetaryCoherence": 0,
@@ -146,26 +105,14 @@ exports[`insight-engine gate failure audit (demo dataset, Fase 7.2) > UDS: rule-
   "failsByRule": {
     "materiality": 3,
     "monetaryCoherence": 0,
-    "narrativeCoherence": 4,
-    "pareto": 4,
+    "narrativeCoherence": 3,
+    "pareto": 2,
   },
   "failsByTypeAndRule": {
     "change": {
       "materiality": 1,
       "monetaryCoherence": 0,
       "narrativeCoherence": 1,
-      "pareto": 1,
-    },
-    "cliente_dormido": {
-      "materiality": 0,
-      "monetaryCoherence": 0,
-      "narrativeCoherence": 1,
-      "pareto": 1,
-    },
-    "cliente_perdido": {
-      "materiality": 0,
-      "monetaryCoherence": 0,
-      "narrativeCoherence": 0,
       "pareto": 1,
     },
     "contribution": {
@@ -187,8 +134,8 @@ exports[`insight-engine gate failure audit (demo dataset, Fase 7.2) > UDS: rule-
       "pareto": 0,
     },
   },
-  "gateFailCount": 6,
-  "gatePassCount": 14,
+  "gateFailCount": 4,
+  "gatePassCount": 16,
   "gateRescuedByContributionUpException": 0,
   "onlyMonetaryCoherenceFails": {
     "items": [],
@@ -231,41 +178,6 @@ exports[`insight-engine gate failure audit (demo dataset, Fase 7.2) > USD: rule-
   },
   "failingItems": [
     {
-      "accion": "Decidir cierre de cuenta o intento final de recuperación con Tienda El Progreso.",
-      "description": "Tienda El Progreso lleva 55 días sin comprar (compraba cada 1 días). Aportaba $819 históricamente. Decidir entre cierre de cuenta o último intento de recuperación antes de seguir …",
-      "dimensionId": "cliente",
-      "failedRules": [
-        "pareto",
-      ],
-      "impactoUsdRounded": 819,
-      "impactoUsdSource": "recuperable",
-      "insightTypeId": "cliente_perdido",
-      "member": "Tienda El Progreso",
-      "metricId": "dias_sin_compra",
-      "rank": 8,
-      "scoreRounded": 0.95,
-      "severity": "CRITICA",
-      "title": "✗ Tienda El Progreso — probablemente perdido",
-    },
-    {
-      "accion": null,
-      "description": "Supermercado López no compra hace 55 días (umbral actual: 45). Aportaba $1,633 en abril 2025.",
-      "dimensionId": "cliente",
-      "failedRules": [
-        "pareto",
-        "narrativeCoherence",
-      ],
-      "impactoUsdRounded": 1633,
-      "impactoUsdSource": "recuperable",
-      "insightTypeId": "cliente_dormido",
-      "member": "Supermercado López",
-      "metricId": "dias_sin_compra",
-      "rank": 13,
-      "scoreRounded": 0.75,
-      "severity": "MEDIA",
-      "title": "↓ Supermercado López — sin compras hace 55 días",
-    },
-    {
       "accion": "Contactar a Mercado Central para entender la caída de frecuencia — confirmar si es estacional o requiere atención comercial.",
       "description": "Mercado Central tiene una frecuencia de compra de 13.00, 2.8σ por debajo del promedio del grupo (19.75). Cliente atendido por Ana González en Ahuachapán.",
       "dimensionId": "cliente",
@@ -303,12 +215,6 @@ exports[`insight-engine gate failure audit (demo dataset, Fase 7.2) > USD: rule-
     },
   ],
   "failsByMetricAndRule": {
-    "dias_sin_compra": {
-      "materiality": 0,
-      "monetaryCoherence": 0,
-      "narrativeCoherence": 1,
-      "pareto": 2,
-    },
     "frecuencia_compra": {
       "materiality": 1,
       "monetaryCoherence": 0,
@@ -325,22 +231,10 @@ exports[`insight-engine gate failure audit (demo dataset, Fase 7.2) > USD: rule-
   "failsByRule": {
     "materiality": 2,
     "monetaryCoherence": 0,
-    "narrativeCoherence": 2,
-    "pareto": 3,
+    "narrativeCoherence": 1,
+    "pareto": 1,
   },
   "failsByTypeAndRule": {
-    "cliente_dormido": {
-      "materiality": 0,
-      "monetaryCoherence": 0,
-      "narrativeCoherence": 1,
-      "pareto": 1,
-    },
-    "cliente_perdido": {
-      "materiality": 0,
-      "monetaryCoherence": 0,
-      "narrativeCoherence": 0,
-      "pareto": 1,
-    },
     "contribution": {
       "materiality": 1,
       "monetaryCoherence": 0,
@@ -354,8 +248,8 @@ exports[`insight-engine gate failure audit (demo dataset, Fase 7.2) > USD: rule-
       "pareto": 0,
     },
   },
-  "gateFailCount": 4,
-  "gatePassCount": 16,
+  "gateFailCount": 2,
+  "gatePassCount": 18,
   "gateRescuedByContributionUpException": 0,
   "onlyMonetaryCoherenceFails": {
     "items": [],
