@@ -115,6 +115,8 @@ import {
   evaluateInsightCandidate,
   resolveImpactoUsd,
   type InsightGateDecision,
+  // [Z.11.5] Fuente única para métricas no-monetarias (count, ratio, pct).
+  NON_MONETARY_METRIC_IDS,
 } from './insightStandard'
 import { getAgregadosParaFiltro, type AgregadosFiltro } from './domain-aggregations' // [Z.4 — perf: cuello-2]
 import {
@@ -3084,26 +3086,12 @@ export function buildRichBlocksFromInsights( // [Z.4 — perf: cuello-3] exporta
 // buildContextUniversal (ese path discarda bullets con términos "σ/outlier/...").
 const EVENT_TYPES_EXEMPT = new Set(['stock_risk', 'stock_excess', 'migration', 'co_decline', 'product_dead', 'seasonality', 'outlier', 'change_point', 'steady_share', 'correlation', 'meta_gap_temporal'])
 
-// [PR-0] Métricas no monetarias: se muestran en el ranking pero no suman al totalImpact del header.
-const NON_MONETARY_METRIC_IDS = new Set([
-  'num_transacciones', 'ticket_promedio', 'cumplimiento_meta', 'pct_participacion',
-  // [PR-M5c] num_clientes_activos: cobertura de cartera, no USD. Evita que [PR0b]
-  // breakdown registre contribuye_al_total=true con impact=0 (ruido informativo).
-  'num_clientes_activos',
-  // [PR-M5d] precio_unitario: ratio USD/unidad, no monto absoluto. toUSD() ya lo
-  // trata como no-monetario (fallthrough → 0). Flag NON_MONETARY alinea cosmética
-  // en [PR0b]: razon='non_monetary' en vez de "contribuye=true con impact=0".
-  'precio_unitario',
-  // [PR-M6.A.2] frecuencia_compra: ratio count/cliente, no USD. Deuda técnica
-  // heredada de M5c — toUSD() fallthrough → 0 pero el flag NON_MONETARY no estaba
-  // seteado, dejando [PR0b] breakdown inconsistente vs num_clientes_activos y
-  // precio_unitario. Consistencia semántica total-safe (0 impacto en totalImpact).
-  'frecuencia_compra',
-  // [PR-M7h] ventas_por_cliente: ratio USD/cliente, no monto absoluto.
-  // toUSD() default → 0 para outlier (no monetizable). Flag alinea cosmética
-  // con los otros ratios (frecuencia_compra, ticket_promedio, precio_unitario).
-  'ventas_por_cliente',
-])
+// [Z.11.5] NON_MONETARY_METRIC_IDS importado de insightStandard.ts como fuente
+// única. Antes existía aquí una copia que faltaba `skus_activos` y `margen_pct`,
+// causando que el flag `non_monetary` en DiagnosticBlock y el isMonetary check
+// en computeRecuperableFromCandidate divergieran del gate Z.12. La lista
+// canónica vive ahora junto al gate (donde se decide pareto-skip y branch
+// non_monetary del resolver).
 
 // [Z.10.5b] Parámetros de composición del ranker ejecutivo por impacto económico.
 // impactoFactor = 1 + WEIGHT * log1p(usd / REFERENCIA)

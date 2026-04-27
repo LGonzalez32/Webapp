@@ -2534,7 +2534,7 @@ export interface InsightGateCandidate {
   score?:        number
   severity?:     'CRITICA' | 'ALTA' | 'MEDIA' | 'BAJA'
   // [Sprint D / Visibility] metricId habilita Pareto-skip para candidatos
-  // no-monetarios. Si está en Z12_NON_MONETARY_METRIC_IDS, r2 (Pareto) se
+  // no-monetarios. Si está en NON_MONETARY_METRIC_IDS, r2 (Pareto) se
   // skipea — la lista Pareto USD no aplica a métricas count/ratio.
   metricId?: string
 }
@@ -2621,9 +2621,10 @@ const Z12_VALID_USD_SOURCES: ReadonlySet<string> = new Set([
 // [Sprint D / Visibility] Métricas cuya señal NO es monetaria (count, ratio,
 // pct sin volumen). Para estas, r2 Pareto USD no aplica — la lista Pareto
 // USD no representa "lo que importa" cuando la métrica es count o ratio.
-// Espejo intencional de NON_MONETARY_METRIC_IDS en insight-engine.ts pero
-// declarado acá para evitar dependencia circular.
-const Z12_NON_MONETARY_METRIC_IDS: ReadonlySet<string> = new Set([
+// [Z.11.5] Fuente única exportada. Antes existía una copia en
+// insight-engine.ts (mismo nombre) que divergía: faltaban skus_activos y
+// margen_pct. La copia se eliminó; el motor importa esta misma constante.
+export const NON_MONETARY_METRIC_IDS: ReadonlySet<string> = new Set([
   'num_transacciones',
   'ticket_promedio',
   'cumplimiento_meta',
@@ -2654,7 +2655,7 @@ export function resolveImpactoUsd(
   if (crossVarAbs != null) return { usd: crossVarAbs, source: 'cross_varAbs' }
 
   const recuperable = finiteNonZero(c.impacto_recuperable)
-  if (recuperable != null && !Z12_NON_MONETARY_METRIC_IDS.has(c.metricId)) {
+  if (recuperable != null && !NON_MONETARY_METRIC_IDS.has(c.metricId)) {
     return { usd: recuperable, source: 'recuperable' }
   }
 
@@ -2677,7 +2678,7 @@ export function resolveImpactoUsd(
   const totalCaida = finiteNonZero(detail.totalCaida)
   if (totalCaida != null) return { usd: totalCaida, source: 'detail_totalCaida' }
 
-  if (Z12_NON_MONETARY_METRIC_IDS.has(c.metricId)) {
+  if (NON_MONETARY_METRIC_IDS.has(c.metricId)) {
     return { usd: null, source: 'non_monetary' }
   }
 
@@ -2731,7 +2732,7 @@ export function evaluateInsightCandidate(
 
   // Regla 2 — Pareto real del negocio. Si paretoList vacía, no bloqueamos.
   // [Sprint D / D2.a] Pareto-skip para candidatos no-monetarios: si la
-  // métrica del candidato es count/ratio (Z12_NON_MONETARY_METRIC_IDS) o
+  // métrica del candidato es count/ratio (NON_MONETARY_METRIC_IDS) o
   // su source es marcado 'non_monetary' por el builder, r2 no aplica
   // — la lista Pareto se computa desde venta USD y no representa "lo que
   // importa" para señales no-monetarias. Sin esto, skus_activos /
@@ -2739,7 +2740,7 @@ export function evaluateInsightCandidate(
   // razón semántica.
   const isNonMonetary =
     c.impacto_usd_source === 'non_monetary' ||
-    (typeof c.metricId === 'string' && Z12_NON_MONETARY_METRIC_IDS.has(c.metricId))
+    (typeof c.metricId === 'string' && NON_MONETARY_METRIC_IDS.has(c.metricId))
   // [Z.11.1] Rescue por materialidad alta: candidatos con USD ≥ 10% del
   // negocio pasan Pareto sin importar lista top ni cross. Magnitud
   // absoluta es razón ejecutiva suficiente. Caso emblemático: stock_risk

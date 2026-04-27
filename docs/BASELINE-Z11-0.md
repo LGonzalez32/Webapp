@@ -702,3 +702,161 @@ Z.11 sprint family casi cerrado:
 
 **Z.11.3 cerrado 2026-04-27. Tests 105/105, tsc 0 errors.**
 
+---
+
+## 11. Z.11.5 — Reconciliación de listas no-monetarias (2026-04-27)
+
+### 11.1 Problema documentado en Z.11.0
+
+Sección 2.1 detectó dos copias divergentes de la misma lista:
+
+| Lista                          | Archivo                       | Línea | Entradas |
+|--------------------------------|-------------------------------|------:|---------:|
+| `NON_MONETARY_METRIC_IDS`      | `src/lib/insight-engine.ts`   | 3088  | 8        |
+| `Z12_NON_MONETARY_METRIC_IDS`  | `src/lib/insightStandard.ts`  | 2597  | 10       |
+
+La copia de standard tenía dos entradas extra (`skus_activos`, `margen_pct`)
+que la del engine no contemplaba. Riesgo: candidatos con esas métricas
+recibirían `non_monetary: false` en DiagnosticBlock y pasarían el check
+`isMonetary` en `computeRecuperableFromCandidate`, mientras que el gate
+Z.12 los trataría como no-monetarios. Inconsistencia de semántica.
+
+### 11.2 Solución aplicada
+
+Una sola fuente:
+- `Z12_NON_MONETARY_METRIC_IDS` renombrado a `NON_MONETARY_METRIC_IDS` y
+  exportado desde `insightStandard.ts:2604`. Internamente se actualizaron
+  5 referencias.
+- La copia local en `insight-engine.ts:3088` se eliminó. El motor importa
+  la lista canónica desde standard (mismo módulo del que ya importaba
+  `resolveImpactoUsd`, `evaluateInsightCandidate`, etc.).
+
+### 11.3 Archivos modificados
+
+- `src/lib/insightStandard.ts`: rename + export + comment update.
+- `src/lib/insight-engine.ts`: import añadido, 19 líneas eliminadas (lista local).
+
+### 11.4 Validación
+
+- `npx tsc --noEmit`: 0 errores.
+- `npx vitest run`: 105/105 passing **sin regenerar snapshots**. Cambio
+  invariante en este dataset porque ningún detector emite
+  `skus_activos`/`margen_pct` en Los Pinos demo. La unificación es
+  preventiva: cualquier detector futuro que use esas métricas se comportará
+  consistentemente entre engine y gate.
+
+### 11.5 Riesgo neutralizado
+
+- Antes: si alguien agregaba un detector con `metricId='skus_activos'`, el
+  motor lo trataría como monetario, el gate como no-monetario. Side effects
+  inconsistentes en `non_monetary` flag, recuperable computation, pareto skip.
+- Después: comportamiento garantizado consistente. Nuevas métricas no-monetarias
+  se agregan en un solo lugar.
+
+**Z.11.5 cerrado 2026-04-27. Tests 105/105, tsc 0 errors.**
+
+---
+
+## 12. Z.11.6 — Cap adapter para meta_gap:categoria (decisión: NO change)
+
+### 12.1 Observación durante validación Z.11.2
+
+3 candidatos `meta_gap` de dimensión `categoria` (Lácteos, Limpieza, Refrescos)
+sobrevivieron el gate, pero solo Lácteos llegó al feed visible. Los otros 2
+quedaron mencionados en la narrativa ejecutiva pero sin card propia.
+
+### 12.2 Análisis
+
+El comportamiento es producto de:
+- `ALWAYS_PROTECTED_CAPS.meta_gap = 2` (insight-engine.ts:6670).
+- Ranker selecciona top-2 por `render_priority_score`.
+- En el dataset, 4 candidatos `meta_gap` compiten por 2 slots:
+  Lácteos (709% sobrecumpl., score 0.95), Roberto Cruz (207%, score 0.95),
+  Limpieza, Refrescos. Los 2 últimos pierden el cap por lower score.
+
+### 12.3 Decisión: no cambiar
+
+El cap es UX-correct, no un bug:
+- Saturar el feed con 4 cards de `meta_gap` redundaría señal.
+- La narrativa ejecutiva ya levanta Limpieza/Refrescos como contexto
+  ("A nivel de categorías, Limpieza lidera el avance (+13.6%) mientras
+  Snacks y Refrescos son las más afectadas").
+- Cambiar el cap requeriría decisión de producto: ¿1 card grupal con
+  bullets? ¿5 individuales? ¿agrupar por dirección up/down? Sin esa
+  decisión, mover el dial es prematuro.
+
+### 12.4 Cierre
+
+Z.11.6 queda **cerrado por decisión** — no requiere código. Cualquier
+ajuste futuro vive como sprint de UX/producto, no de motor.
+
+---
+
+## 13. Cierre del Z.11 sprint family (2026-04-27)
+
+### 13.1 Recorrido cuantitativo
+
+| Sprint | Pass rate Z.11 | Pass rate Z.12 | store.insights | Cards |
+|--------|---------------:|---------------:|---------------:|------:|
+| Z.11.0 baseline | 69.6% | 56.3% | 8 | 6 |
+| Z.11.1 | 73.9% | 64.7% | 10 | 7 |
+| Z.11.2 | **87.0%** | 70.0% | 11 | 7 |
+| Z.11.3 | 86.96% | **80.0%** | **13** | **9** |
+| Z.11.4 | (refactor — sin cambio funcional) |
+| Z.11.5 | (preventivo — sin cambio runtime) |
+
+**Trayectoria total:** +17 pp Z.11, +24 pp Z.12, +5 cards visibles, +3
+protagonistas únicos. Cero regresiones detectadas en runtime ni en goldens.
+
+### 13.2 Estado arquitectónico
+
+- ✅ `resolveImpactoUsd` es la única función que asigna `impacto_usd_*`
+  en motor 2 (Z.11.1).
+- ✅ `Z11_ROOT_STRONG_TYPES` y `Z12_ROOT_STRONG_TYPES` reconciliados —
+  divergencia eliminada (Z.11.1).
+- ✅ `NON_MONETARY_METRIC_IDS` es una sola constante exportada desde
+  insightStandard.ts (Z.11.5).
+- ✅ Motor 2 corre 1 vez en default path — eliminado el doble runtime
+  worker/page-side (Z.11.4).
+- ✅ `tipo-debil` confirmado como derivado, no blacklist formal (Z.11.0).
+- ✅ Tipos terminales (cliente_perdido, cliente_dormido) tienen política
+  explícita de rescate por construcción single-entity (Z.11.3).
+
+### 13.3 Supresiones residuales legítimas
+
+7 candidatos siguen siendo suprimidos con razones legítimas:
+
+| Stage | Tipo / member               | USD / %      | Razón |
+|-------|----------------------------|-------------:|-------|
+| Z.11  | `change_point` Snacks      | $8 / 0.02%   | usd-trivial |
+| Z.11  | `change_point` Miguel Á. D.| $7 / 0.02%   | usd-trivial |
+| Z.11  | `contribution` Autoservicio| $75 / 0.18%  | usd-medio + cross-pobre |
+| Z.12  | `contribution` R. Méndez   | $1321 / 3.2% | pareto + narrative (no terminal) |
+| Z.12  | `outlier` S. Nacional      | $310 / 0.76% | materiality |
+| Z.12  | `trend` Pulpería S. José   | $174 / 0.4%  | materiality + narrative |
+| Z.12  | `trend` Mayoreo S. Ana     | $177 / 0.4%  | materiality + narrative |
+
+Todas con USD pequeño o narrativa pobre real. El motor descarta correctamente.
+
+### 13.4 Backlog que sobrevive el sprint family
+
+- **Backlog M-1** — Roberto Méndez contribution case. No es terminal, no es
+  Pareto, $1321 (3.2%) en negocios chicos puede ser señal real. Si surge
+  necesidad, considerar excepción narrativa para contribution con cross<2 +
+  USD entre 1-5%.
+- **Backlog M-2** — `cliente_dormido` UX: hoy el card de "Caída en
+  vendedores" ya menciona a Supermercado López como causa raíz, y Z.11.3
+  agrega card propia. Decidir si dedup cross-card es deseable.
+- **Backlog M-3** — `meta_gap:categoria` cap (Z.11.6 deferido). Decisión de
+  producto sobre experiencia de cards agregadas vs individuales.
+- **Z.11.0 sec 6** — refactor más amplio: si `resolveImpactoUsd` debería
+  consolidarse aún más (las dos copias divergentes del resolver inline ya
+  están unificadas en Z.11.1, pero sigue habiendo lógica USD distribuida en
+  builders). Bajo prioridad.
+
+### 13.5 Sprint family cerrado
+
+**Z.11.0 → Z.11.5 cerrado 2026-04-27.** 8 commits aplicados, 0 regresiones,
+105/105 tests, 0 tsc errors. Cualquier sprint posterior arranca sobre esta
+baseline.
+
