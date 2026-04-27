@@ -1911,8 +1911,18 @@ export function calcularImpactoValor(
       return null
     }
     case 'outlier': {
-      // |value - mean| como desviación de un período
-      const val = n('value'); const mean = n('mean')
+      // [Z.12.C-2.5] El detector emite `detail.valor` (no 'value') y
+      // `detail.impact` = |value - mean| pre-computado. Cuando is_monetary
+      // = true, impact es USD directo. Antes leíamos 'value' (inexistente)
+      // y devolvíamos null → caía a 'unavailable' en el resolver → Z.11
+      // suprimía con sin-usd. Caso emblemático: María Castillo (outlier
+      // venta_usd post-Z.12.V-4 con threshold adaptativo) era invisible.
+      const imp = n('impact')
+      if (imp != null && imp !== 0) return Math.abs(imp)
+      // Fallback al cálculo pre-V (por si algún detector futuro emite
+      // value+mean sin impact pre-computado).
+      const val = n('value') ?? n('valor')
+      const mean = n('mean')
       return (val != null && mean != null) ? val - mean : null
     }
     case 'seasonality': {
