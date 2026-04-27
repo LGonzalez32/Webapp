@@ -3362,7 +3362,46 @@ export function candidatesToDiagnosticBlocks(
   )
 
   // [Step A] Motor 2 candidates pasan sin filtrar — son la fuente principal post-roadmap.
-  const uncoveredCandidates = candidates
+  // [Z.12.M-2.1] Anti-duplicación cross-tipo: si un protagonista (member) ya aparece
+  // como headline en una card de tipo más rico (meta_gap, meta_gap_temporal,
+  // cliente_dormido/perdido, stock_*), suprimir cross_delta y proportion_shift
+  // que apunten al mismo protagonista. Razón: cross_delta es información
+  // suplementaria sobre territorio/canal — cuando el protagonista ya tiene
+  // narrativa rica en otra card, el cross_delta es saturación visual.
+  //
+  // Tipos "ricos" que claim al protagonista:
+  const _richTypes = new Set<string>([
+    'meta_gap', 'meta_gap_temporal',
+    'cliente_dormido', 'cliente_perdido',
+    'stock_risk', 'stock_excess',
+    'product_dead', 'co_decline', 'migration',
+  ])
+  const _claimedByRich = new Set<string>()
+  for (const c of candidates) {
+    if (_richTypes.has(c.insightTypeId) && c.member) {
+      _claimedByRich.add(c.member.toLowerCase().trim())
+    }
+  }
+  const uncoveredCandidates = candidates.filter(c => {
+    // Solo dedupar cross_delta y proportion_shift (los "tipos suplementarios")
+    if (c.insightTypeId !== 'cross_delta' && c.insightTypeId !== 'proportion_shift') {
+      return true
+    }
+    const memberKey = (c.member ?? '').toLowerCase().trim()
+    if (!memberKey) return true
+    // Si el protagonista ya está claimed por una card rica, omitir
+    if (_claimedByRich.has(memberKey)) return false
+    // También revisar entidades en cross_context (para cross_delta multi-dim)
+    const cc = (c.detail as Record<string, unknown> | undefined)?.cross_context
+    if (cc && typeof cc === 'object') {
+      for (const v of Object.values(cc as Record<string, unknown>)) {
+        if (typeof v === 'string' && _claimedByRich.has(v.toLowerCase().trim())) {
+          return false
+        }
+      }
+    }
+    return true
+  })
 
   // See top-of-file REGLA UNIVERSAL DE STORYTELLING + FASE 4B
   const usedEntities = new Set<string>()
