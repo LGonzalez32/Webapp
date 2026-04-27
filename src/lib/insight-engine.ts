@@ -6178,6 +6178,16 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
       let _emitidos = 0
       let _descartadosUmbral = 0
       let _sinDims = 0
+      // [Z.12.V-5] Dedup por hecho comercial. Si dos metas dan idéntica
+      // (cumplPct redondeado a 0.1, venta, metaVal), representan el MISMO
+      // hecho con distinta granularidad. Caso runtime confirmado: Roberto
+      // Cruz × Autoservicio (207%) y Roberto Cruz × Walmart Occidente ×
+      // Autoservicio (207%) — Walmart es el único cliente del canal, son
+      // semánticamente el mismo insight. Conservamos el de combo más simple
+      // (menos filledDims) para narrativa más legible.
+      const _dedupKey = (cumplPct: number, venta: number, metaVal: number) =>
+        `${Math.round(cumplPct * 10) / 10}|${Math.round(venta)}|${Math.round(metaVal)}`
+      const _emittedHechos = new Map<string, number>()  // key → idx en allCandidates
 
       for (const m of metasPeriodo) {
         // Detectar dims filled en este row
@@ -6221,6 +6231,28 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
         if (!isCriticalLow && !isOverPerf && offBy < 25) {
           _descartadosUmbral++
           continue
+        }
+
+        // [Z.12.V-5] Dedup hecho comercial. Si ya emitimos un candidate con la
+        // misma cumplPct/venta/metaVal, comparar combo: nos quedamos con el de
+        // MENOS filledDims (más legible). El más complejo se descarta.
+        const _dk = _dedupKey(cumplPct, venta, metaVal)
+        const _existingIdx = _emittedHechos.get(_dk)
+        if (_existingIdx != null) {
+          const _existing = allCandidates[_existingIdx]
+          const _existingFilled = (_existing.detail?.comboFields as Array<{key: string}> | undefined)?.length ?? 99
+          if (filledDims.length >= _existingFilled) {
+            // El nuevo es más complejo o igual — descartar.
+            _descartadosUmbral++
+            continue
+          }
+          // El nuevo es más simple — reemplazar el existente.
+          allCandidates.splice(_existingIdx, 1)
+          // Reindexar _emittedHechos: cualquier idx > _existingIdx baja en 1.
+          for (const [k, v] of _emittedHechos) {
+            if (v > _existingIdx) _emittedHechos.set(k, v - 1)
+          }
+          _emittedHechos.delete(_dk)
         }
 
         // Severity
@@ -6301,6 +6333,8 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
             : (ventaUsd > 0 ? ventaUsd : null),
           impacto_usd_source: (tipoMetaActivo === 'usd' || ventaUsd > 0) ? 'gap_meta' : 'non_monetary',
         })
+        // [Z.12.V-5] registrar el hecho recién emitido para dedup futuro.
+        _emittedHechos.set(_dk, allCandidates.length - 1)
         _emitidos++
       }
       _builderStats['meta_gap_combo'] = {

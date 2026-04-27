@@ -4,9 +4,27 @@ exports[`insight-engine gate failure audit (demo dataset, Fase 7.2) > UDS: rule-
 {
   "contributionPositiveAudit": {
     "failing": 0,
-    "items": [],
-    "passing": 0,
-    "totalSelectedContributionUp": 0,
+    "items": [
+      {
+        "accionPresent": false,
+        "dimensionId": "cliente",
+        "failedRules": [],
+        "impactoUsdRounded": 1712,
+        "impactoUsdSource": "cross_varAbs",
+        "meetsAllProposed": true,
+        "meetsImpactoMin1pct": true,
+        "meetsScore095": true,
+        "meetsSeverityHigh": true,
+        "member": "Walmart Occidente",
+        "metricId": "venta",
+        "passes": true,
+        "scoreRounded": 1,
+        "severity": "CRITICA",
+        "usdShareOfBusinessPct": 4.37,
+      },
+    ],
+    "passing": 1,
+    "totalSelectedContributionUp": 1,
   },
   "failingItems": [
     {
@@ -136,7 +154,7 @@ exports[`insight-engine gate failure audit (demo dataset, Fase 7.2) > UDS: rule-
   },
   "gateFailCount": 4,
   "gatePassCount": 21,
-  "gateRescuedByContributionUpException": 0,
+  "gateRescuedByContributionUpException": 1,
   "onlyMonetaryCoherenceFails": {
     "items": [],
     "total": 0,
@@ -189,7 +207,7 @@ exports[`insight-engine gate failure audit (demo dataset, Fase 7.2) > USD: rule-
       "insightTypeId": "meta_gap",
       "member": "Snacks",
       "metricId": "cumplimiento_meta",
-      "rank": 13,
+      "rank": 14,
       "scoreRounded": 0.95,
       "severity": "ALTA",
       "title": "↑ Snacks: 244% de meta",
@@ -206,7 +224,7 @@ exports[`insight-engine gate failure audit (demo dataset, Fase 7.2) > USD: rule-
       "insightTypeId": "outlier",
       "member": "Mercado Central",
       "metricId": "frecuencia_compra",
-      "rank": 18,
+      "rank": 19,
       "scoreRounded": 0.7083,
       "severity": "ALTA",
       "title": "↓ Mercado Central — frecuencia de compra baja",
