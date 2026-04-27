@@ -1,18 +1,27 @@
-// [PR-M1] Registro formal de métricas del negocio — distribución/mayoreo con
-// productos perecederos, clientes recurrentes, metas mensuales.
+// Registro de métricas — capa del cross-engine genérico (./index.ts).
 //
-// Este registro NO se invoca todavía desde el pipeline de motor 2.
-// Queda listo para PR-M3/M4 donde el engine de cruce (dim × metric × type)
-// iterará este registry para decidir qué InsightTypes pueden correr.
+// ARQUITECTURA DE DOS SISTEMAS (Z.11.M-4 mini, 2026-04-27):
+// Esta lista NO es la fuente del motor 2 hardcoded. Motor 2 lee de
+// `insight-registry.ts:METRIC_REGISTRY` (lista mínima id+label de 12
+// métricas). Esta versión enriquecida (con `requires`, `computeFn`,
+// `significanceThresholdPct`, `is_monetary_primary`) sirve solo al
+// cross-engine para iterar metric × dim × type y filtrar por
+// DataAvailability.
+//
+// Solapamiento intencional con `insight-registry.ts`:
+//   - 7 métricas en común (venta_usd↔venta, unidades, ticket_promedio,
+//     precio_unitario, num_clientes_activos, frecuencia_compra,
+//     cumplimiento_meta).
+//   - 5 métricas en insight-registry no presentes acá (num_transacciones,
+//     margen_bruto, margen_pct, skus_activos, ventas_por_cliente) —
+//     habilitarlas en cross-engine requiere agregar `requires` y `computeFn`.
 //
 // Reglas:
 //   - NO probabilidad, NO IA. Solo agregaciones deterministas.
 //   - Toda métrica declara `requires: Array<keyof DataAvailability>`
 //     → sólo aparece como "disponible" si TODOS sus flags son true.
-//   - Toggle global: store.configuracion.metricaGlobal selecciona la métrica
-//     pivote del dashboard (hoy "usd"; PR-M2/M3 expanden a múltiples).
 
-import type { SaleRecord, DataAvailability } from '../types'
+import type { SaleRecord, DataAvailability } from '../../types'
 
 export type MetricUnit = 'USD' | 'u' | 'USD/u' | 'clientes' | 'ventas/cliente' | 'pct'
 
@@ -84,7 +93,7 @@ export const METRIC_REGISTRY: Metric[] = [
     computeFn: sales => {
       const keys = new Set<string>()
       for (const s of sales) {
-        const k = s.clientKey ?? s.codigo_cliente ?? s.cliente ?? null
+        const k = s.clientKey ?? s.cliente ?? null
         if (k) keys.add(k)
       }
       return keys.size
@@ -99,7 +108,7 @@ export const METRIC_REGISTRY: Metric[] = [
     computeFn: sales => {
       const keys = new Set<string>()
       for (const s of sales) {
-        const k = s.clientKey ?? s.codigo_cliente ?? s.cliente ?? null
+        const k = s.clientKey ?? s.cliente ?? null
         if (k) keys.add(k)
       }
       return keys.size > 0 ? sales.length / keys.size : 0

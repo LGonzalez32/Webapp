@@ -1,3 +1,24 @@
+// Registry del motor 2 hardcoded — fuente de detect functions inline.
+//
+// ARQUITECTURA DE DOS SISTEMAS (Z.11.M-4 mini, 2026-04-27):
+// Este archivo es la fuente para el motor 2 hardcoded
+// (insight-engine.ts:runInsightEngine). Define `INSIGHT_TYPE_REGISTRY` con
+// 12 tipos cuyo `detect()` se invoca directamente en el loop principal.
+//
+// Existe en paralelo el cross-engine genérico (src/lib/crossEngine/) que
+// emite outlier + seasonality usando un dispatch metadata-driven sobre
+// registries enriquecidos. Ese sistema NO consume este archivo — son dos
+// pipelines independientes que mergean candidates downstream con dedup
+// por (member|dim|type) en insight-engine.ts:6010.
+//
+// Solapamiento intencional con `crossEngine/*Registry.ts`:
+//   - Ver headers de cada archivo en crossEngine/ para detalle de qué
+//     entries solapan vs cuáles son únicas.
+//   - 6 tipos del motor 2 (cliente_perdido, change_point, steady_share,
+//     meta_gap_temporal, cross_delta, cliente_dormido) viven en builders
+//     especiales en insight-engine.ts y NO están en ninguno de los
+//     registries — son emisores hardcoded fuera del loop generic.
+
 import type { SaleRecord, MetaRecord } from '../types'
 
 // ─── Statistical helpers (internal) ──────────────────────────────────────────
@@ -199,6 +220,60 @@ export const METRIC_REGISTRY: MetricDef[] = [
     compute: (records) => new Set(records.map(r => r.cliente).filter(Boolean)).size,
     compatibleInsights: [],
   },
+  // Sprint cross-dim: margen_bruto — diferencia venta_neta − (unidades × costo_unitario)
+  // por período. Detecta erosión de margen incluso cuando ventas se mantienen.
+  // Compute retorna null si no hay costo_unitario en los registros → degradación
+  // silenciosa para datasets sin esa columna.
+  {
+    id: 'margen_bruto',
+    label: 'Margen bruto',
+    unit: 'USD',
+    higherIsBetter: true,
+    compute: (records) => {
+      let venta = 0
+      let costo = 0
+      let tieneCosto = false
+      for (const r of records) {
+        const cu = (r as unknown as { costo_unitario?: number }).costo_unitario
+        if (typeof cu === 'number' && cu > 0) {
+          tieneCosto = true
+          costo += cu * r.unidades
+        }
+        venta += r.venta_neta ?? 0
+      }
+      if (!tieneCosto) return null
+      return venta - costo
+    },
+    compatibleInsights: ['change_point', 'steady_share', 'outlier'],
+    // Mismas dinámicas que `venta`: trend/change/dominance/contribution/proportion_shift
+    // tienen sentido sobre margen bruto en USD. Sin restricción.
+  },
+  // Sprint cross-dim: margen_pct — ratio margen/venta. Indicador de salud
+  // estructural: cae cuando hay descuentos agresivos o costos subiendo.
+  {
+    id: 'margen_pct',
+    label: 'Margen %',
+    unit: 'pct',
+    higherIsBetter: true,
+    compute: (records) => {
+      let venta = 0
+      let costo = 0
+      let tieneCosto = false
+      for (const r of records) {
+        const cu = (r as unknown as { costo_unitario?: number }).costo_unitario
+        if (typeof cu === 'number' && cu > 0) {
+          tieneCosto = true
+          costo += cu * r.unidades
+        }
+        venta += r.venta_neta ?? 0
+      }
+      if (!tieneCosto || venta <= 0) return null
+      return ((venta - costo) / venta) * 100
+    },
+    compatibleInsights: ['change_point', 'outlier'],
+    // Ratio — mismo razonamiento que precio_unitario y ticket_promedio.
+    mainLoopInsightTypes: ['trend', 'change'],
+  },
   // skus_activos: amplitud de catálogo vendido en el período. Detecta cuando un
   // vendedor o cliente concentra compras en pocos SKUs (portfolio shrinkage).
   // Requiere columna `producto`; retorna null si no está disponible o no hay filas.
@@ -286,6 +361,9 @@ export const DIMENSION_REGISTRY: DimensionDef[] = [
     supports: ['change_point', 'steady_share', 'outlier'] },
   { id: 'categoria',    label: 'Categoría',     field: 'categoria',
     supports: ['change_point', 'steady_share', 'outlier'] },
+  // Sprint cross-dim: subcategoria — granularidad debajo de categoria.
+  { id: 'subcategoria', label: 'Subcategoría',  field: 'subcategoria',
+    supports: ['change_point', 'steady_share', 'outlier'] },
   { id: 'canal',        label: 'Canal',         field: 'canal',
     supports: ['change_point', 'steady_share', 'outlier'] },
   { id: 'departamento', label: 'Departamento',  field: 'departamento',
@@ -294,6 +372,10 @@ export const DIMENSION_REGISTRY: DimensionDef[] = [
     supports: ['change_point', 'steady_share', 'outlier'] },
   { id: 'cliente',      label: 'Cliente',       field: 'cliente',
     supports: ['change_point', 'steady_share', 'outlier', 'correlation'] },
+  // Sprint cross-dim: proveedor — pivot importante en distribución y mayoreo.
+  // Detecta proveedor con caída sostenida o concentración de riesgo de stock.
+  { id: 'proveedor',    label: 'Proveedor',     field: 'proveedor',
+    supports: ['change_point', 'steady_share', 'outlier'] },
 ]
 
 // ─── Insight Type Registry ────────────────────────────────────────────────────

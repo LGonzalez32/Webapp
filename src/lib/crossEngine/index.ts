@@ -1,20 +1,36 @@
-// [PR-M4a] Cross-engine genérico: itera Metric × Dimension × InsightType
-// y ejecuta los detectFn registrados en DETECTORS para tipos con
-// status='declared'. Los 13 tipos 'implemented' siguen viviendo en el motor 2
-// hardcoded (insight-engine.ts) y se IGNORAN aquí.
+// Cross-engine genérico: capa paralela al motor 2 hardcoded.
 //
-// Estado: SKELETON. DETECTORS está vacío → runCrossEngine() retorna
-// candidates=[] en todos los datasets. PR-M4b agrega outlier; PR-M4c agrega
-// seasonality. La plomería está en su lugar para que esos PRs solo necesiten
-// añadir una función al map.
+// ARQUITECTURA DE DOS SISTEMAS (decisión deliberada — Z.11.M-4 mini, 2026-04-27):
 //
-// Reglas heredadas:
+//   Sistema 1 — Motor 2 hardcoded (src/lib/insight-engine.ts):
+//     - Iterа INSIGHT_TYPE_REGISTRY (insight-registry.ts) con detect functions
+//       inline. 12 tipos: trend, change, dominance, contribution, correlation,
+//       proportion_shift, meta_gap, stock_risk, stock_excess, migration,
+//       co_decline, product_dead. Plus builders especiales (cliente_dormido,
+//       cliente_perdido, change_point, steady_share, meta_gap_temporal,
+//       cross_delta) que viven directamente en insight-engine.ts.
+//
+//   Sistema 2 — Cross-engine genérico (este archivo):
+//     - Iterа metric × dimension × type usando registries con metadata rica
+//       (./metricRegistry, ./dimensionRegistry, ./insightTypeRegistry).
+//       Despacha a DETECTORS map que contiene detectFn por tipo. Hoy emite
+//       outlier + seasonality. Plataforma para nuevos tipos genéricos.
+//
+// Por qué dos sistemas: el hardcoded tiene enriquecimiento de dominio
+// (cross_context, narrativa rica, scoring custom) que el genérico no
+// puede replicar sin acoplarse a cada tipo. El genérico es ideal para
+// detectores estadísticos puros (outlier, seasonality) que NO requieren
+// narrativa de dominio.
+//
+// Dedup: insight-engine.ts:6010 deduplica candidates cross-engine vs
+// hardcoded por clave `member|dim|type` antes de mergear al pool.
+//
+// Reglas:
 //   - NO probabilidad, NO IA
-//   - Detectores deben ser ADITIVOS: no mutar ctx.sales, ctx.quotas, ni
-//     estructuras derivadas del caller
-//   - Fallo de un detector → se loggea y se continúa (no rompe pipeline)
+//   - Detectores ADITIVOS: no mutar ctx.sales, ctx.quotas, derivados.
+//   - Fallo de un detector → loggea y continúa (no rompe pipeline).
 
-import type { SaleRecord, MetaRecord, DataAvailability } from '../types'
+import type { SaleRecord, MetaRecord, DataAvailability } from '../../types'
 import {
   getAvailableMetrics,
   type Metric,
@@ -28,15 +44,11 @@ import {
   type InsightType,
   type InsightTypeId,
 } from './insightTypeRegistry'
-// [PR-M4b'] outlier re-habilitado sobre infra M4d (USD-only guard,
-// Z≥2.5, gate group-*, dedup vs hardcoded). Ver docs/PR-M4b-audit.md.
-import { detectOutlier } from './detectors/outlier'
-// [PR-M4c'] seasonality re-habilitado sobre 3 correcciones estructurales:
-//   A) Cap protection en runInsightEngine (stock_risk/group-vendor protegidos)
-//   B) Chainer exclusion en sonInsightsRelacionables
-//   C) STRENGTH_THRESHOLD 0.20 → 0.60 (más exigente)
-// Ver detectors/seasonality.ts header para historial del revert.
-import { detectSeasonality } from './detectors/seasonality'
+// outlier — Z≥2.5, USD-only guard, gate group-*, dedup vs hardcoded.
+import { detectOutlier } from '../detectors/outlier'
+// seasonality — STRENGTH_THRESHOLD 0.60, cap protection (stock_risk/vendor),
+// chainer exclusion. Ver detectors/seasonality.ts header.
+import { detectSeasonality } from '../detectors/seasonality'
 
 // InsightCandidate shape (fuente: src/lib/insight-engine.ts).
 // Replicamos los campos obligatorios aquí para evitar import circular.

@@ -1,20 +1,27 @@
-// [PR-M2] Registro formal de dimensiones del modelo Metric × Dimension ×
-// InsightType. Paralelo a metricRegistry.ts (PR-M1).
+// Registro de dimensiones — capa del cross-engine genérico (./index.ts).
 //
-// Este registry NO se consume todavía por el pipeline de motor 2. Queda listo
-// para PR-M4, donde el motor de cruce genérico iterará dimensiones × métricas
-// × insightTypes desde los registries centralizados. Hoy motor 2 sigue
-// leyendo el DIMENSION_REGISTRY simple de insight-registry.ts.
+// ARQUITECTURA DE DOS SISTEMAS (Z.11.M-4 mini, 2026-04-27):
+// Esta lista NO es la fuente del motor 2 hardcoded. Motor 2 lee de
+// `insight-registry.ts:DIMENSION_REGISTRY` (lista mínima id+label+field de
+// 9 dimensiones). Esta versión enriquecida (con `requires`, `groupBy`,
+// `formatValue`, `ordinalPriority`) sirve solo al cross-engine para
+// iterar metric × dim × type y filtrar por DataAvailability.
+//
+// Solapamiento intencional con `insight-registry.ts`:
+//   - 7 dimensiones en común (vendedor, producto, categoria, departamento,
+//     supervisor, canal, cliente).
+//   - `mes` solo acá (uso temporal del cross-engine).
+//   - `subcategoria` y `proveedor` solo en insight-registry (motor 2 las
+//     usa pero el cross-engine no las contempla aún).
 //
 // Reglas:
 //   - NO probabilidad, NO IA. Agrupaciones deterministas.
 //   - Cada dimensión declara `requires: Array<keyof DataAvailability>` y solo
 //     aparece como "disponible" cuando TODOS sus flags son true.
-//   - `vendedor` y `mes` son siempre disponibles (vendedor es obligatorio en
-//     SaleRecord; mes deriva de fecha).
-//   - `cliente.groupBy` usa clientKey (pobrado por PR-M1 en parser/demo).
+//   - `vendedor` y `mes` son siempre disponibles.
+//   - `cliente.groupBy` usa clientKey (poblado en parser/demo).
 
-import type { SaleRecord, DataAvailability } from '../types'
+import type { SaleRecord, DataAvailability } from '../../types'
 
 export type DimensionId =
   | 'vendedor'
@@ -59,7 +66,7 @@ export const DIMENSION_REGISTRY_V2: Dimension[] = [
     id: 'producto',
     label: 'Producto', pluralLabel: 'Productos',
     requires: ['has_producto'],
-    groupBy: s => (s.producto && s.producto.trim() !== '') ? s.producto : (s.codigo_producto ?? null),
+    groupBy: s => (s.producto && s.producto.trim() !== '') ? s.producto : null,
     formatValue: k => k,
     ordinalPriority: 2,
   },
@@ -99,7 +106,7 @@ export const DIMENSION_REGISTRY_V2: Dimension[] = [
     id: 'cliente',
     label: 'Cliente', pluralLabel: 'Clientes',
     requires: ['has_cliente'],
-    groupBy: s => s.clientKey ?? s.codigo_cliente ?? (s.cliente?.trim().toUpperCase() || null) ?? null,
+    groupBy: s => s.clientKey ?? (s.cliente?.trim().toUpperCase() || null),
     formatValue: k => k === 'SIN_CLIENTE' ? 'Sin cliente' : k,
     ordinalPriority: 7,
   },

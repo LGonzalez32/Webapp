@@ -860,3 +860,287 @@ Todas con USD pequeño o narrativa pobre real. El motor descarta correctamente.
 105/105 tests, 0 tsc errors. Cualquier sprint posterior arranca sobre esta
 baseline.
 
+---
+
+## 14. Follow-up sprints (post-Z.11)
+
+Tres sprints derivados del stress test final (sección 13.4 backlog + auditoría
+de combos/reglas). Listados en orden recomendado de ejecución.
+
+---
+
+### Sprint M-4 (mini) — Consolidación cosmética + clarificación arquitectónica
+
+> **Estado: ejecutado 2026-04-27.** Scope original (deletear archivos
+> "legacy") era incorrecto: los 3 archivos NO eran legacy sino la capa de
+> dispatch del **cross-engine activo** que emite outlier + seasonality. Se
+> ejecutó la versión mini: rename a subdirectorio + headers honestos +
+> cross-references. Cero cambio runtime, 105/105 tests, 0 tsc errors.
+>
+> **Lo aplicado:**
+> - `src/lib/crossEngine.ts` → `src/lib/crossEngine/index.ts`
+> - `src/lib/metricRegistry.ts` → `src/lib/crossEngine/metricRegistry.ts`
+> - `src/lib/dimensionRegistry.ts` → `src/lib/crossEngine/dimensionRegistry.ts`
+> - `src/lib/insightTypeRegistry.ts` → `src/lib/crossEngine/insightTypeRegistry.ts`
+> - 15 imports actualizados (5 archivos consumidores).
+> - Headers reescritos honestos: "ARQUITECTURA DE DOS SISTEMAS (Z.11.M-4
+>   mini)" documenta que los registries del cross-engine NO son legacy de
+>   motor 2 hardcoded — son una capa paralela intencional.
+> - Cross-reference agregado en `insight-registry.ts` apuntando al
+>   cross-engine subdirectory.
+>
+> El refactor profundo (unificar los dos sistemas en uno) queda fuera de
+> scope. Si producto pide simplicidad arquitectónica como objetivo
+> dedicado, requiere su propio sprint planificado (1-2 semanas).
+
+**Scope original (descartado por mismatch).**
+
+**Contexto.**
+
+| Registry | Archivo | Conteo |
+|---|---|---:|
+| Dimensiones motor 2 | `src/lib/insight-registry.ts:336` | 9 |
+| Dimensiones legacy | `src/lib/dimensionRegistry.ts:49` | 8 |
+| Métricas motor 2 | `src/lib/insight-registry.ts:131` | 12 |
+| Métricas legacy | `src/lib/metricRegistry.ts:36` | 7 |
+| Insight types motor 2 | `src/lib/insight-registry.ts:362` | 12 |
+| Insight types telemetría | `src/lib/insightTypeRegistry.ts` | 15 |
+
+Consumidores legacy detectados (4 archivos):
+- `src/lib/crossEngine.ts` — usa `metricRegistry`, `dimensionRegistry`, `insightTypeRegistry`.
+- `src/lib/detectors/outlier.ts` — usa solo tipos de los 3 legacy.
+- `src/lib/detectors/seasonality.ts` — usa solo tipos.
+- `src/lib/ingestTelemetry.ts` — usa `getAvailableMetrics` de `metricRegistry`.
+
+**Scope.**
+
+1. **Decisión arquitectónica** (primer paso, antes de tocar código):
+   ¿`insight-registry.ts` debe ser canónica? Probablemente sí — es la que el
+   motor 2 lee directamente. Los 3 legacy son históricamente independientes
+   pero su uso real es residual.
+
+2. **Migrar consumidores legacy** uno por uno:
+   - Si solo usan TIPOS (`Metric`, `Dimension`, `InsightType`): re-exportar
+     desde `insight-registry.ts` y migrar imports.
+   - Si usan FUNCIONES (`getAvailableMetrics`): portar la función a
+     `insight-registry.ts` o adaptar el consumidor a leer el registry v2.
+   - `insightTypeRegistry.ts` tiene 3 tipos extra (`cliente_dormido`,
+     `outlier`, `seasonality`) que NO están en `insight-registry.ts` porque
+     son emitidos por builders especializados, no por el registry loop.
+     Decidir: ¿extender `insight-registry.ts` con esos 3 tipos?
+     ¿Aceptar la diferencia documentada?
+
+3. **Eliminar archivos legacy** una vez sin consumidores:
+   - `src/lib/dimensionRegistry.ts`
+   - `src/lib/metricRegistry.ts`
+   - `src/lib/insightTypeRegistry.ts`
+
+**Acceptance criteria.**
+
+- [ ] Cada `Metric`, `Dimension`, `InsightType` tipo se exporta desde un solo
+  archivo canónico.
+- [ ] `git grep "from.*metricRegistry\|from.*dimensionRegistry\|from.*insightTypeRegistry"`
+  retorna 0 resultados (o solo desde el propio `insight-registry.ts`).
+- [ ] `tsc --noEmit`: 0 errores.
+- [ ] `vitest run`: 105/105 (sin regenerar snapshots — cambio de imports no
+  debe alterar runtime).
+- [ ] Si la decisión es agregar `cliente_dormido`/`outlier`/`seasonality` a
+  `insight-registry.ts`, snapshots pueden cambiar (cobertura de tipos en
+  pool reportado). Cambios aditivos solo aceptables con justificación.
+
+**Out of scope.**
+
+- No modificar comportamiento runtime del motor 2.
+- No tocar detectores especializados ni builders.
+- No reorganizar el archivo `insight-registry.ts` (su estructura interna
+  queda igual).
+
+**Risk + mitigation.**
+
+- Riesgo: importar tipos circulares entre `insightStandard.ts` y
+  `insight-registry.ts`. Mitigación: si los tipos son interface puros, no
+  hay ciclo en runtime. Verificar con `tsc` en cada migración.
+- Riesgo: `getAvailableMetrics` lee `DataAvailability` que puede tener
+  shape distinto entre v1 y v2. Mitigación: leer ambos archivos y mapear
+  campo por campo antes de migrar.
+
+**Estimación.** 3-4 commits.
+1. Decisión + extender `insight-registry.ts` si aplica (o documentar
+   diferencia de los 3 tipos extra).
+2. Migrar imports en `crossEngine.ts`.
+3. Migrar imports en `outlier.ts` + `seasonality.ts`.
+4. Migrar `ingestTelemetry.ts` + eliminar archivos legacy.
+
+---
+
+### Sprint M-5 — Dataset golden secundario para tipos sin cobertura
+
+**Goal.** Cubrir 6 tipos de insight que actualmente no aparecen en goldens
+(Hallazgo H4 del stress test): `dominance`, `proportion_shift`,
+`change_point`, `steady_share`, `correlation`, `seasonality`.
+
+**Contexto.** Goldens actuales (`insight-engine.golden.test.ts.snap`,
+`insight-engine.gate-audit.test.ts.snap`) usan dataset Los Pinos demo. Los
+6 tipos faltantes no se manifiestan porque:
+- `dominance`: requiere ≥3 puntos con concentración Pareto >60% sostenida.
+- `proportion_shift`: requiere shift de participación ≥5pp entre períodos.
+- `change_point`: requiere series temporales largas (≥6-12 puntos).
+- `steady_share`: requiere stability ratios estables sobre múltiples meses.
+- `correlation`: requiere pares de métricas con `value2` poblado.
+- `seasonality`: requiere patrones cíclicos en series ≥12 meses.
+
+Los Pinos demo tiene 28 meses pero la heterogeneidad de los datos no dispara
+estos tipos en sus thresholds actuales.
+
+**Scope.**
+
+1. **Diseñar datos sintéticos minimales** para cada tipo. No reemplazan a Los
+   Pinos demo — son fixtures dedicados que disparan exactamente el detector
+   con datos mínimos:
+   - `dominance`: 5 productos, top-1 con 80% de venta.
+   - `proportion_shift`: 3 productos, share cambiando 10pp prev→current.
+   - `change_point`: serie de 12 meses con mean shift en mes 7.
+   - `steady_share`: 4 vendedores con shares estables ±2%.
+   - `correlation`: 6 puntos con r≥0.85 (venta vs num_clientes).
+   - `seasonality`: 24 meses con pico Q4 cada año.
+
+2. **Crear nuevo test file**: `src/lib/__tests__/insight-engine.coverage.test.ts`
+   con un golden por tipo. Cada test:
+   - Construye fixture mínimo que dispara el tipo.
+   - Corre `runInsightEngine` + `filtrarConEstandar`.
+   - Verifica que el tipo aparece en el output (presencia, no campos exactos).
+   - `expect(result).toMatchSnapshot()` para detectar regresiones futuras.
+
+3. **NO mezclar con Los Pinos demo**. Mantener como tests independientes —
+   cuando cambie demo data, esos goldens no se afectan; cuando cambie
+   semántica del detector, ambos fallan apropiadamente.
+
+**Acceptance criteria.**
+
+- [ ] 6 tests nuevos, uno por tipo, cada uno con su golden snapshot.
+- [ ] Cada test valida presencia del tipo en `runInsightEngine` output.
+- [ ] Cada test pasa por `filtrarConEstandar` con un mínimo USD/cross
+  asegurado en el fixture (para que sobrevivan el gate y no sean ruido).
+- [ ] `vitest run`: 111/111 (105 actuales + 6 nuevos).
+- [ ] `tsc --noEmit`: 0 errores.
+
+**Out of scope.**
+
+- No modificar detectores ni builders.
+- No tocar Los Pinos demo data.
+- No agregar tests de integración (estos son unit-level por tipo).
+
+**Risk + mitigation.**
+
+- Riesgo: el detector cambia y los goldens dejan de pasar — falsos
+  positivos. Mitigación: cada fixture es minimal y documentado; un cambio
+  intencional en el detector implica regenerar el snapshot con justificación
+  en el commit.
+- Riesgo: tipos que requieren context complejo (e.g., `change_point` necesita
+  cross_engine) tardan en construirse. Mitigación: si un tipo no se puede
+  fixturear minimalmente, documentar como "no testeable a unit-level"
+  y diferir al sprint M-6 (integration tests).
+
+**Estimación.** 6-8 commits, uno por tipo + 1-2 de cleanup.
+
+---
+
+### Sprint M-1 — Simetrizar excepción contribution direction='down'
+
+**Goal.** Resolver Hallazgo H3 del stress test: la excepción Fase 7.5-B en
+`evaluateInsightCandidate` rescata solo `contribution` con `direction='up'`.
+Casos como Roberto Méndez (contribution declinante, USD $1 321 = 3.22%,
+narrativa concreta) mueren por r2 (pareto) + r4 (narrative) cuando podrían
+ser tan accionables como un crecimiento simétrico.
+
+**Bloqueado por: decisión de producto.**
+
+**Pre-trabajo (no es código).**
+
+1. Leer Roberto Méndez contribution case en runtime captures Z.11.x. Confirmar
+   que es `direction='down'`, score 0.95, severity ALTA, USD/total 3.22%,
+   `impacto_usd_source='recuperable'`.
+2. Reunirse con producto para responder:
+   - **¿Una caída de contribución de un vendedor con USD $1 321 = 3% del
+     negocio merece card propia?**
+   - Si **SÍ**: ejecutar este sprint.
+   - Si **NO**: documentar como decisión deliberada y cerrar M-1 sin
+     código.
+3. Si la decisión es proceder, definir criterios de excepción simétricos.
+   Borrador propuesto:
+   - `direction='down'`
+   - `score >= 0.95` (idéntico al up)
+   - `severity ∈ {ALTA, CRITICA}` (idéntico)
+   - `usdShare >= 0.02` (más estricto que up: 2% en lugar de 1%, porque
+     caídas pueden ser ruido más fácilmente que crecimientos)
+   - `impacto_usd_source` válido (idéntico)
+   - `tituloOk + descOk` (idéntico)
+   - **Criterio nuevo**: `(c.detail.totalChange ?? 0) < 0` para confirmar que
+     el AGREGADO está cayendo (no rescatar miembros que caen mientras el
+     grupo crece — eso ya lo filtra el detector vía `groupSign`).
+
+**Scope (asumiendo decisión positiva).**
+
+1. Modificar `evaluateInsightCandidate` (insightStandard.ts:2799-2807):
+   agregar `_meetsContributionDownException` con criterios análogos.
+2. Combinar con la up exception: `paretoEffective = pareto || _meetsContributionUpException || _meetsContributionDownException`.
+3. Distinguir reason:
+   - `relaxed:exception_contribution_up` (ya existe).
+   - `relaxed:exception_contribution_down` (nuevo).
+4. Agregar test golden específico: contribution-down pasando por la
+   excepción.
+
+**Acceptance criteria.**
+
+- [ ] Roberto Méndez (o el caso runtime equivalente) ahora sobrevive Z.12.
+- [ ] No hay otros candidatos `contribution` direction='down' que pasen pero
+  no deberían (validar con runtime audit).
+- [ ] `tsc --noEmit`: 0 errores.
+- [ ] `vitest run`: pass; goldens se regeneran con justificación clara.
+- [ ] Z.12 surviving sube de 16 → 17 en runtime Los Pinos.
+
+**Out of scope.**
+
+- No modificar otras excepciones (highMateriality, root-strong, terminal).
+- No tocar r1/r3/r4.
+- No afectar contribution direction='up' existente.
+
+**Risk + mitigation.**
+
+- Riesgo principal: leakage de candidatos contribution-down sub-material.
+  Mitigación: criterio `usdShare >= 0.02` (2%) es más estricto que el up
+  (1%). Adicionalmente, narrativa concreta + score≥0.95 + severity ALTA
+  filtran el restante.
+- Riesgo de UX: cards de "caídas" pueden saturar el feed si hay muchos
+  contributors negativos. Mitigación: `ALWAYS_PROTECTED_CAPS.contribution`
+  no existe — se ranquea en el regular bucket cap=12. Si es necesario, agregar
+  cap=2 para contribution.
+
+**Estimación.** 2-3 commits.
+1. Decisión documentada + criterios cerrados.
+2. Implementación + tests.
+3. Validación runtime.
+
+---
+
+### Orden recomendado y dependencias
+
+```
+M-4 (registries) ──┬──> M-5 (goldens secundarios) ──┐
+                   │                                 ├──> Z.11 family + follow-ups CERRADO
+                   └──> (independiente)              │
+M-1 (contribution) ──── (bloqueado por decisión PM) ─┘
+```
+
+**M-4 primero**: cleanup estructural sin riesgo runtime. Desbloquea cualquier
+modificación futura al registry sin riesgo de divergencia.
+
+**M-5 segundo**: aumenta cobertura. No bloquea nada pero después de M-4 los
+goldens nuevos se construirán sobre el registry consolidado.
+
+**M-1 tercero**: depende de decisión de producto. Si no se decide, queda
+indefinidamente diferido sin afectar la estabilidad del motor.
+
+Cualquiera de los tres se puede saltar — el motor está production-ready
+sin ellos. Son polish, no blockers.
+

@@ -53,10 +53,10 @@
 // `ie-<dimId>-outlier-<idx>` por convención de motor 2 (no `xe-*`).
 
 import type { SaleRecord } from '../../types'
-import type { Metric } from '../metricRegistry'
-import type { Dimension } from '../dimensionRegistry'
-import type { InsightType } from '../insightTypeRegistry'
-import type { CrossEngineCandidate, CrossEngineContext } from '../crossEngine'
+import type { Metric } from '../crossEngine/metricRegistry'
+import type { Dimension } from '../crossEngine/dimensionRegistry'
+import type { InsightType } from '../crossEngine/insightTypeRegistry'
+import type { CrossEngineCandidate, CrossEngineContext } from '../crossEngine/'
 
 const MIN_GROUPS    = 5
 // [PR-M4d] Subido de 2.0 a 2.5 tras PR-M4b audit. Con 2.0 el detector

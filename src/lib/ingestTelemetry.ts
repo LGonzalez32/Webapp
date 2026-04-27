@@ -7,13 +7,13 @@
 
 import type { SaleRecord, DataAvailability } from '../types'
 import { detectDataAvailability } from './fileParser'
-import { getAvailableMetrics } from './metricRegistry'
-import { getAvailableDimensions } from './dimensionRegistry'
+import { getAvailableMetrics } from './crossEngine/metricRegistry'
+import { getAvailableDimensions } from './crossEngine/dimensionRegistry'
 import {
   getImplementedInsightTypes,
   getDeclaredInsightTypes,
   getApplicableInsightTypes,
-} from './insightTypeRegistry'
+} from './crossEngine/insightTypeRegistry'
 
 /**
  * Computa flags desde `sales` via detectDataAvailability + resuelve métricas
@@ -44,7 +44,7 @@ export function emitIngestSummary(sales: SaleRecord[]): void {
   const filas_con_unidades   = sales.reduce((n, s) => n + (s.unidades > 0 ? 1 : 0), 0)
   const filas_con_venta_neta = sales.reduce((n, s) => n + (s.venta_neta != null && s.venta_neta > 0 ? 1 : 0), 0)
   const filas_con_cliente    = sales.reduce((n, s) => {
-    const k = s.clientKey ?? s.codigo_cliente ?? s.cliente ?? null
+    const k = s.clientKey ?? s.cliente ?? null
     return n + (k ? 1 : 0)
   }, 0)
   const filas_invalidas = sales.reduce((n, s) =>

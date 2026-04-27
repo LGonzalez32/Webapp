@@ -48,10 +48,10 @@
 // Ver docs/PR-M4b-audit.md para el diseño defensivo común con outlier.
 
 import type { SaleRecord } from '../../types'
-import type { Metric } from '../metricRegistry'
-import type { Dimension } from '../dimensionRegistry'
-import type { InsightType } from '../insightTypeRegistry'
-import type { CrossEngineCandidate, CrossEngineContext } from '../crossEngine'
+import type { Metric } from '../crossEngine/metricRegistry'
+import type { Dimension } from '../crossEngine/dimensionRegistry'
+import type { InsightType } from '../crossEngine/insightTypeRegistry'
+import type { CrossEngineCandidate, CrossEngineContext } from '../crossEngine/'
 
 const MIN_MONTHS_TOTAL   = 12   // el dataset debe abarcar ≥12 meses
 const MIN_CAL_MONTHS_MEM = 12   // el member debe tener las 12 lunas calendario

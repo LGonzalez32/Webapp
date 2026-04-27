@@ -11,7 +11,7 @@ import type {
   Insight,
   DataAvailability,
 } from '../types'
-import { runCrossEngine } from './crossEngine'      // [PR-M4a]
+import { runCrossEngine } from './crossEngine/'
 import type {
   DiagnosticBlock,
   DiagnosticSection,

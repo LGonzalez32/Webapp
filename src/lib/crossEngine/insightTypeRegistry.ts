@@ -1,23 +1,28 @@
-// [PR-M3] Registro formal de InsightTypes — tercer eje del modelo
-// Metric × Dimension × InsightType. Paralelo a metricRegistry.ts (PR-M1)
-// y dimensionRegistry.ts (PR-M2).
+// Registro de InsightTypes — capa del cross-engine genérico (./index.ts).
 //
-// IMPORTANTE: este registry NO está conectado al pipeline de motor 2 todavía.
-// Motor 2 sigue leyendo INSIGHT_TYPE_REGISTRY de insight-registry.ts (registry
-// legacy con detect()). PR-M4 ejecutará la migración del motor de cruce genérico
-// para consumir estos tres registries (metric, dimension, insightType) como
-// fuente única de verdad.
+// ARQUITECTURA DE DOS SISTEMAS (Z.11.M-4 mini, 2026-04-27):
+// Esta lista NO es la fuente del motor 2 hardcoded. Motor 2 lee de
+// `insight-registry.ts:INSIGHT_TYPE_REGISTRY` (12 tipos con `detect()`
+// inline). Esta versión declarativa (con `applicableMetrics`,
+// `applicableDimensions`, `requires`, `status`, `motorStatus`) sirve solo
+// al cross-engine para filtrar combos metric × dim × type por
+// DataAvailability y dispatchar al `DETECTORS` map.
 //
-// Aquí solo declaramos METADATA:
-//   - ids implementados (status='implemented'): los que motor 2 ya emite hoy
-//   - ids declarados (status='declared'): los nuevos que PR-M4 implementará
-// No se mueve ninguna función detect() — esos siguen viviendo en insight-registry.ts.
+// Solapamiento intencional con `insight-registry.ts`:
+//   - 12 tipos en común (todos los implementados con detect functions).
+//   - 3 tipos extra acá (cliente_dormido, outlier, seasonality) — los dos
+//     últimos son emitidos por el cross-engine (DETECTORS); cliente_dormido
+//     viene de un builder especial en insight-engine.ts.
+//   - 6 tipos del motor 2 NO listados acá (cliente_perdido, change_point,
+//     steady_share, meta_gap_temporal, cross_delta) — emitidos por
+//     builders especiales y no participan del cross-engine generic.
 //
 // Reglas:
-//   - NO probabilidad, NO IA — la metadata es declarativa
-//   - aditivo estricto, sin tocar detectores existentes
+//   - NO probabilidad, NO IA — la metadata es declarativa.
+//   - status='implemented': motor 2 ya emite, cross-engine ignora (dedup).
+//   - status='declared': cross-engine los emite si DETECTORS tiene su detectFn.
 
-import type { DataAvailability } from '../types'
+import type { DataAvailability } from '../../types'
 
 export type InsightTypeId =
   // ya implementados en motor 2 (status='implemented')
