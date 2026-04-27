@@ -1831,6 +1831,17 @@ export interface InsightImpactoInput {
   detail: Record<string, unknown>
 }
 
+export type ImpactoUsdSource =
+  | 'gap_meta'
+  | 'recuperable'
+  | 'cross_varAbs'
+  | 'detail_monto'
+  | 'detail_magnitud'
+  | 'detail_totalCaida'
+  | 'cross_delta_yoy'
+  | 'non_monetary'
+  | 'unavailable'
+
 // Context mínimo requerido por las funciones de Z.9.2.
 export interface ContextoImpactoZ9 {
   tipoMetaActivo: 'uds' | 'usd'
@@ -1849,6 +1860,11 @@ export function calcularImpactoValor(
     const v = d[key]
     return typeof v === 'number' && isFinite(v) ? v : null
   }
+  const mult = (qtyKey: string, priceKey = 'precio_unitario'): number | null => {
+    const qty = n(qtyKey)
+    const price = n(priceKey)
+    return qty != null && price != null ? qty * price : null
+  }
   switch (c.insightTypeId) {
     case 'change': {
       const cur  = n('current'); const prev = n('previous')
@@ -1865,10 +1881,10 @@ export function calcularImpactoValor(
     case 'correlation': return null
     case 'meta_gap': return null    // gap en % sin meta USD disponible en detail
     case 'stock_risk': {
-      return n('impactoTotal')      // suma ventaYTD de productos en riesgo
+      return n('impactoTotal') ?? mult('unidades')      // suma ventaYTD o proxy stock x precio
     }
     case 'stock_excess': {
-      return n('totalCapital')      // suma ventaYTD de productos en sobrestock
+      return n('totalCapital') ?? mult('unidades_excedente') // suma ventaYTD o proxy excedente x precio
     }
     case 'migration': {
       return n('magnitud')          // delta del producto que ganó participación
@@ -1880,7 +1896,10 @@ export function calcularImpactoValor(
       return n('totalPrev')         // venta histórica de productos muertos
     }
     case 'cliente_dormido': {
-      return n('impactoVentaHistorica')  // ventana YoY (R53)
+      return n('impactoVentaHistorica') ?? n('valor_yoy_usd')  // ventana YoY (R53)
+    }
+    case 'cliente_perdido': {
+      return n('impactoVentaHistorica') ?? n('valor_yoy_usd')  // misma fuente que cliente_dormido (Sprint 5)
     }
     case 'change_point': {
       // (meanPost - meanPre) × monthsPost — diferencia de régimen × períodos afectados
@@ -1989,6 +2008,7 @@ export function calcularImpactoRecuperableCandidato(
     case 'contribution':
     case 'migration':
     case 'cliente_dormido':
+    case 'cliente_perdido':
     case 'change_point':
     case 'outlier':
       return calcularImpactoValor(c)
@@ -1998,14 +2018,14 @@ export function calcularImpactoRecuperableCandidato(
       const items = d['items'] as Item[] | undefined
       if (Array.isArray(items) && items.length > 0 && typeof items[0].ventaYTD === 'number')
         return items[0].ventaYTD
-      return null
+      return calcularImpactoValor(c)
     }
     case 'stock_excess': {
       type TopItem = { ventaYTD: number }
       const top = d['top'] as TopItem[] | undefined
       if (Array.isArray(top) && top.length > 0 && typeof top[0].ventaYTD === 'number')
         return top[0].ventaYTD
-      return null
+      return calcularImpactoValor(c)
     }
     case 'co_decline': {
       return n('impactoTotal')
@@ -2062,6 +2082,7 @@ export function calcularDirection(
     case 'co_decline':    return 'down'
     case 'product_dead':  return 'down'
     case 'cliente_dormido': return 'down'
+    case 'cliente_perdido': return 'down'
     case 'change_point': {
       const post = d['meanPost'] as number | undefined
       const pre  = d['meanPre']  as number | undefined
@@ -2108,6 +2129,7 @@ export function calcularTimeScopeZ9(
     case 'stock_risk':      return 'rolling'
     case 'stock_excess':    return 'rolling'
     case 'cliente_dormido': return 'rolling'
+    case 'cliente_perdido': return 'rolling'
     case 'migration':       return 'ytd'
     case 'co_decline':      return 'ytd'
     case 'product_dead':    return 'ytd'
@@ -2219,7 +2241,9 @@ export function buildSupportingEvidence(c: InsightImpactoInput): string[] {
       break
     }
     case 'cliente_dormido': {
-      const dias = num('diasSinCompra'), umbral = num('umbralDiasDormido'),
+      // Sprint 5 fix: campo canónico es 'diasSinComprar' (lo que escriben los builders y
+      // lee el render). El typo 'diasSinCompra' antes silenciaba el bullet más fuerte.
+      const dias = num('diasSinComprar'), umbral = num('umbralDiasDormido'),
             imp = num('impactoVentaHistorica'), frec = num('frecuenciaHistoricaDias')
       const nombre = str('clienteNombre') || member
       if (dias !== null && nombre) {
@@ -2228,6 +2252,20 @@ export function buildSupportingEvidence(c: InsightImpactoInput): string[] {
       }
       if (imp !== null && imp > 0) out.push(`Impacto histórico ${fmtUSD(imp)}`)
       if (frec !== null && frec > 0) out.push(`Cadencia habitual cada ${fmt0(frec)} días`)
+      break
+    }
+    case 'cliente_perdido': {
+      const dias = num('diasSinComprar'),
+            imp = num('impactoVentaHistorica'), frec = num('frecuenciaHistoricaDias')
+      const nombre = str('clienteNombre') || member
+      if (dias !== null && nombre) {
+        out.push(`${nombre}: sin compras hace ${fmt0(dias)} días`)
+      }
+      if (frec !== null && frec > 0) {
+        const ratio = dias && frec ? dias / frec : 0
+        out.push(`Cadencia habitual cada ${fmt0(frec)} días${ratio >= 3 ? ` (${ratio.toFixed(1)}× lo normal)` : ''}`)
+      }
+      if (imp !== null && imp > 0) out.push(`Aportaba ${fmtUSD(imp)} históricamente`)
       break
     }
     case 'stock_risk': {
@@ -2480,6 +2518,10 @@ export interface InsightGateCandidate {
   direction?:    'up' | 'down' | 'neutral'
   score?:        number
   severity?:     'CRITICA' | 'ALTA' | 'MEDIA' | 'BAJA'
+  // [Sprint D / Visibility] metricId habilita Pareto-skip para candidatos
+  // no-monetarios. Si está en Z12_NON_MONETARY_METRIC_IDS, r2 (Pareto) se
+  // skipea — la lista Pareto USD no aplica a métricas count/ratio.
+  metricId?: string
 }
 
 export interface InsightGateContext {
@@ -2522,6 +2564,17 @@ const Z12_ROOT_STRONG_TYPES: ReadonlySet<string> = new Set([
   'meta_gap_temporal',
   'product_dead',
   'migration',
+  // [Sprint C / Visibility] Tipos nuevos con narrativa rica (cross_context
+  // populado con N dims). Cuando crossCount ≥ 2 reciben free pass r1+r2+r3
+  // — la narrativa multi-dim los hace valiosos aunque su impacto USD sea
+  // <2% del negocio (caso típico de slices granulares en cross_delta) o
+  // su source no esté en USD whitelist (caso ocasional).
+  'cliente_perdido',
+  'cliente_dormido',
+  'stock_risk',
+  'stock_excess',
+  'meta_gap',         // emitido por meta_gap_combo (Phase C ingesta)
+  'cross_delta',      // auto-combo dim×dim×... con cross_context completo
 ])
 
 // [Z.12] Sources de impacto_usd_normalizado considerados monetariamente coherentes.
@@ -2535,6 +2588,72 @@ const Z12_VALID_USD_SOURCES: ReadonlySet<string> = new Set([
   'detail_totalCaida',
   'cross_delta_yoy',
 ])
+
+// [Sprint D / Visibility] Métricas cuya señal NO es monetaria (count, ratio,
+// pct sin volumen). Para estas, r2 Pareto USD no aplica — la lista Pareto
+// USD no representa "lo que importa" cuando la métrica es count o ratio.
+// Espejo intencional de NON_MONETARY_METRIC_IDS en insight-engine.ts pero
+// declarado acá para evitar dependencia circular.
+const Z12_NON_MONETARY_METRIC_IDS: ReadonlySet<string> = new Set([
+  'num_transacciones',
+  'ticket_promedio',
+  'cumplimiento_meta',
+  'pct_participacion',
+  'num_clientes_activos',
+  'precio_unitario',
+  'frecuencia_compra',
+  'ventas_por_cliente',
+  'skus_activos',     // [Sprint D] count de SKUs activos por miembro
+  'margen_pct',       // [Sprint D] ratio, no USD absoluto
+])
+
+export function resolveImpactoUsd(
+  c: InsightImpactoInput & {
+    impacto_gap_meta?: number | null
+    impacto_recuperable?: number | null
+  },
+): { usd: number | null; source: ImpactoUsdSource } {
+  const finiteNonZero = (v: unknown): number | null =>
+    typeof v === 'number' && Number.isFinite(v) && v !== 0 ? Math.abs(v) : null
+  const detail = c.detail ?? {}
+  const crossContext = detail.cross_context as Record<string, unknown> | undefined
+
+  const gapMeta = finiteNonZero(c.impacto_gap_meta)
+  if (gapMeta != null) return { usd: gapMeta, source: 'gap_meta' }
+
+  const crossVarAbs = finiteNonZero(crossContext?.varAbs)
+  if (crossVarAbs != null) return { usd: crossVarAbs, source: 'cross_varAbs' }
+
+  const recuperable = finiteNonZero(c.impacto_recuperable)
+  if (recuperable != null && !Z12_NON_MONETARY_METRIC_IDS.has(c.metricId)) {
+    return { usd: recuperable, source: 'recuperable' }
+  }
+
+  const typedImpact = finiteNonZero(calcularImpactoValor(c))
+  if (typedImpact != null) {
+    return {
+      usd: typedImpact,
+      source: c.insightTypeId === 'cliente_dormido' || c.insightTypeId === 'cliente_perdido'
+        ? 'recuperable'
+        : 'detail_monto',
+    }
+  }
+
+  const monto = finiteNonZero(detail.monto)
+  if (monto != null) return { usd: monto, source: 'detail_monto' }
+
+  const magnitud = finiteNonZero(detail.magnitud)
+  if (magnitud != null) return { usd: magnitud, source: 'detail_magnitud' }
+
+  const totalCaida = finiteNonZero(detail.totalCaida)
+  if (totalCaida != null) return { usd: totalCaida, source: 'detail_totalCaida' }
+
+  if (Z12_NON_MONETARY_METRIC_IDS.has(c.metricId)) {
+    return { usd: null, source: 'non_monetary' }
+  }
+
+  return { usd: null, source: 'unavailable' }
+}
 
 // [Z.11/Z.12] Frases que indican narrativa genérica — invalidan coherencia.
 const Z12_GENERIC_ACTION_RE =
@@ -2575,10 +2694,28 @@ export function evaluateInsightCandidate(
     isRootStrong
 
   // Regla 2 — Pareto real del negocio. Si paretoList vacía, no bloqueamos.
+  // [Sprint D / D2.a] Pareto-skip para candidatos no-monetarios: si la
+  // métrica del candidato es count/ratio (Z12_NON_MONETARY_METRIC_IDS) o
+  // su source es marcado 'non_monetary' por el builder, r2 no aplica
+  // — la lista Pareto se computa desde venta USD y no representa "lo que
+  // importa" para señales no-monetarias. Sin esto, skus_activos /
+  // frecuencia_compra sobre miembros no-Pareto-USD morían por r2 sin
+  // razón semántica.
+  const isNonMonetary =
+    c.impacto_usd_source === 'non_monetary' ||
+    (typeof c.metricId === 'string' && Z12_NON_MONETARY_METRIC_IDS.has(c.metricId))
+  // [Z.11.1] Rescue por materialidad alta: candidatos con USD ≥ 10% del
+  // negocio pasan Pareto sin importar lista top ni cross. Magnitud
+  // absoluta es razón ejecutiva suficiente. Caso emblemático: stock_risk
+  // aislado (cross=0) con $6 665 = 16% del negocio moría aquí solo por
+  // no estar en la lista Pareto top USD.
+  const highMateriality = usdAbs >= ventaTotal * MATERIALITY_HIGH
   const pareto =
     esParetoReal ||
     isRootStrong ||
-    ctx.paretoList.length === 0
+    ctx.paretoList.length === 0 ||
+    isNonMonetary ||
+    highMateriality
 
   // Regla 3 — coherencia monetaria (USD presente y source válido) o root-strong.
   const hasUsd =
