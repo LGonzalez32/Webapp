@@ -740,7 +740,10 @@ const NARRATIVE_TEMPLATES: Record<
     const totalCaida = detail.totalCaida as number
     const grupo      = detail.grupo      as string
     const ganancia   = ganador.value - (ganador.prevValue ?? 0)
-    const titulo = `Cambio de preferencia en ${grupo}`
+    // [Z.12.M-2.2] Título incluye protagonista para evitar colisión cuando
+    // hay 2+ migraciones en mismo grupo (ej: 2 migrations en "Sin categoría"
+    // que antes producían títulos idénticos sin distinción).
+    const titulo = `${ganador.member} reemplaza a ${perdedores[0].member} en ${grupo}`
     const descripcion = [
       `En ${grupo}, ${ganador.member} crece ${fmtImpT(ganancia, isUsd)} mientras ${perdedores.map(p => p.member).join(', ')} ${perdedores.length > 1 ? 'caen' : 'cae'} una cifra similar (${fmtImpT(totalCaida, isUsd)} combinado).`,
       `Los volúmenes son del mismo orden, lo que sugiere que los clientes están reemplazando un producto por otro.`,
