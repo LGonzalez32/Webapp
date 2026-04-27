@@ -3084,7 +3084,13 @@ export function buildRichBlocksFromInsights( // [Z.4 — perf: cuello-3] exporta
 // [PR-M7d] outlier añadido para que sus candidatos (num_transacciones × cliente|vendedor)
 // rindan narrativa directa desde c.description/conclusion/accion sin pasar por
 // buildContextUniversal (ese path discarda bullets con términos "σ/outlier/...").
-const EVENT_TYPES_EXEMPT = new Set(['stock_risk', 'stock_excess', 'migration', 'co_decline', 'product_dead', 'seasonality', 'outlier', 'change_point', 'steady_share', 'correlation', 'meta_gap_temporal'])
+// [Z.12.V-2] meta_gap añadido. El builder meta_gap_combo emite title/description/
+// accion direction-aware (sobrecumplió/incumplió). buildContextUniversal agregaba
+// bullets temporales tipo "El hueco de X viene de..." que asumen direction='down'
+// y producían contradicción narrativa en candidatos sobrecumpl (ej: Lácteos 709%
+// con bullet "El hueco de Lácteos viene de Sandra Morales 84% meta"). El builder
+// es self-contained — no necesita el enrichment cross-temporal.
+const EVENT_TYPES_EXEMPT = new Set(['stock_risk', 'stock_excess', 'migration', 'co_decline', 'product_dead', 'seasonality', 'outlier', 'change_point', 'steady_share', 'correlation', 'meta_gap_temporal', 'meta_gap'])
 
 // [Z.11.5] NON_MONETARY_METRIC_IDS importado de insightStandard.ts como fuente
 // única. Antes existía aquí una copia que faltaba `skus_activos` y `margen_pct`,
