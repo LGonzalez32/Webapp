@@ -975,9 +975,31 @@ Consumidores legacy detectados (4 archivos):
 
 ### Sprint M-5 — Dataset golden secundario para tipos sin cobertura
 
-**Goal.** Cubrir 6 tipos de insight que actualmente no aparecen en goldens
-(Hallazgo H4 del stress test): `dominance`, `proportion_shift`,
-`change_point`, `steady_share`, `correlation`, `seasonality`.
+> **Estado: ejecutado 2026-04-27.** Tests 117/117 (105 + 12 nuevos), tsc 0.
+> 6 snapshots nuevos en `insight-engine.coverage.test.ts.snap`.
+>
+> **Lo aplicado:** archivo nuevo `src/lib/__tests__/insight-engine.coverage.test.ts`
+> con 12 tests (1 happy + 1 negative por tipo, salvo correlation que tiene 3
+> y seasonality que tiene 1):
+>
+> | Tipo | Detector usado | Fixture |
+> |---|---|---|
+> | `dominance` | `INSIGHT_TYPE_REGISTRY.find('dominance').detect()` | 5 puntos, top-1 con 80% share |
+> | `proportion_shift` | idem, .detect() | 2 puntos, shift 50%→70% |
+> | `correlation` | idem, .detect() | 4 puntos con r=1.0 perfecta |
+> | `change_point` | `buildChangePointBlocks(sales)` | 12 meses con jump 100→400 en mes 7 |
+> | `steady_share` | `buildSteadyShareBlocks(sales)` | 12 meses con shift de share P1 30%→70% |
+> | `seasonality` | `detectSeasonality(metric, dim, type, ctx)` | 24 meses con pico Q4 cada año |
+>
+> Cada test verifica:
+> - Presencia del tipo en output (`expect(...length).toBeGreaterThan(0)`)
+> - Snapshot estructural redactado (campos clave: score, severity, member,
+>   metric, dim) — NO se inspecciona narrativa.
+> - Test negativo confirma que el detector NO dispara con datos no-target.
+>
+> **Beneficio:** cualquier regresión futura en estos 6 detectores rompe el
+> snapshot apropiado. Antes solo eran observables vía runtime, sin protección
+> de tests.
 
 **Contexto.** Goldens actuales (`insight-engine.golden.test.ts.snap`,
 `insight-engine.gate-audit.test.ts.snap`) usan dataset Los Pinos demo. Los
