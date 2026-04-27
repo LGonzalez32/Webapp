@@ -2105,7 +2105,23 @@ export function calcularDirection(
     }
     case 'dominance':     return 'neutral'
     case 'correlation':   return 'neutral'
-    case 'meta_gap':      return 'down'           // siempre hay brecha (cumplimiento < 100)
+    // [Z.13.V-4] meta_gap NO es siempre 'down'. Post-Z.11.2 el builder
+    // emite también sobrecumplimiento (cumplPct > 100). El builder setea
+    // c.direction='up' o 'down' top-level, pero `hydratarCandidatoZ9`
+    // llama a `calcularDirection(c)` y sobreescribe — pre-Z.13.V-4 esta
+    // función devolvía 'down' fijo, corrompiendo el direction de
+    // candidatos sobrecumpl (María Castillo 163%, Roberto Cruz 216%
+    // terminaban con direction='down' aunque el builder los marcó 'up').
+    // Esto rompía agrupación direction-aware (V-2): bucket 'estancados'
+    // mezclaba sobrecumpls con subcumpls.
+    case 'meta_gap':
+    case 'meta_gap_temporal': {
+      const cumplPct = d['cumplPct']
+      if (typeof cumplPct === 'number' && Number.isFinite(cumplPct)) {
+        return cumplPct >= 100 ? 'up' : 'down'
+      }
+      return 'down'  // fallback: sin cumplPct, asumimos sub-meta (caso histórico)
+    }
     case 'stock_risk':    return 'down'
     case 'stock_excess':  return 'neutral'
     case 'migration': {

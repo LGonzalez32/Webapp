@@ -136,7 +136,14 @@ export function generarAcciones(
         fuente: `clientesDormidos.filter(d => d.vendedor === "${sujeto}").length`,
       })
     }
-    return acciones
+    // [Z.13.V-4 Fix C] No retornar early si acciones está vacío. Caso runtime:
+    // Roberto Méndez (supervisor, no en vendorAnalysis) y Lácteos/Refrescos
+    // (categoria, no en vendorAnalysis) caían acá con acciones=[] y retornaban
+    // → diagnostic-generator caía a "Sin acciones sugeridas" aunque el builder
+    // meta_gap_combo emitió accion como string. Fall through al fallback line
+    // 325 que lee block.sections "Acción" — populada por V-3.
+    if (acciones.length > 0) return acciones
+    // fall through al fallback común
   }
 
   if (insightType === 'change' || insightType === 'contribution') {
