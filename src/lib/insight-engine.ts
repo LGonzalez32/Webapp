@@ -27,6 +27,7 @@ import {
   type MetricComputeOpts,
   type DetectResult,
 } from './insight-registry'
+import { analyzeDimRelationships, generateAutoCombos } from './dim-relationships'
 import {
   // ya integrados en v1
   pasaFiltroRuido,
@@ -112,6 +113,7 @@ import {
   EXECUTIVE_TOP_N,
   // [Fase 6A] Gate canónico pass/fail
   evaluateInsightCandidate,
+  resolveImpactoUsd,
   type InsightGateDecision,
 } from './insightStandard'
 import { getAgregadosParaFiltro, type AgregadosFiltro } from './domain-aggregations' // [Z.4 — perf: cuello-2]
@@ -2870,7 +2872,7 @@ function computeImpactoUSDFromCandidate(c: InsightCandidate, ctx: BlockContext):
     return Math.abs(c.impacto_valor)
   }
   // Para tipos que ya devuelven USD en impacto_valor independiente de la métrica:
-  const _usdDirectTypes = new Set(['stock_risk', 'stock_excess', 'co_decline', 'product_dead', 'cliente_dormido', 'migration', 'meta_gap_temporal'])
+  const _usdDirectTypes = new Set(['stock_risk', 'stock_excess', 'co_decline', 'product_dead', 'cliente_dormido', 'cliente_perdido', 'migration', 'meta_gap_temporal'])
   if (typeof c.impacto_valor === 'number' && isFinite(c.impacto_valor) && _usdDirectTypes.has(c.insightTypeId)) {
     return Math.abs(c.impacto_valor)
   }
@@ -3313,9 +3315,32 @@ export function candidatesToDiagnosticBlocks(
   const _pertenencia = buildPertenenciaIndex(_salesOfMonth)
 
   // R108: narrativa rica es responsabilidad interna — generar bloques ricos primero (Z.2)
-  const legacyBlocks = prebuiltLegacyBlocks ?? buildRichBlocksFromInsights(ctx.insights, ctx.vendorAnalysis)
+  const _legacyBlocksAll = prebuiltLegacyBlocks ?? buildRichBlocksFromInsights(ctx.insights, ctx.vendorAnalysis)
 
-  // Entidades ya cubiertas por bloques ricos (dedup interno — R110)
+  // [Step A] Inversión de precedencia: motor 2 gana en el dashboard.
+  // Motor 2 candidates pasan sin filtrar; legacyBlocks se filtran si su
+  // entidad ya está cubierta por un candidate de motor 2.
+  const motor2Entities = new Set<string>()
+  for (const c of candidates) {
+    const memberStr = typeof c.member === 'string' ? c.member.trim().toLowerCase() : ''
+    const titleStr  = typeof c.title  === 'string' ? c.title.trim().toLowerCase()  : ''
+    if (memberStr) motor2Entities.add(memberStr)
+    if (titleStr)  motor2Entities.add(titleStr)
+  }
+
+  const legacyBlocks = _legacyBlocksAll.filter(b => {
+    const targets = (b.links?.map(l => l.target?.toLowerCase()) ?? []).filter(Boolean) as string[]
+    const headline = b.headline?.toLowerCase() ?? ''
+    const names = [...targets, headline].filter(Boolean)
+    if (names.length === 0) return true
+    // skip si cualquiera de sus entidades ya está representada por motor 2
+    return !names.some(n =>
+      motor2Entities.has(n) ||
+      [...motor2Entities].some(m => n.includes(m) || m.includes(n)),
+    )
+  })
+
+  // Entidades cubiertas por bloques ricos sobrevivientes (para usedEntities downstream)
   const legacyEntities = new Set<string>(
     legacyBlocks.flatMap(b => [
       ...(b.links?.map(l => l.target?.toLowerCase()) ?? []),
@@ -3323,15 +3348,8 @@ export function candidatesToDiagnosticBlocks(
     ]).filter(Boolean),
   )
 
-  // Candidatos no cubiertos por el engine rico
-  const uncoveredCandidates = candidates.filter(c => {
-    const memberStr = typeof c.member === 'string' ? c.member.trim() : ''
-    const titleStr  = typeof c.title  === 'string' ? c.title.trim()  : ''
-    const name = (memberStr || titleStr || '').toLowerCase() // [Z.7 T1-HOTFIX-3] member vacío usa title
-    if (!name) return true // [Z.7 T1-HOTFIX-3] sin nombre derivable, no cruza legacy → uncovered
-    return !legacyEntities.has(name) &&
-           ![...legacyEntities].some(le => name.includes(le) || le.includes(name))
-  })
+  // [Step A] Motor 2 candidates pasan sin filtrar — son la fuente principal post-roadmap.
+  const uncoveredCandidates = candidates
 
   // See top-of-file REGLA UNIVERSAL DE STORYTELLING + FASE 4B
   const usedEntities = new Set<string>()
@@ -3403,6 +3421,60 @@ export function candidatesToDiagnosticBlocks(
         direccion:    classifyDireccionFromCandidate(c),   // [PR-2.1c]
       _dimension:   c.dimensionId,                         // [PR-6.1b]
       _crossMetricContext: c._crossMetricContext ?? null,   // [PR-M6.A.2]
+      })
+      continue
+    }
+
+    // Sprint 5: render path dedicado para cliente_perdido — mirror de cliente_dormido
+    // pero con sections que distinguen contexto, decisión y acción de cierre.
+    if (c.insightTypeId === 'cliente_perdido') {
+      const det = c.detail as Record<string, unknown>
+      const dias        = typeof det.diasSinComprar === 'number' ? det.diasSinComprar : 0
+      const frec        = typeof det.frecuenciaHistoricaDias === 'number' ? det.frecuenciaHistoricaDias : null
+      const impacto     = typeof det.impactoVentaHistorica === 'number' ? det.impactoVentaHistorica : 0
+      const vendedor    = typeof det.vendedor === 'string' ? det.vendedor : ''
+
+      const bullets: string[] = []
+      bullets.push(`${c.member} lleva ${dias} días sin comprar — past del umbral recuperable.`)
+      if (frec && frec > 0) {
+        const ratio = dias / frec
+        const ratioFmt = ratio >= 3 ? `${ratio.toFixed(1)}× su cadencia habitual` : `excede su cadencia habitual de ${Math.round(frec)} días`
+        bullets.push(`Compraba cada ${Math.round(frec)} días — hoy ${ratioFmt}.`)
+      }
+      if (impacto > 0) {
+        const impactoFmt = Math.round(impacto).toLocaleString('es-SV')
+        bullets.push(`Aportaba $${impactoFmt} históricamente${vendedor ? ` (vendedor: ${vendedor})` : ''}.`)
+      }
+      const bulletsValidos = bullets.filter(b => !tieneReferenciaTemporalProhibida(b))
+      if (bulletsValidos.length === 0) continue
+
+      const accionTexto = typeof c.accion === 'string'
+        ? c.accion
+        : `Decidir cierre de cuenta o intento final de recuperación con ${c.member}.`
+
+      const _perdidoUSD = impacto || 0
+      const _perdidoRec = computeRecuperableFromCandidate(c, _perdidoUSD, _diasRestantes)
+      blocks.push({
+        id:           `ie-cliente-perdido-${idx}`,
+        severity:     candidateSeverityToBlock(c),
+        headline:     c.title,
+        summaryShort: c.description,
+        sections: [
+          { label: 'Contexto', type: 'bullet', items: bulletsValidos },
+          { label: 'Acción',   type: 'bullet', items: [`→ ${accionTexto}`] },
+        ],
+        links:        [],
+        insightIds:   [`perdido:cliente:${c.member}`],
+        impactoTotal: null,
+        impactoLabel: null,
+        impactoUSD:   _perdidoUSD,
+        metadataBadges: badgesFromCandidate(c, ctx.tipoMetaActivo),
+        impacto_recuperable:     _perdidoRec.monto,
+        impacto_recuperable_pct: _perdidoRec.pct,
+        _member:     c.member,
+        direccion:   classifyDireccionFromCandidate(c),
+        _dimension:  c.dimensionId,
+        _crossMetricContext: c._crossMetricContext ?? null,
       })
       continue
     }
@@ -4560,6 +4632,20 @@ const Z11_ROOT_STRONG_TYPES = new Set<string>([
   'meta_gap_temporal',
   'product_dead',
   'migration',
+  // [Sprint H' / Visibility] Tipos nuevos. Razón: Z.11 supervivencia regla C
+  // permite usd==null + cross>=2 + tipo root-strong. Sin esto, cliente_perdido
+  // / meta_gap (combo) / cross_delta mueren en Z.11 cuando su USD impact es
+  // marginal (<$200 absoluto), aunque sean material en cross_context.
+  'cliente_perdido',
+  'cliente_dormido',
+  'meta_gap',         // emitido por meta_gap_combo (Phase C ingesta)
+  'cross_delta',      // auto-combo dim×dim×... — tiene cross_context completo
+  // [Z.11.1] Reconciliar con Z12_ROOT_STRONG_TYPES (insightStandard.ts:2563).
+  // stock_risk y stock_excess son tipos terminales accionables del inventario;
+  // sin esto, stock_excess Cacahuates 100g moría en Z.11 con tipo-debil aunque
+  // luego Z.12 los considere root-strong. La asimetría no tenía justificación.
+  'stock_risk',
+  'stock_excess',
 ])
 const Z11_GENERIC_ACTION_REGEX =
   /identificar qu[eé] cambi[oó]|comparar con el per[ií]odo|aislar la causa|validar patr[oó]n detectado|monitorear tendencia/i
@@ -4906,11 +4992,15 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   const _fechaRef = _fechaRefMs > 0 ? new Date(_fechaRefMs) : new Date()
   const _hasVentaNeta = currentSales.some((s: any) => s.venta_neta != null)
   const _enrichCtx = buildEnrichmentContext(sales, _fechaRef, _hasVentaNeta, clientesDormidos)
-  // [Z.10.4b] Gating de enrichment: dims soportadas + tipos que NO aportan con cross_context
+  // [Z.10.4b + Phase D] Gating de enrichment: dims soportadas + tipos que NO aportan
+  // con cross_context. Antes solo producto/cliente/vendedor; ahora también categoria,
+  // subcategoria, canal y proveedor (cross-context.ts maneja fallback transparente
+  // para los dims sin lógica específica, así que extender la elegibilidad solo
+  // mejora la narrativa sin riesgo).
   const _ENRICH_SKIP_TYPES = new Set(['seasonality', 'correlation', 'steady_share', 'dominance', 'proportion_shift'])
+  const _ENRICH_ELIGIBLE_DIMS = new Set(['producto', 'cliente', 'vendedor', 'categoria', 'subcategoria', 'canal', 'proveedor'])
   const _isEnrichEligible = (dimId: string, typeId: string): boolean =>
-    (dimId === 'producto' || dimId === 'cliente' || dimId === 'vendedor') &&
-    !_ENRICH_SKIP_TYPES.has(typeId)
+    _ENRICH_ELIGIBLE_DIMS.has(dimId) && !_ENRICH_SKIP_TYPES.has(typeId)
 
   const baseOpts: MetricComputeOpts = { metas, metaType: tipoMetaActivo, year, month }
   const prevOpts: MetricComputeOpts = { metas, metaType: tipoMetaActivo, year: prev.year, month: prev.month }
@@ -4960,7 +5050,11 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
     const historyGroups = historySales.map(hs => groupByField(hs, dim.field))
 
     for (const metric of METRIC_REGISTRY) {
-      if (metric.requiresMetas && dim.id !== 'vendedor') continue
+      // [Phase C] cumplimiento_meta migró a meta_gap_combo (special builder)
+      // que respeta el combo de dims presentes en cada meta-row. El main loop
+      // single-dim no podía manejar metas multi-dim (ej. vendedor+cliente+producto)
+      // y siempre se restringía a vendedor only.
+      if (metric.id === 'cumplimiento_meta') continue
       if (metric.id === 'precio_unitario' && tipoMetaActivo === 'uds') continue
 
       const points: DataPoint[] = []
@@ -5208,7 +5302,12 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
     const dormidoCfg = getDiasDormidoUsuario()
     const umbralDias = dormidoCfg.valor
     const esUmbralDefault = dormidoCfg.esDefault
-    const elegibles = clientesDormidos.filter(cd => (cd.dias_sin_actividad ?? 0) >= umbralDias)
+    // Sprint 5: excluimos recovery_label='perdido' — esos van al builder cliente_perdido
+    // (acción de cierre, no de rescate). Evita duplicar candidatos del mismo cliente
+    // entre ambos builders.
+    const elegibles = clientesDormidos.filter(cd =>
+      (cd.dias_sin_actividad ?? 0) >= umbralDias && cd.recovery_label !== 'perdido',
+    )
     // Fase 5C — FALLO #3 (R53): impacto histórico en ventana YoY (mismo mes año
     // anterior). Reemplaza cd.valor_historico (suma all-time) por la venta del
     // cliente en el mes equivalente del año previo. Coherente con P4.
@@ -5273,6 +5372,86 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
     }
   }
   _builderStats['cliente_dormido'] = { ms: performance.now() - _t0, input: _in, output: allCandidates.length - _in }
+  }
+
+  // 3C-bis. [Sprint 5] cliente_perdido — clientes con recovery_label='perdido'
+  // (recovery_score < 40 según analysis.ts). Diferencia con cliente_dormido:
+  //   - dormido = aún recuperable (alta/recuperable/dificil) → acción: rescatar
+  //   - perdido = past recovery point → acción: cerrar cuenta o última recuperación
+  // El threshold ya es frecuencia-aware (analysis.ts:596 usa frecuencia_esperada * 1.5).
+  // Defaults presentes para que la key esté siempre en metadata.builders.
+  _builderStats['cliente_perdido'] = { ms: 0, input: 0, output: 0 }
+  if (clientesDormidos && clientesDormidos.length > 0) {
+    const _t0_perdido = performance.now(); const _in_perdido = allCandidates.length
+    const perdidos = clientesDormidos.filter(cd => cd.recovery_label === 'perdido')
+    if (perdidos.length > 0) {
+      const yoyByCliente = new Map<string, number>()
+      for (const r of prevSalesFull) {
+        const sr  = r as unknown as Record<string, unknown>
+        const cli = sr.cliente as string | undefined
+        if (!cli) continue
+        const val = (sr.venta_neta as number | undefined) ?? 0
+        yoyByCliente.set(cli, (yoyByCliente.get(cli) ?? 0) + val)
+      }
+      // Sprint 5 fix: anchor de impacto contra venta total del negocio (no contra el max
+      // del subconjunto perdidos). Antes, un único perdido low-impact obtenía score=1
+      // simplemente por ser el "más grande" de su grupo. Ahora un perdido solo califica
+      // CRITICA si su impacto es ≥1% del negocio del período.
+      for (const cd of perdidos) {
+        const dias    = cd.dias_sin_actividad
+        const impacto = yoyByCliente.get(cd.cliente) ?? 0
+        const frec    = cd.frecuencia_esperada_dias ?? null
+        const pctNegocio = _Z13_ventaTotalNegocio > 0 ? impacto / _Z13_ventaTotalNegocio : 0
+        const ratioDias  = frec ? dias / frec : 1
+        // Severidad anchored a impacto absoluto sobre el negocio + cuán fuera-de-cadencia
+        // está el cliente.
+        const severity   = pctNegocio >= 0.01 || ratioDias >= 6 ? 'CRITICA' : 'ALTA'
+        // Score: floor de 0.55 (cualquier perdido vale algo); +bonus por impacto absoluto;
+        // +bonus por ratio de cadencia. Cap en 0.95 para no dominar el ranker.
+        const scoreImpacto = Math.min(0.30, pctNegocio * 30) // pctNegocio=1% → +0.30
+        const scoreCadencia = Math.min(0.10, Math.max(0, ratioDias - 3) * 0.025)
+        const score = Math.min(0.95, 0.55 + scoreImpacto + scoreCadencia)
+        const impactoFmt   = impacto > 0
+          ? ` Aportaba $${Math.round(impacto).toLocaleString('es-SV')} históricamente.`
+          : ''
+        const frecFmt = frec
+          ? ` (compraba cada ${Math.round(frec)} días)`
+          : ''
+        allCandidates.push({
+          _origin:       'special_builder',
+          metricId:      'dias_sin_compra',
+          dimensionId:   'cliente',
+          insightTypeId: 'cliente_perdido',
+          member:        cd.cliente,
+          score,
+          severity,
+          title:         `✗ ${cd.cliente} — probablemente perdido`,
+          description:   `${cd.cliente} lleva ${dias} días sin comprar${frecFmt}.${impactoFmt} Decidir entre cierre de cuenta o último intento de recuperación antes de seguir invirtiendo tiempo.`,
+          detail: {
+            diasSinComprar:          dias,
+            impactoVentaHistorica:   impacto,
+            clienteNombre:           cd.cliente,
+            vendedor:                cd.vendedor,
+            frecuenciaHistoricaDias: frec,
+            recoveryScore:           cd.recovery_score,
+            recoveryLabel:           cd.recovery_label,
+            comparison:              'no_temporal',
+          },
+          accion: `Decidir cierre de cuenta o intento final de recuperación con ${cd.cliente}.`,
+          conclusion: `Cliente ${cd.cliente} probablemente perdido tras ${dias} días sin compra.`,
+          // [Sprint B / D1.c] Tipo monetario: USD impact = histórico YoY del
+          // cliente. Source 'recuperable' (revenue potencialmente recuperable).
+          // Sin esto el ranker usaba weight=1 y el gate fallaba r1+r3.
+          impacto_usd_normalizado: impacto > 0 ? impacto : null,
+          impacto_usd_source: impacto > 0 ? 'recuperable' : 'non_monetary',
+        })
+      }
+    }
+    _builderStats['cliente_perdido'] = {
+      ms: performance.now() - _t0_perdido,
+      input: _in_perdido,
+      output: allCandidates.length - _in_perdido,
+    }
   }
 
   // 3D. [Z.7 T1 — A/B] Inventory special pass — stock_risk, stock_excess, migration, co_decline
@@ -5819,6 +5998,11 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
       has_unidades:        params.sales.length > 0
                             && params.sales.reduce((n, s) => n + (s.unidades > 0 ? 1 : 0), 0) / params.sales.length >= 0.8,
       has_precio_unitario: false,  // se completa abajo
+      // Sprint cross-dim: nuevas señales de disponibilidad para columnas que ahora
+      // entran al motor (subcategoria/proveedor → dimensiones; costo_unitario → métricas margen).
+      has_subcategoria:    params.sales.some(s => s.subcategoria != null && s.subcategoria !== ''),
+      has_proveedor:       params.sales.some(s => s.proveedor != null && s.proveedor !== ''),
+      has_costo_unitario:  params.sales.some(s => s.costo_unitario != null && s.costo_unitario > 0),
     }
     _xeAvailability.has_precio_unitario = (_xeAvailability.has_unidades ?? false) && _xeAvailability.has_venta_neta
     const _xe = runCrossEngine({
@@ -5981,10 +6165,175 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
     if (import.meta.env.DEV) console.warn('[PR-M11] builder failed (degradación silenciosa):', e)
   }
 
-  // [Z.13.3] Detector cross_delta — descomposición combinatoria dim×dim.
-  // Emite candidatos por pares (vendedor×departamento, vendedor×cliente) cuando
-  // el delta YoY de la combinación es material. Capa ADITIVA: no toca el cartesiano
-  // existente, compite en pool regular del ranker. Sin protección en ALWAYS_PROTECTED_CAPS.
+  // [Phase C — multi-dim cumplimiento_meta] Reemplaza la métrica cumplimiento_meta
+  // del main loop (que solo manejaba vendedor) por un builder que respeta el combo
+  // de dimensiones presentes en cada meta-row. Si una meta tiene
+  // (vendedor=Carlos, cliente=ACME), agrega ventas con ese mismo combo.
+  // Default presente para que la key esté siempre en metadata.builders.
+  _builderStats['meta_gap_combo'] = { ms: 0, input: 0, output: 0 }
+  if (metas && metas.length > 0) {
+    const _t0_mgc = performance.now(); const _in_mgc = allCandidates.length
+    try {
+      const SHARED_DIMS = ['vendedor', 'cliente', 'producto', 'categoria', 'subcategoria', 'departamento', 'supervisor', 'canal', 'proveedor'] as const
+      // Prioridad para asignar el dimensionId del candidato — narrowest first.
+      const DIM_PRIORITY = ['producto', 'cliente', 'vendedor', 'subcategoria', 'categoria', 'supervisor', 'canal', 'proveedor', 'departamento']
+
+      // Filtrar metas del período actual
+      const metaMes = month + 1
+      const metasPeriodo = metas.filter(m => m.anio === year && m.mes === metaMes)
+      let _emitidos = 0
+      let _descartadosUmbral = 0
+      let _sinDims = 0
+
+      for (const m of metasPeriodo) {
+        // Detectar dims filled en este row
+        const filledDims: Array<{ key: string; value: string }> = []
+        for (const k of SHARED_DIMS) {
+          const v = (m as unknown as Record<string, unknown>)[k]
+          if (typeof v === 'string' && v.trim() !== '') {
+            filledDims.push({ key: k, value: v.trim() })
+          }
+        }
+        if (filledDims.length === 0) { _sinDims++; continue }
+
+        // Meta value según tipo activo
+        const metaUds = m.meta_uds ?? m.meta ?? 0
+        const metaUsd = m.meta_usd ?? (tipoMetaActivo === 'usd' ? m.meta : null) ?? 0
+        const metaVal = tipoMetaActivo === 'usd' ? metaUsd : metaUds
+        if (!metaVal || metaVal <= 0) continue
+
+        // Agregar ventas que cumplan TODOS los filledDims
+        let venta = 0
+        let ventaUsd = 0
+        for (const r of currentSales) {
+          let match = true
+          for (const fd of filledDims) {
+            const rv = (r as unknown as Record<string, unknown>)[fd.key]
+            if (rv !== fd.value) { match = false; break }
+          }
+          if (!match) continue
+          venta    += tipoMetaActivo === 'usd' ? (r.venta_neta ?? 0) : r.unidades
+          ventaUsd += r.venta_neta ?? 0
+        }
+
+        const cumplPct = (venta / metaVal) * 100
+        const gap = metaVal - venta // positivo = brecha; negativo = sobrecumplimiento
+
+        // Materialidad: emitir solo si está >25% off (en cualquier dirección)
+        // o si la meta es grande (gap absoluto > $5k USD equivalente).
+        const offBy = Math.abs(100 - cumplPct)
+        const isCriticalLow = cumplPct < 75
+        const isOverPerf    = cumplPct > 130
+        if (!isCriticalLow && !isOverPerf && offBy < 25) {
+          _descartadosUmbral++
+          continue
+        }
+
+        // Severity
+        let severity: 'CRITICA' | 'ALTA' | 'MEDIA' | 'BAJA' = 'MEDIA'
+        if (cumplPct < 50)            severity = 'CRITICA'
+        else if (cumplPct < 75)       severity = 'ALTA'
+        else if (cumplPct > 150)      severity = 'ALTA'
+        else if (offBy >= 30)         severity = 'ALTA'
+
+        // Pick narrowest dim como dimensionId
+        const dimId = DIM_PRIORITY.find(d => filledDims.some(f => f.key === d)) ?? filledDims[0].key
+        const memberRecord = filledDims.find(f => f.key === dimId)!
+
+        // Combo signature for narrative
+        const comboTxt = filledDims.map(f => `${f.key}=${f.value}`).join(' · ')
+        const ventaFmt = tipoMetaActivo === 'usd'
+          ? `$${Math.round(venta).toLocaleString('en-US')}`
+          : `${Math.round(venta).toLocaleString('en-US')} uds`
+        const metaFmt = tipoMetaActivo === 'usd'
+          ? `$${Math.round(metaVal).toLocaleString('en-US')}`
+          : `${Math.round(metaVal).toLocaleString('en-US')} uds`
+
+        const direction: 'up' | 'down' = cumplPct >= 100 ? 'up' : 'down'
+        const arrow = direction === 'up' ? '↑' : '↓'
+        const verbo = direction === 'up' ? 'sobrecumplió' : 'incumplió'
+
+        const title = filledDims.length === 1
+          ? `${arrow} ${memberRecord.value}: ${cumplPct.toFixed(0)}% de meta`
+          : `${arrow} ${comboTxt}: ${cumplPct.toFixed(0)}% de meta`
+
+        const description =
+          `${comboTxt}: ${ventaFmt} vs meta ${metaFmt} (${cumplPct.toFixed(1)}%). ` +
+          `${verbo} la meta del período por ${Math.abs(gap).toLocaleString('en-US')}${tipoMetaActivo === 'usd' ? ' USD' : ' uds'}.`
+
+        // Score: brechas grandes valen más
+        const score = Math.min(0.95, 0.5 + (offBy / 100) * 0.5)
+
+        const accion = direction === 'down'
+          ? `Plan de recuperación con ${memberRecord.value}: revisar pipeline y compromisos del mes.`
+          : `Replicar el patrón de ${memberRecord.value} en otras combinaciones similares.`
+
+        allCandidates.push({
+          _origin:       'special_builder',
+          metricId:      'cumplimiento_meta',
+          dimensionId:   dimId,
+          insightTypeId: 'meta_gap',
+          member:        memberRecord.value,
+          score,
+          severity,
+          title,
+          description,
+          detail: {
+            cumplPct,
+            metaVal,
+            ventaActual: venta,
+            ventaUsd,
+            gap,
+            comboFields: filledDims,   // [{key, value}, ...]
+            comboTxt,
+            tipoMetaActivo,
+            diasTranscurridos,
+            diasTotalesMes,
+            comparison: 'meta_combo',
+            // [Sprint H' fix] cross_context populado para que Z.11 y Z.12 lo
+            // detecten via _z11ContarCrossConcreto. Sin esto, crossCount=0 y
+            // el candidato falla regla C de Z.11 (root-strong + cross>=2).
+            cross_context: Object.fromEntries(filledDims.map(d => [d.key, d.value])),
+          },
+          conclusion: title,
+          accion,
+          direction,
+          // [Sprint B / D1.c] meta_gap_combo es monetario cuando tipoMetaActivo='usd'.
+          // gap es la brecha numérica; en uds usamos ventaUsd (componente USD del
+          // gap aunque tipoMetaActivo sea uds — para que el ranker monetario-consciente
+          // pueda priorizar). source='gap_meta' ya whitelisted en Z12_VALID_USD_SOURCES.
+          impacto_usd_normalizado: tipoMetaActivo === 'usd'
+            ? Math.abs(gap)
+            : (ventaUsd > 0 ? ventaUsd : null),
+          impacto_usd_source: (tipoMetaActivo === 'usd' || ventaUsd > 0) ? 'gap_meta' : 'non_monetary',
+        })
+        _emitidos++
+      }
+      _builderStats['meta_gap_combo'] = {
+        ms: performance.now() - _t0_mgc,
+        input: _in_mgc,
+        output: allCandidates.length - _in_mgc,
+      }
+      if (import.meta.env.DEV) {
+        console.debug('[Phase C] meta_gap_combo:', {
+          metas_periodo: metasPeriodo.length,
+          emitidos: _emitidos,
+          descartados_umbral: _descartadosUmbral,
+          sin_dims: _sinDims,
+        })
+      }
+    } catch (e) {
+      _builderStats['meta_gap_combo'] = { ms: 0, input: 0, output: 0 }
+      if (import.meta.env.DEV) console.warn('[Phase C] meta_gap_combo fallback:', e)
+    }
+  }
+
+  // [Z.13.3 + auto-combo] Detector cross_delta — descomposición combinatoria N-tupla.
+  // Antes: 7 pares hardcodeados. Ahora: análisis previo de relaciones funcionales
+  // entre dims (dim-relationships.ts) genera automáticamente todos los combos
+  // 2..MAX_TUPLE_SIZE válidos, descartando los redundantes (jerárquicos detectados
+  // desde la data: producto→categoria, vendedor→supervisor, etc.). Auto-escala
+  // cuando se agregan dims nuevas a DIMENSION_REGISTRY sin cambios de código.
   try {
     const _t0_cdelta = performance.now(); const _in_cdelta = allCandidates.length
     const _Z133_valueOf = (r: SaleRecord): number => {
@@ -6005,7 +6354,8 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
       const v = _Z133_valueOf(r)
       if (v <= 0) continue
       const rAny = r as unknown as Record<string, string | undefined>
-      for (const k of [rAny.vendedor, rAny.cliente, rAny.producto, rAny.departamento, rAny.canal]) {
+      for (const k of [rAny.vendedor, rAny.cliente, rAny.producto, rAny.departamento, rAny.canal,
+                       rAny.categoria, rAny.subcategoria, rAny.supervisor, rAny.proveedor]) {
         if (!k) continue
         _Z133_ventaPorEntidad.set(k, (_Z133_ventaPorEntidad.get(k) ?? 0) + v)
       }
@@ -6020,30 +6370,69 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
       if (_Z133_paretoTotal > 0 && _Z133_acc / _Z133_paretoTotal >= 0.8) break
     }
 
-    const _Z133_PARES: Array<{ dimA: string; fieldA: keyof SaleRecord; dimB: string; fieldB: keyof SaleRecord }> = [
-      { dimA: 'vendedor', fieldA: 'vendedor', dimB: 'departamento', fieldB: 'departamento' },
-      { dimA: 'vendedor', fieldA: 'vendedor', dimB: 'cliente',      fieldB: 'cliente' },
-    ]
+    // ── Auto-detección de relaciones dim×dim desde la data ──────────────────
+    // Las dims que entran al análisis son las del DIMENSION_REGISTRY que tienen
+    // valores reales en currentSales (no quemamos la lista).
+    const _allDims = DIMENSION_REGISTRY.map(d => d.id)
+    const _activeDims = _allDims.filter(d => {
+      for (const r of currentSales) {
+        const v = (r as unknown as Record<string, unknown>)[d]
+        if (typeof v === 'string' && v.trim() !== '') return true
+      }
+      return false
+    })
+
+    const _dimAnalysis = analyzeDimRelationships(currentSales, _activeDims)
+    const _comboGen = generateAutoCombos(_activeDims, _dimAnalysis, {
+      maxTupleSize: 4,
+      maxCombos: 200,
+    })
 
     let _Z133_emitidos = 0
     let _Z133_descartadosMaterialidad = 0
     const _Z133_muestras: Array<Record<string, unknown>> = []
+    const _Z133_emittedByCombo: Record<string, number> = {}
+    // Para dedup de paths permutados: clave canónica (dims sorted + members sorted joint)
+    const _emittedPathKeys = new Set<string>()
 
-    for (const par of _Z133_PARES) {
+    for (const combo of _comboGen.combos) {
+      const comboKey = combo.join('×')
+      _Z133_emittedByCombo[comboKey] = 0
+
+      // Materialidad escalada por tamaño de tupla: floor crece 1.5^(N-2).
+      // Una tupla 4-way debería tener delta material para evitar ruido.
+      const tupleScale = Math.pow(1.5, combo.length - 2)
+      const floorAltoTuple = _Z133_floorAlto * tupleScale
+      const floorBajoTuple = _Z133_floorBajo * tupleScale
+
+      // Agregación por tupla — clave es path joinado.
       const _curAgg  = new Map<string, number>()
       const _prevAgg = new Map<string, number>()
+      const _curMembers = new Map<string, string[]>()  // path values per key
+
       for (const r of currentSales) {
-        const a = (r as unknown as Record<string, string | undefined>)[par.fieldA as string]
-        const b = (r as unknown as Record<string, string | undefined>)[par.fieldB as string]
-        if (!a || !b) continue
-        const key = a + '||' + b
+        const path: string[] = []
+        let valid = true
+        for (const d of combo) {
+          const v = (r as unknown as Record<string, unknown>)[d]
+          if (typeof v !== 'string' || v.trim() === '') { valid = false; break }
+          path.push(v)
+        }
+        if (!valid) continue
+        const key = path.join('||')
         _curAgg.set(key, (_curAgg.get(key) ?? 0) + _Z133_valueOf(r))
+        if (!_curMembers.has(key)) _curMembers.set(key, path)
       }
       for (const r of prevSales) {
-        const a = (r as unknown as Record<string, string | undefined>)[par.fieldA as string]
-        const b = (r as unknown as Record<string, string | undefined>)[par.fieldB as string]
-        if (!a || !b) continue
-        const key = a + '||' + b
+        const path: string[] = []
+        let valid = true
+        for (const d of combo) {
+          const v = (r as unknown as Record<string, unknown>)[d]
+          if (typeof v !== 'string' || v.trim() === '') { valid = false; break }
+          path.push(v)
+        }
+        if (!valid) continue
+        const key = path.join('||')
         _prevAgg.set(key, (_prevAgg.get(key) ?? 0) + _Z133_valueOf(r))
       }
 
@@ -6056,87 +6445,106 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
         if (absDelta <= 0) continue
         if (cur + prev <= 0) continue
 
-        const [entA, entB] = key.split('||')
-        const esParetoA = _Z133_paretoSet.has(entA)
-        const esParetoB = _Z133_paretoSet.has(entB)
-        const ambosPareto = esParetoA && esParetoB
+        const path = _curMembers.get(key) ?? key.split('||')
+        // Fracción del path que está en Pareto. Pareto = al menos 50% miembros relevantes.
+        const paretoMembers = path.filter(m => _Z133_paretoSet.has(m)).length
+        const paretoFraction = paretoMembers / path.length
+        const ambosPareto = paretoFraction >= 0.5
 
-        // Gate materialidad bi-nivel consistente con Z.12.
         const pasaMaterialidad =
-          absDelta >= _Z133_floorAlto ||
-          (absDelta >= _Z133_floorBajo && ambosPareto)
+          absDelta >= floorAltoTuple ||
+          (absDelta >= floorBajoTuple && ambosPareto)
 
         if (!pasaMaterialidad) {
           _Z133_descartadosMaterialidad++
           continue
         }
 
-        const direction = delta >= 0 ? 'up' : 'down'
-        const arrow     = direction === 'up' ? '↑' : '↓'
+        // Dedup por path canónico — combos diferentes pueden producir el mismo
+        // slice si los dims se solapan post-canonicalización.
+        const canonKey = combo
+          .map((d, i) => `${d}=${path[i]}`)
+          .sort()
+          .join('|')
+        if (_emittedPathKeys.has(canonKey)) continue
+        _emittedPathKeys.add(canonKey)
+
+        const direction: 'up' | 'down' = delta >= 0 ? 'up' : 'down'
+        const arrow = direction === 'up' ? '↑' : '↓'
         const pctChange = prev > 0 ? delta / prev : (cur > 0 ? 1 : 0)
         const pctSobreNegocio = absDelta / _Z133_ventaTotalSafe
-
         const score = Math.min(pctSobreNegocio * 10, 1)
 
         let severity: 'CRITICA' | 'ALTA' | 'MEDIA' | 'BAJA' = 'BAJA'
-        if      (absDelta >= _Z133_floorAlto * 2) severity = 'CRITICA'
-        else if (absDelta >= _Z133_floorAlto)     severity = 'ALTA'
-        else if (absDelta >= _Z133_floorBajo)     severity = 'MEDIA'
+        if      (absDelta >= floorAltoTuple * 2) severity = 'CRITICA'
+        else if (absDelta >= floorAltoTuple)     severity = 'ALTA'
+        else if (absDelta >= floorBajoTuple)     severity = 'MEDIA'
 
         const _fmt = (n: number) => Math.round(n).toLocaleString('en-US')
-        const title =
-          `${arrow} ${entA} ${direction === 'up' ? 'creció' : 'cayó'} $${_fmt(absDelta)} en ${entB}`
+
+        // Path display: "vendedor=Carlos · cliente=ACME · producto=Yogurt"
+        const pathTxt = combo.map((d, i) => `${d}=${path[i]}`).join(' · ')
+        // Most granular member para member field (mayor cardinalidad = más narrow)
+        const granularDim = [...combo].sort(
+          (a, b) => (_dimAnalysis.cardinality.get(b) ?? 0) - (_dimAnalysis.cardinality.get(a) ?? 0),
+        )[0]
+        const granularIdx = combo.indexOf(granularDim)
+        const granularMember = path[granularIdx]
+
+        const title = `${arrow} ${pathTxt} ${direction === 'up' ? 'creció' : 'cayó'} $${_fmt(absDelta)}`
         const description =
-          `${entA} en ${entB}: $${_fmt(prev)} → $${_fmt(cur)} ` +
+          `${pathTxt}: $${_fmt(prev)} → $${_fmt(cur)} ` +
           `(${direction === 'up' ? '+' : ''}${Math.round(pctChange * 1000) / 10}%). ` +
           `Representa ${Math.round(pctSobreNegocio * 10000) / 100}% del negocio del período.`
+
+        // dimensionPath: estructura canónica con todo el N-tuple
+        const dimensionPath = combo.map((d, i) => ({ dim: d, member: path[i] }))
 
         const candidate: InsightCandidate = {
           _origin:       'special_builder',
           metricId:      'venta',
-          dimensionId:   par.dimA,
+          dimensionId:   granularDim,
           insightTypeId: 'cross_delta',
-          member:        entA,
+          member:        granularMember,
           score,
           severity,
           title,
           description,
           detail: {
-            member:          entA,
-            member2:         entB,
-            dimension2:      par.dimB,
+            dimensionPath,             // Array<{dim, member}> — N-dim
+            comboSize:       combo.length,
+            comboKey,
             memberValue:     cur,
             memberPrevValue: prev,
             memberChange:    delta,
             pctChange,
             pctSobreNegocio,
-            esParetoA,
-            esParetoB,
-            cross_context: {
-              [par.dimB]: entB,
-            },
+            paretoFraction,
+            tupleScale,
+            cross_context: Object.fromEntries(combo.map((d, i) => [d, path[i]])),
           },
           conclusion: title,
-          // accion se deja undefined: la puerta relajada Z.12.2 tolera si r1+r2+r3 pasan.
           impacto_usd_normalizado: absDelta,
           impacto_usd_source:      'cross_delta_yoy',
           direction,
         }
-        // Campos aditivos dim×dim: no están en InsightCandidate; se adjuntan vía cast.
-        ;(candidate as unknown as { dimensionId2?: string; member2?: string }).dimensionId2 = par.dimB
-        ;(candidate as unknown as { dimensionId2?: string; member2?: string }).member2      = entB
+        // Backwards-compat: para combos size 2, mantener dimensionId2/member2.
+        if (combo.length === 2) {
+          const otherIdx = granularIdx === 0 ? 1 : 0
+          ;(candidate as unknown as { dimensionId2?: string; member2?: string }).dimensionId2 = combo[otherIdx]
+          ;(candidate as unknown as { dimensionId2?: string; member2?: string }).member2      = path[otherIdx]
+        }
 
         allCandidates.push(candidate)
         _Z133_emitidos++
+        _Z133_emittedByCombo[comboKey] = (_Z133_emittedByCombo[comboKey] ?? 0) + 1
 
-        if (_Z133_muestras.length < 6) {
+        if (_Z133_muestras.length < 8) {
           _Z133_muestras.push({
-            par:         par.dimA + '×' + par.dimB,
-            entA,
-            entB,
-            delta:       Math.round(delta),
+            combo: comboKey,
+            path:  pathTxt,
+            delta: Math.round(delta),
             pct_negocio: Math.round(pctSobreNegocio * 10000) / 100,
-            ambosPareto,
             severity,
           })
         }
@@ -6150,20 +6558,30 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
       discarded: _Z133_descartadosMaterialidad,
     }
     if (import.meta.env.DEV) {
-      console.debug('[Z.13.3] cross_delta_detector', {
+      console.debug('[Z.13.3 auto-combo] cross_delta_detector', {
+        active_dims:               _activeDims,
+        sample_size:               _dimAnalysis.sampleSize,
+        cardinality:               Object.fromEntries(_dimAnalysis.cardinality),
+        fd_detected:               Object.fromEntries(
+          [..._dimAnalysis.fd.entries()]
+            .filter(([, set]) => set.size > 0)
+            .map(([k, v]) => [k, [...v]]),
+        ),
+        combos_telemetry:          _comboGen.telemetry,
+        combos_evaluados:          _comboGen.combos.map(c => c.join('×')),
         ventaTotalNegocio:         Math.round(_Z133_ventaTotalSafe),
-        floorAlto:                 Math.round(_Z133_floorAlto),
-        floorBajo:                 Math.round(_Z133_floorBajo),
+        floorAlto_base:            Math.round(_Z133_floorAlto),
+        floorBajo_base:            Math.round(_Z133_floorBajo),
         pareto_set_size:           _Z133_paretoSet.size,
-        pares_evaluados:           _Z133_PARES.map(p => p.dimA + '×' + p.dimB),
         emitidos:                  _Z133_emitidos,
+        emitidos_por_combo:        _Z133_emittedByCombo,
         descartados_materialidad:  _Z133_descartadosMaterialidad,
         muestra_top:               _Z133_muestras,
       })
     }
   } catch (e) {
     _builderStats['cross_delta'] = { ms: 0, input: 0, output: 0, discarded: 0 }
-    if (import.meta.env.DEV) console.warn('[Z.13.3] cross_delta_detector fallback (degradación silenciosa):', e)
+    if (import.meta.env.DEV) console.warn('[Z.13.3 auto-combo] cross_delta_detector fallback (degradación silenciosa):', e)
   }
 
   _endStage('special_builders', {
@@ -6238,27 +6656,27 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
     ['stock_risk',   2],   // raramente >2 simultáneos accionables
     ['product_dead', 3],   // puede haber varios productos muertos a la vez
     ['migration',    2],   // top-2 por score; resto compite en regular
-    // [PR-M7g] 1 slot garantizado para outliers ALTA/CRITICA (filtro aplicado
-    // dentro del loop de protección). Desbloquea el eje Metric × Dimension ×
-    // InsightType emergido de M7d/M7f en la UI.
+    // [PR-M7g] 1 slot garantizado para outliers ALTA/CRITICA.
     ['outlier',      1],
-    // [PR-M8a] slots para change_point — quiebre de régimen en series
-    // mensuales. No compite en impacto monetario (impact_usd=0) pero aporta
-    // señal temporal que change/trend no captan.
-    // [PR-M9b] cap subido a 2 — con M8b (3 métricas × dims ampliadas) hay
-    // ~36 candidatos en pool y 2 slots libres en el ranker (cap=12, actual=10).
+    // [PR-M8a] change_point — quiebre de régimen en series mensuales.
     ['change_point', 2],
-    // [PR-M9] 1 slot para steady_share — entidades que sostuvieron una cuota
-    // estable y la perdieron (o ganaron) de forma sostenida. Complementaria
-    // a change_point (absoluto vs relativo al grupo).
+    // [PR-M9] 1 slot para steady_share.
     ['steady_share', 1],
-    // [PR-M10] 1 slot para correlation — pares de métricas con movimiento
-    // inverso sostenido (r ≤ -0.65). Señal cualitativa distinta de los tipos
-    // anteriores: relaciona DOS métricas entre sí, no una contra el grupo.
+    // [PR-M10] 1 slot para correlation.
     ['correlation', 1],
-    // [PR-M11] hasta 2 vendedores críticos simultáneos con tendencia de
-    // cumplimiento de meta (declive sostenido o brecha estructural).
+    // [PR-M11] hasta 2 vendedores con tendencia de cumplimiento.
     ['meta_gap_temporal', 2],
+    // [Sprint E / Visibility] Tipos nuevos que NO estaban protegidos y
+    // morían en el regular bucket (166 candidatos vs 6 slots). Sin estos
+    // caps, cliente_perdido / meta_gap / cross_delta nunca llegan al pool
+    // selected aunque pasen el gate. Caps conservadores (1-2) para no
+    // desbalancear; el filtro del builder + score se encarga del resto.
+    ['cliente_perdido', 1],   // 1 cliente perdido relevante por run típicamente
+    ['cliente_dormido', 2],   // se nos pasó histórico, también merece caps
+    ['meta_gap',        2],   // emitido por meta_gap_combo (Phase C ingesta)
+    ['cross_delta',     2],   // auto-combo emite muchos; tomar top-2 por score
+    ['stock_excess',    1],   // ya estaba en EVENT_TYPES_EXEMPT pero sin cap
+    ['co_decline',      1],   // cluster de productos en declive
   ])
   const MIN_REGULAR_SLOTS = 6
   const RANKER_TOTAL_CAP  = 12
@@ -6374,7 +6792,14 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   const _regularSelected: InsightCandidate[] = []
   const _regularPool = [..._regularCands]
   while (_regularSelected.length < _regularCap && _regularPool.length > 0) {
-    const selMembers  = new Set(_regularSelected.map(c => c.member).filter(Boolean))
+    // [Sprint F / Visibility] selMembers incluye protected + regular para
+    // cross-bucket dedup. Antes solo trackeaba regular, así que Carlos en
+    // meta_gap_temporal (protected) + contribution:Carlos (regular) se
+    // duplicaba en el output. Ahora la penalty *= 0.7 aplica cuando el
+    // member ya está en CUALQUIER bucket.
+    const selMembers  = new Set(
+      [..._protectedCands, ..._regularSelected].map(c => c.member).filter(Boolean),
+    )
     const typeCount   = new Map<string, number>()
     const contribMet  = new Map<string, number>()
     for (const s of _regularSelected) {
@@ -6706,50 +7131,15 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
   // Corre DESPUÉS de hydratarCandidatoZ9 (L.5901) para que impacto_gap_meta e
   // impacto_recuperable ya estén poblados. Itera `selected` (objetos mutados
   // in-place que regresan al consumidor). No afecta orden aún.
-  // Simetría de signo: gap_meta y recuperable aceptan cualquier finite != 0
-  // (Math.abs), alineado con cross_varAbs/detail_*.
+  // [Z.11.1] Migrado al resolver canónico `resolveImpactoUsd` (insightStandard.ts:2610)
+  // para eliminar duplicación. La única diferencia funcional es el paso 4
+  // (typed amount via calcularImpactoValor) que ahora también está activo —
+  // permite recovery USD para cliente_dormido/cliente_perdido cuando
+  // impacto_recuperable quedó en null por hidratación incompleta.
   for (const c of selected) {
-    let usd: number | null = null
-    let src: InsightCandidate['impacto_usd_source']
-
-    const det = c.detail as Record<string, unknown> | undefined
-    const cc  = det?.cross_context as Record<string, unknown> | undefined
-
-    if (typeof c.impacto_gap_meta === 'number' && Number.isFinite(c.impacto_gap_meta) && c.impacto_gap_meta !== 0) {
-      // gap_meta es USD puro por construcción, incluso si metricId es no-monetario.
-      usd = Math.abs(c.impacto_gap_meta)
-      src = 'gap_meta'
-    } else if (cc && typeof cc.varAbs === 'number' && Number.isFinite(cc.varAbs as number) && (cc.varAbs as number) !== 0) {
-      // [Z.10.5a.3] cross_varAbs sube antes de recuperable — USD puro dimensional.
-      usd = Math.abs(cc.varAbs as number)
-      src = 'cross_varAbs'
-    } else if (
-      typeof c.impacto_recuperable === 'number' &&
-      Number.isFinite(c.impacto_recuperable) &&
-      c.impacto_recuperable !== 0 &&
-      !NON_MONETARY_METRIC_IDS.has(c.metricId)
-    ) {
-      // [Z.10.5a.3] recuperable sólo es USD puro si metricId es monetario;
-      // en ratios (frecuencia_compra, ticket_promedio, etc.) contiene el ratio, no USD.
-      usd = Math.abs(c.impacto_recuperable)
-      src = 'recuperable'
-    } else if (det && typeof det.monto === 'number' && Number.isFinite(det.monto as number)) {
-      usd = Math.abs(det.monto as number)
-      src = 'detail_monto'
-    } else if (det && typeof det.magnitud === 'number' && Number.isFinite(det.magnitud as number)) {
-      usd = Math.abs(det.magnitud as number)
-      src = 'detail_magnitud'
-    } else if (det && typeof det.totalCaida === 'number' && Number.isFinite(det.totalCaida as number)) {
-      usd = Math.abs(det.totalCaida as number)
-      src = 'detail_totalCaida'
-    } else if (NON_MONETARY_METRIC_IDS.has(c.metricId)) {
-      src = 'non_monetary'
-    } else {
-      src = 'unavailable'
-    }
-
+    const { usd, source } = resolveImpactoUsd(c)
     c.impacto_usd_normalizado = usd
-    c.impacto_usd_source = src
+    c.impacto_usd_source = source
 
     // [Z.10.5b] Composición del render_priority_score por impacto económico.
     const _baseRps = typeof c.render_priority_score === 'number' && Number.isFinite(c.render_priority_score)
