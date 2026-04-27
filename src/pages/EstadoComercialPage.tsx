@@ -256,6 +256,10 @@ export default function EstadoComercialPage() {
     canalAnalysis, categoriaAnalysis, dataSource, tipoMetaActivo,
     selectedMonths, setSelectedMonths,
   } = useAppStore()
+  // [Z.11.4] Single source of truth: candidates filtrados (post-Z.11+Z.12) emitidos
+  // por analysisWorker. Cuando selectedMonths===null se consume directo;
+  // multi-mes cae al fallback page-side via runInsightEngine.
+  const filteredCandidatesStore = useAppStore(s => s.filteredCandidates)
 
   const [vendedorPanel, setVendedorPanel] = useState<VendorAnalysis | null>(null)
   const [mounted, setMounted] = useState(false)
@@ -1377,8 +1381,8 @@ export default function EstadoComercialPage() {
         if (dataAvailability.has_inventario) {
           const productosCliente = new Set(
             deferredSales
-              .filter(s => (s.cliente ?? s.codigo_cliente) === topDormido.cliente)
-              .map(s => s.producto ?? s.codigo_producto)
+              .filter(s => s.cliente === topDormido.cliente)
+              .map(s => s.producto)
               .filter((p): p is string => p != null && p.trim() !== '')
           )
           const stockCruzado = categoriasInventario
@@ -1421,44 +1425,55 @@ export default function EstadoComercialPage() {
   }, [causasAtraso, vendorAnalysis, supervisorAnalysis, clientesDormidos, canalAnalysis, categoriaAnalysis, categoriasInventario, insights, teamStats, dataAvailability, configuracion, deferredSales, selectedPeriod])
 
   // ── Diagnóstico del mes — motor único Metric × Dimension + narrativa rica (Z.2) ─
-  // Cuello 6: tres useMemos encadenados para minimizar re-cómputo por deps independientes
+  // [Z.11.4] Single source of truth para candidates motor 2.
+  //
+  // Default path (selectedMonths===null): consume `filteredCandidatesStore` que
+  // ya viene filtrado post-Z.11+Z.12 desde analysisWorker. Cero duplicación de
+  // motor 2 en main thread.
+  //
+  // Multi-mes path (selectedMonths!==null): UI permite seleccionar múltiples
+  // meses para comparación; motor 2 corre page-side con esos meses específicos
+  // porque el worker solo conoce un selectedPeriod a la vez. Caso minoritario.
 
-  // PASO 1: Candidatos del motor estadístico — solo re-computa si cambian datos o período
-  const _insightCandidates = useMemo(() => {
-    if (!sales?.length || !vendorAnalysis?.length) return []
-    return runInsightEngine({
-      sales, metas, vendorAnalysis, categoriaAnalysis, canalAnalysis,
-      supervisorAnalysis, concentracionRiesgo, clientesDormidos,
-      categoriasInventario, selectedPeriod, selectedMonths, tipoMetaActivo,
-    })
-  }, [
-    sales, metas, vendorAnalysis, categoriaAnalysis, canalAnalysis,
-    supervisorAnalysis, concentracionRiesgo, clientesDormidos,
-    categoriasInventario, selectedPeriod, selectedMonths, tipoMetaActivo,
-  ])
-
-  // [Z.4 — perf: cuello-2] Pre-computa mapas de sales en una sola pasada con deps [sales, selectedPeriod]
-  // Solo se re-computa cuando cambia el dataset o el período — independiente de los candidatos.
+  // [Z.4 — perf: cuello-2] Pre-computa mapas de sales en una sola pasada
   const _agregadosFiltro = useMemo(() => {
     if (!sales?.length) return null
     return getAgregadosParaFiltro(sales, selectedPeriod)
   }, [sales, selectedPeriod])
 
-  // PASO 2: Filtrado con estándares — re-computa solo si cambian candidatos o datos de filtro
   const _filteredCandidates = useMemo(() => {
     if (!sales?.length) return []
+
+    // Default path: usar candidates pre-computados por el worker.
+    if (selectedMonths === null) {
+      return filteredCandidatesStore
+    }
+
+    // Multi-mes fallback: re-correr motor 2 con selectedMonths específicos.
+    if (!vendorAnalysis?.length) return []
+    const candidates = runInsightEngine({
+      sales, metas, vendorAnalysis, categoriaAnalysis, canalAnalysis,
+      supervisorAnalysis, concentracionRiesgo, clientesDormidos,
+      categoriasInventario, selectedPeriod, selectedMonths, tipoMetaActivo,
+    })
     const diaDelMes = maxDate.getTime() > 0
       ? maxDate.getDate()
       : new Date(selectedPeriod.year, selectedPeriod.month + 1, 0).getDate()
     const diasEnMes = new Date(selectedPeriod.year, selectedPeriod.month + 1, 0).getDate()
     const ventaTotalNegocio = _agregadosFiltro?.ventaTotalNegocio ?? 0
-    return filtrarConEstandar(_insightCandidates, {
+    return filtrarConEstandar(candidates, {
       diaDelMes, diasEnMes, sales, metas,
       inventory: categoriasInventario, clientesDormidos,
       ventaTotalNegocio, tipoMetaActivo, selectedPeriod,
       agregados: _agregadosFiltro ?? undefined,
     })
-  }, [_insightCandidates, _agregadosFiltro, sales, metas, categoriasInventario, clientesDormidos, tipoMetaActivo, selectedPeriod, maxDate])
+  }, [
+    selectedMonths, filteredCandidatesStore,
+    sales, metas, vendorAnalysis, categoriaAnalysis, canalAnalysis,
+    supervisorAnalysis, concentracionRiesgo, clientesDormidos,
+    categoriasInventario, selectedPeriod, tipoMetaActivo,
+    _agregadosFiltro, maxDate,
+  ])
 
   // [Z.9.5] Causal linking + compresión ejecutiva — gateado por EXECUTIVE_COMPRESSION_ENABLED
   const _insightChains = useMemo(() => {
@@ -1560,8 +1575,13 @@ export default function EstadoComercialPage() {
 
   useEffect(() => {
     if (!sales?.length || !vendorAnalysis?.length) return
+    // [Z.11.4] candidatesReturned ya no esta disponible page-side cuando
+    // selectedMonths===null (el worker hace gate y solo emite filteredCandidates).
+    // Reusamos _filteredCandidates en ambos slots; el gate stage del worker
+    // ya quedó capturado en analysis_worker stage report. discardedCount=0
+    // page-side es correcto: page-side no descarta cuando lee del store.
     recordInsightRuntimeAuditReport({
-      candidatesReturned: _insightCandidates,
+      candidatesReturned: _filteredCandidates,
       filteredCandidates: _filteredCandidates,
       chainsCount: _insightChains.length,
       executiveProblemsCount: _executiveProblems.length,
@@ -1571,7 +1591,7 @@ export default function EstadoComercialPage() {
       enrichedBlocksCount: enrichedBlocks.length,
     })
   }, [
-    sales, vendorAnalysis, _insightCandidates, _filteredCandidates, _insightChains,
+    sales, vendorAnalysis, _filteredCandidates, _insightChains,
     _executiveProblems, _residualCandidates, _legacyBlocks, diagnosticBlocks, enrichedBlocks,
   ])
 

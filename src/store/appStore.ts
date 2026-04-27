@@ -25,6 +25,7 @@ import type {
   ChatClienteContext,
   ChatMessage,
 } from '../types'
+import type { InsightCandidate } from '../lib/insight-engine'
 
 const DEFAULT_CONFIG: Configuracion = {
   empresa: 'Mi Empresa',
@@ -51,6 +52,11 @@ const DEFAULT_AVAILABILITY: DataAvailability = {
   has_departamento: false,
   has_metas: false,
   has_inventario: false,
+  has_unidades: false,
+  has_precio_unitario: false,
+  has_subcategoria: false,
+  has_proveedor: false,
+  has_costo_unitario: false,
 }
 
 interface AppState {
@@ -63,6 +69,10 @@ interface AppState {
   vendorAnalysis: VendorAnalysis[]
   teamStats: TeamStats | null
   insights: Insight[]
+  // [Z.11.4] Single source of truth: motor 2 candidates post Z.11+Z.12 emitidos
+  // por analysisWorker. Page-side los consume directamente cuando selectedMonths
+  // es null. NO se persisten (objetos grandes con _stats internos).
+  filteredCandidates: InsightCandidate[]
   clientesDormidos: ClienteDormido[]
   concentracionRiesgo: ConcentracionRiesgo[]
   categoriasInventario: CategoriaInventario[]
@@ -138,6 +148,7 @@ interface AppState {
   setVendorAnalysis: (data: VendorAnalysis[]) => void
   setTeamStats: (data: TeamStats | null) => void
   setInsights: (data: Insight[]) => void
+  setFilteredCandidates: (data: InsightCandidate[]) => void
   setClientesDormidos: (data: ClienteDormido[]) => void
   setConcentracionRiesgo: (data: ConcentracionRiesgo[]) => void
   setCategoriasInventario:  (data: CategoriaInventario[]) => void
@@ -194,6 +205,7 @@ export const useAppStore = create<AppState>()(
       vendorAnalysis: [],
       teamStats: null,
       insights: [],
+      filteredCandidates: [],
       clientesDormidos: [],
       concentracionRiesgo: [],
       categoriasInventario: [],
@@ -240,6 +252,7 @@ export const useAppStore = create<AppState>()(
       setVendorAnalysis: (vendorAnalysis) => set({ vendorAnalysis }),
       setTeamStats: (teamStats) => set({ teamStats }),
       setInsights: (insights) => set({ insights }),
+      setFilteredCandidates: (filteredCandidates) => set({ filteredCandidates }),
       setClientesDormidos: (clientesDormidos) => set({ clientesDormidos }),
       setConcentracionRiesgo: (concentracionRiesgo) => set({ concentracionRiesgo }),
       setCategoriasInventario:  (categoriasInventario)  => set({ categoriasInventario }),
@@ -337,6 +350,7 @@ export const useAppStore = create<AppState>()(
           vendorAnalysis: [],
           teamStats: null,
           insights: [],
+          filteredCandidates: [],
           clientesDormidos: [],
           concentracionRiesgo: [],
           categoriasInventario: [],

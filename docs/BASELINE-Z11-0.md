@@ -469,3 +469,49 @@ agregar formula USD para `meta_gap`. **Z.11.1 cerrado por verificacion.**
 
 **Z.11.1 cerrado 2026-04-26. Tests 105/105, tsc 0 errors. Commits aplicados.**
 
+---
+
+## 8. Z.11.4 — Eliminacion del doble runtime motor 2 (2026-04-26)
+
+### 8.1 Problema documentado en Z.11.0
+
+Motor 2 corria dos veces sobre los mismos datos:
+- **Worker** (`analysisWorker.ts`): `runInsightEngine` + `filtrarConEstandar` + adapter → `store.insights` (8 insights).
+- **Page-side** (`EstadoComercialPage.tsx:1429`): `runInsightEngine` + `filtrarConEstandar` → `_filteredCandidates` (16-17 candidatos).
+
+Ambos producian arrays distintos por contrato, no por divergencia: el worker corria con `selectedMonths: null` y emitia el adapter para `store.insights`; el page-side corria con `selectedMonths` real (UI multi-mes) y mantenia `InsightCandidate[]` para alimentar `candidatesToDiagnosticBlocks`.
+
+### 8.2 Solución aplicada
+
+Worker emite `filteredCandidates` (array post-Z.11+Z.12) ademas de `insights`. Store lo guarda en memoria. Page-side consume el store directo cuando `selectedMonths === null` (caso por defecto). Cuando el usuario activa multi-mes, page-side mantiene fallback a `runInsightEngine + filtrarConEstandar` con el `selectedMonths` real.
+
+### 8.3 Archivos modificados
+
+| Archivo                                  | Cambio                                                                |
+|------------------------------------------|------------------------------------------------------------------------|
+| `src/lib/analysisWorker.ts`              | Phase 1 y Phase 2 postMessage incluyen `filteredCandidates: _filtered`. |
+| `src/store/appStore.ts`                  | Nuevo campo `filteredCandidates: InsightCandidate[]` + setter `setFilteredCandidates`. No se persiste. |
+| `src/lib/useAnalysis.ts`                 | Lee `data.filteredCandidates` del worker y lo envia al store.          |
+| `src/pages/EstadoComercialPage.tsx:1430+`| `_insightCandidates` (useMemo) eliminado. `_filteredCandidates` ahora retorna `filteredCandidatesStore` cuando `selectedMonths===null`; cae a runInsightEngine+filtrarConEstandar en multi-mes. |
+| `src/pages/EstadoComercialPage.tsx:1576+`| `recordInsightRuntimeAuditReport` ya no consume `_insightCandidates`; usa `_filteredCandidates` en ambos slots porque el gate stage del worker queda capturado en `analysis_worker` stage report. |
+
+### 8.4 Beneficios medibles
+
+- **Default path (selectedMonths===null):** motor 2 corre **1 vez** (en worker, off-thread) en lugar de 2. Eliminacion completa de ~1118 candidates × 2 detectores en main thread.
+- **Multi-mes path:** sin cambios. Mantiene UX de comparacion entre meses no-contiguos.
+- **Contrato unificado:** `store.filteredCandidates` es la fuente unica para `_insightChains`, `_executiveProblems`, `_residualCandidates`, `diagnosticBlocks` en el caso por defecto.
+
+### 8.5 Validacion
+
+- `npx tsc --noEmit`: 0 errores.
+- `npx vitest run`: 5 archivos / 105 tests passing. Goldens sin cambio (los tests de motor 2 no dependen del wiring page-side).
+
+### 8.6 Backlog desbloqueado
+
+Con `filteredCandidates` siendo single source of truth, los siguientes sprints son menos riesgosos:
+- **Z.11.2** — Formula USD para `meta_gap` en `calcularImpactoValor` (insightStandard.ts:1882). El cambio solo afectara una sola corrida de motor 2 en lugar de dos.
+- **Z.11.3** — Politica de tipos terminales aislados (cliente_dormido/cliente_perdido con cross=0). Ahora el rescate aplicado en worker se refleja inmediatamente page-side sin re-correr nada.
+- **Z.11.5** — Reconciliar `NON_MONETARY_METRIC_IDS` engine vs Z12_NON_MONETARY_METRIC_IDS. Cambio se mide en un solo run.
+
+**Z.11.4 cerrado 2026-04-26. Tests 105/105, tsc 0 errors.**
+

@@ -8,7 +8,9 @@ import {
   analyzeCanal,
   buildAggregatedSummaries,
 } from './analysis'
-import { generateInsights } from './insightEngine'
+import { runInsightEngine, filtrarConEstandar } from './insight-engine'
+import { getAgregadosParaFiltro } from './domain-aggregations'
+import { candidatesToInsights } from './insightAdapter'
 import type {
   SaleRecord, MetaRecord, InventoryItem, Configuracion,
   VendorAnalysis, TeamStats, ClienteDormido, ConcentracionRiesgo,
@@ -67,30 +69,54 @@ self.onmessage = (event: MessageEvent<WorkerInput | EnrichInput>) => {
       ? { ..._phase1.teamStats, proyeccion_equipo: equipoProjection }
       : _phase1.teamStats
 
-    // [PR-L1] telemetría fase 2 (rerun con proyecciones)
+    // [Step B] Phase 2 rerun usa motor 2 + adapter (motor 1 deprecado del flujo de store).
     const _pr_l1_p2_t0 = performance.now()
-    const insights = generateInsights(
-      enrichedVendors,
-      enrichedTeam,
-      _phase1.sales,
-      _phase1.metas,
-      _phase1.dataAvailability,
-      _phase1.configuracion,
-      _phase1.clientesDormidos,
-      _phase1.concentracionRiesgo,
-      _phase1.categoriasInventario ?? [],
-      _phase1.supervisorAnalysis ?? [],
-      _phase1.categoriaAnalysis ?? [],
-      _phase1.canalAnalysis ?? [],
-      _phase1.selectedPeriod,
-    )
-    console.debug(`[PR-L1] motor1_phase2_rerun_ms: ${Math.round(performance.now() - _pr_l1_p2_t0)}, insights=${insights.length}`)
+    const _candidatesP2 = runInsightEngine({
+      sales:              _phase1.sales,
+      metas:              _phase1.metas,
+      vendorAnalysis:     enrichedVendors,
+      categoriaAnalysis:  _phase1.categoriaAnalysis ?? [],
+      canalAnalysis:      _phase1.canalAnalysis ?? [],
+      supervisorAnalysis: _phase1.supervisorAnalysis ?? [],
+      concentracionRiesgo: _phase1.concentracionRiesgo,
+      clientesDormidos:   _phase1.clientesDormidos,
+      categoriasInventario: _phase1.categoriasInventario ?? [],
+      selectedPeriod:     _phase1.selectedPeriod,
+      selectedMonths:     null,
+      tipoMetaActivo:     (_phase1.configuracion as { tipoMetaActivo?: 'uds' | 'usd' }).tipoMetaActivo ?? 'usd',
+    })
+    const _agregadosP2 = getAgregadosParaFiltro(_phase1.sales, _phase1.selectedPeriod)
+    const _diaDelMesP2 = (() => {
+      const fechas = _phase1.sales
+        .map(s => new Date(s.fecha))
+        .filter(d => d.getFullYear() === _phase1!.selectedPeriod.year && d.getMonth() === _phase1!.selectedPeriod.month)
+      if (fechas.length === 0) return new Date(_phase1!.selectedPeriod.year, _phase1!.selectedPeriod.month + 1, 0).getDate()
+      return Math.max(...fechas.map(d => d.getDate()))
+    })()
+    const _diasEnMesP2 = new Date(_phase1.selectedPeriod.year, _phase1.selectedPeriod.month + 1, 0).getDate()
+    const _filteredP2 = filtrarConEstandar(_candidatesP2, {
+      diaDelMes:        _diaDelMesP2,
+      diasEnMes:        _diasEnMesP2,
+      sales:            _phase1.sales,
+      metas:            _phase1.metas,
+      inventory:        _phase1.categoriasInventario ?? [],
+      clientesDormidos: _phase1.clientesDormidos,
+      ventaTotalNegocio: _agregadosP2.ventaTotalNegocio,
+      tipoMetaActivo:   (_phase1.configuracion as { tipoMetaActivo?: 'uds' | 'usd' }).tipoMetaActivo ?? 'usd',
+      selectedPeriod:   _phase1.selectedPeriod,
+      agregados:        _agregadosP2,
+    })
+    const insights = candidatesToInsights(_filteredP2)
+    console.debug(`[Step B] motor2_phase2_rerun_ms: ${Math.round(performance.now() - _pr_l1_p2_t0)}, insights=${insights.length}`)
 
     ;(self as unknown as Worker).postMessage({
       type: 'enriched',
       vendorAnalysis: enrichedVendors,
       teamStats: enrichedTeam,
       insights,
+      // [Z.11.4] Single source of truth: page-side consume estos candidates
+      // del store en lugar de re-correr runInsightEngine + filtrarConEstandar.
+      filteredCandidates: _filteredP2,
     })
     _phase1 = null
     return
@@ -120,6 +146,10 @@ self.onmessage = (event: MessageEvent<WorkerInput | EnrichInput>) => {
     // [PR-M1] flags para ingesta dual
     has_unidades:        index.has_unidades,
     has_precio_unitario: index.has_precio_unitario,
+    // [schema-cleanup] flags de las columnas opcionales nuevas que la UI gatea.
+    has_subcategoria:    index.has_subcategoria,
+    has_proveedor:       index.has_proveedor,
+    has_costo_unitario:  index.has_costo_unitario,
   }
 
   // Compute day range for partial-month comparisons
@@ -176,41 +206,53 @@ self.onmessage = (event: MessageEvent<WorkerInput | EnrichInput>) => {
   )
 
   post('Generando insights...')
-  // [PR-L1] telemetría revertible: medir costo + distribución de motor 1
-  const _pr_l1_t0 = performance.now()
-  const insights = generateInsights(
-    vendorAnalysis, teamStats, sales, metas,
-    dataAvailability, configuracion,
-    clientesDormidos, concentracionRiesgo,
-    categoriasInventario ?? [],
-    supervisorAnalysis ?? [],
-    categoriaAnalysis ?? [],
-    canalAnalysis ?? [],
+  // [Step B — total migration] Motor 2 (runInsightEngine + filtrarConEstandar) +
+  // adapter `candidatesToInsights` reemplaza a motor 1 como fuente de `store.insights`.
+  // Motor 1 (`insightEngine.ts → generateInsights`) sigue intacto pero ya no es invocado.
+  const _step_b_t0 = performance.now()
+  const _tipoMetaWorker = (configuracion as { tipoMetaActivo?: 'uds' | 'usd' }).tipoMetaActivo ?? tipoMetaActivo ?? 'usd'
+  const _candidates = runInsightEngine({
+    sales,
+    metas,
+    vendorAnalysis,
+    categoriaAnalysis:  categoriaAnalysis ?? [],
+    canalAnalysis:      canalAnalysis ?? [],
+    supervisorAnalysis: supervisorAnalysis ?? [],
+    concentracionRiesgo,
+    clientesDormidos,
+    categoriasInventario: categoriasInventario ?? [],
     selectedPeriod,
-  )
-  const _pr_l1_motor1_ms = performance.now() - _pr_l1_t0
-  // [PR-L1] distribución por tipo/dimensión + sample de IDs para cruzar con render
+    selectedMonths:     null,
+    tipoMetaActivo:     _tipoMetaWorker,
+  })
+  const _agregados = getAgregadosParaFiltro(sales, selectedPeriod)
+  const _filtered = filtrarConEstandar(_candidates, {
+    diaDelMes:        diasTranscurridos,
+    diasEnMes:        diasTotales,
+    sales,
+    metas,
+    inventory:        categoriasInventario ?? [],
+    clientesDormidos,
+    ventaTotalNegocio: _agregados.ventaTotalNegocio,
+    tipoMetaActivo:   _tipoMetaWorker,
+    selectedPeriod,
+    agregados:        _agregados,
+  })
+  const insights = candidatesToInsights(_filtered)
+  const _step_b_ms = performance.now() - _step_b_t0
   const _porTipo: Record<string, number> = {}
   const _porDim: Record<string, number> = {}
-  for (const i of insights) {
-    const tipo = (i as { tipo?: string }).tipo ?? 'unknown'
-    _porTipo[tipo] = (_porTipo[tipo] ?? 0) + 1
-    // Inferir dimensión por campos presentes (motor 1 no la declara explícita)
-    const rec = i as unknown as Record<string, unknown>
-    const dim = rec.vendedor ? 'vendedor'
-      : rec.producto ? 'producto'
-      : rec.cliente ? 'cliente'
-      : rec.departamento ? 'departamento'
-      : rec.canal ? 'canal'
-      : rec.categoria ? 'categoria'
-      : 'equipo'
-    _porDim[dim] = (_porDim[dim] ?? 0) + 1
+  for (const c of _filtered) {
+    _porTipo[c.insightTypeId] = (_porTipo[c.insightTypeId] ?? 0) + 1
+    _porDim[c.dimensionId] = (_porDim[c.dimensionId] ?? 0) + 1
   }
-  console.debug('[PR-L1] motor1_insights:', {
-    total:         insights.length,
-    por_tipo:      _porTipo,
-    por_dimension: _porDim,
-    tiempo_ms:     Math.round(_pr_l1_motor1_ms),
+  console.debug('[Step B] motor2_insights:', {
+    candidates_raw:    _candidates.length,
+    candidates_filtered: _filtered.length,
+    insights_adapted:  insights.length,
+    por_tipo:          _porTipo,
+    por_dimension:     _porDim,
+    tiempo_ms:         Math.round(_step_b_ms),
   })
 
   // Persist state so Phase 2 (enrich) can reuse it without re-running analysis
@@ -242,6 +284,11 @@ self.onmessage = (event: MessageEvent<WorkerInput | EnrichInput>) => {
     categoriaAnalysis,
     canalAnalysis,
     insights,
+    // [Z.11.4] Single source of truth: page-side consume estos candidates
+    // del store cuando selectedMonths===null (caso por defecto).
+    // Page-side mantiene fallback a runInsightEngine cuando selectedMonths
+    // es multi-mes (UI feature de comparación).
+    filteredCandidates: _filtered,
     dataAvailability,
     clienteSummaries: aggregated.clienteSummaries,
     productoSummaries: aggregated.productoSummaries,
@@ -266,7 +313,7 @@ self.onmessage = (event: MessageEvent<WorkerInput | EnrichInput>) => {
         supervisorAnalysis: supervisorAnalysis?.length ?? 0,
         categoriaAnalysis: categoriaAnalysis?.length ?? 0,
         canalAnalysis: canalAnalysis?.length ?? 0,
-        motor1LegacyMs: Math.round(_pr_l1_motor1_ms),
+        motor2EngineMs: Math.round(_step_b_ms),
       },
     },
   })
