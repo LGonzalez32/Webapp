@@ -1397,6 +1397,117 @@ regresiones, 117/117 tests, 0 tsc errors.
 
 ---
 
+## 18. Z.13.V-4 — Fixes upstream para propagar V-1/V-2/V-3 al render layer
+
+> **Origen.** Validación runtime post-V-1/V-2/V-3 reveló que 3 de 4 checks
+> fallaban en render real aunque candidate-level estaba correcto. Causa
+> raíz: 2 bugs upstream (no detectados por goldens) que neutralizaban los
+> fixes downstream. Esta es la lección crítica del sprint Z.13: **goldens
+> capturan candidate-level, no render-level — siempre validar runtime.**
+
+### 18.1 Hallazgos de validación runtime
+
+| Check | Esperado V-3 | Observado runtime | Status |
+|---|---|---|---|
+| 1 — Severity sobrecumpl | Lácteos/Limpieza/Refrescos MEDIA, Snacks BAJA, NO rojas | Card "4 categorías" ahora gris/info ✓ | ✅ PASS |
+| 2 — Agrupado direction-aware | "estancados" sin sobrecumpls | María (163%) + Roberto Cruz (216%) seguían en bucket "estancados" con Carlos (49%) | ❌ FAIL |
+| 3 — Roberto Méndez con acción | "Plan de recuperación con Roberto Méndez..." | "Sin acciones sugeridas — los datos históricos no muestran una palanca clara." | ❌ FAIL |
+| 4 — "Caída en vendedores N entidades" | N=2 (solo down) | Sigue diciendo "5 entidades" | ❌ FAIL |
+
+### 18.2 Bug 1 — `calcularDirection` corrompe direction de meta_gap sobrecumpl
+
+**Cadena del bug:**
+1. `meta_gap_combo` builder (insight-engine.ts:6294) setea `c.direction='up'`
+   correctamente para sobrecumpl (`cumplPct >= 100`).
+2. `hydratarCandidatoZ9` (insightStandard.ts:2449) hace
+   `c.direction = calcularDirection(c)` — sobreescribe.
+3. `calcularDirection` case `'meta_gap'` retornaba `'down'` HARDCODED
+   (insightStandard.ts:2108) — comentario decía "siempre hay brecha
+   (cumplimiento < 100)" — válido pre-Z.11.2 cuando meta_gap solo era
+   subcumpl. Post-Z.11.2 que extendió meta_gap a sobrecumpl, esta línea
+   quedó como bug latente.
+4. María (163% up) y Roberto Cruz (216% up) terminan con `c.direction='down'`.
+5. V-2 fix `classifyDireccionFromCandidate` lee `c.direction='down'` →
+   marca `'recuperable'`.
+6. `_getDir` lee `block.direccion='recuperable'` → bucket
+   `'meta_gap|vendedor|neg'`.
+7. `agruparInsightsRedundantes` mete sobrecumpls junto con subcumpls.
+8. Cliente ve "X vendedores estancados" mezclando direcciones.
+
+**Fix:** case `'meta_gap'`/`'meta_gap_temporal'` en `calcularDirection`
+ahora lee `detail.cumplPct`:
+```ts
+const cumplPct = d['cumplPct']
+if (typeof cumplPct === 'number' && Number.isFinite(cumplPct)) {
+  return cumplPct >= 100 ? 'up' : 'down'
+}
+return 'down'  // fallback
+```
+
+### 18.3 Bug 2 — `diagnostic-generator` retorna early con acciones vacías
+
+**Cadena del bug:**
+1. V-3 fix popula `block.sections` con "Acción" cuando `c.accion` es
+   string (insight-engine.ts:3541-3550).
+2. `meta_gap_combo` emite accion string (`'Plan de recuperación con
+   Roberto Méndez: revisar pipeline...'`).
+3. Block tiene "Acción" section poblada ✓.
+4. `diagnostic-generator.ts:generarAcciones` case `'meta_gap'` ejecuta:
+   - Lookup `vendorAnalysis.find(v => v.vendedor === sujeto)`.
+   - Para Roberto Méndez (supervisor, NO en vendorAnalysis), `va` es
+     undefined → no ejecuta el bloque if(va).
+   - Lookup `clientesDormidos.filter(d => d.vendedor === sujeto)`.
+   - Roberto Méndez no es vendor → empty.
+   - **Línea 139: `return acciones` con array vacío.** Nunca alcanza el
+     fallback de línea 325 que leería `block.sections "Acción"`.
+5. `determineSinAccionesLabel` recibe `acciones.length === 0` → injecta
+   "Sin acciones sugeridas — los datos históricos no muestran una
+   palanca clara."
+
+**Fix:** cambiar `return acciones` por `if (acciones.length > 0) return acciones`.
+Si el case `meta_gap` no produce nada, fall through al fallback común
+que lee la sección Acción del bloque (poblada por V-3).
+
+### 18.4 Por qué los goldens no detectaron estos bugs
+
+Los snapshot tests capturan output de `runInsightEngine + filtrarConEstandar`
+— eso es **candidate level**. Los 2 bugs viven en:
+
+- `hydratarCandidatoZ9` (corrompe direction): se ejecuta DESPUÉS de
+  `runInsightEngine` selecciona, ANTES de retornar. El snapshot del
+  golden capta direction='down' pero NO valida si era originalmente 'up'.
+- `diagnostic-generator.ts:generarAcciones`: se ejecuta en EstadoComercialPage
+  durante render — fuera del path testeado por goldens.
+
+**Lección.** Para sprints que tocan render (severity, direction, accion
+text en cards), **ningún test golden equivale a una validación runtime
+con DOM inspection**. Z.13.V demostró esto en vivo.
+
+### 18.5 Validación tests + tsc
+
+- `tsc --noEmit`: 0 errores.
+- `vitest run`: 117/117. 4 snapshots regenerados.
+- 7+ candidatos meta_gap pasan direction de `'down'` a `'up'`
+  correctamente.
+- Sin regresiones: Carlos Ramírez (49%) sigue `'down'`.
+
+### 18.6 Pendiente runtime check
+
+Z.13.V-4 requiere **re-validación runtime** antes de declarar production-ready
+definitivo. Los 4 checks deberían pasar:
+
+| Check | Cambio esperado vs runtime previo |
+|---|---|
+| 1 | (sin cambio — ya pasaba) |
+| 2 | Card "estancados" debería excluir María Castillo y Roberto Cruz |
+| 3 | Roberto Méndez 65% debería mostrar "Plan de recuperación..." en bullet |
+| 4 | "Caída en vendedores N entidades" debería bajar de 5 a ~2 |
+
+**Z.13.V-4 cerrado 2026-04-27** (pending runtime confirmation). 1
+commit (`994177af`), 0 regresiones, 117/117 tests, 0 tsc errors.
+
+---
+
 ## 14. Follow-up sprints (post-Z.11)
 
 Tres sprints derivados del stress test final (sección 13.4 backlog + auditoría
