@@ -63,7 +63,31 @@ const MIN_GROUPS    = 5
 // generaba ~5% de falsos positivos que canibalizaban el ranking via
 // agruparInsightsRedundantes. Con 2.5, ~1% de la distribución gaussiana
 // (5× más exigente). Ver docs/PR-M4b-audit.md §3.c.
-const Z_THRESHOLD   = 2.5
+const Z_THRESHOLD_LARGE = 2.5
+
+// [Z.12.V-4] Threshold adaptativo según N (cantidad de grupos).
+//
+// Stress test runtime: en universos chicos (8 vendedores en Los Pinos demo)
+// la dispersión nunca llega a 2.5σ. María Castillo era +82% sobre la media
+// con z=1.96 (below threshold) y quedaba invisible al outlier detector,
+// aunque comercialmente fuera el top performer del equipo.
+//
+// Fix: bajar threshold cuando N es chico. Justificación estadística: con N=8
+// la varianza muestral está tan acotada que 1.5σ ya representa el extremo
+// distinto del bulk. Con N≥20 (datasets de tamaño "normal") mantenemos 2.5σ
+// para evitar falsos positivos.
+//
+// Tabla:
+//   N < 10  → z=1.5  (universos chicos, ~6.7% de la gaussiana)
+//   N < 20  → z=2.0  (universos medianos, ~4.6%)
+//   N ≥ 20  → z=2.5  (universos grandes, ~1.2%) — comportamiento original
+const Z_THRESHOLD_SMALL  = 1.5
+const Z_THRESHOLD_MEDIUM = 2.0
+function _adaptiveZThreshold(n: number): number {
+  if (n < 10) return Z_THRESHOLD_SMALL
+  if (n < 20) return Z_THRESHOLD_MEDIUM
+  return Z_THRESHOLD_LARGE
+}
 
 const HIGHER_IS_BETTER = new Set<string>([
   'venta_usd', 'unidades', 'ticket_promedio', 'frecuencia_compra',
@@ -97,12 +121,13 @@ export function detectOutlier(
 
   // [PR-M4b''-diag] helper para el diagnóstico — round a 2 decimales
   const _round2 = (x: number) => Math.round(x * 100) / 100
+  // [Z.12.V-4] threshold se computa una vez n está disponible; el _emitDiag
+  // recibe el valor explícito en cada call.
   const _emitDiag = (payload: Record<string, unknown>) => {
     if (import.meta.env.DEV) {
       console.debug('[PR-M4-diag] outlier_scan:', {
         dimension: dimension.id,
         metric:    metric.id,
-        threshold: Z_THRESHOLD,
         ...payload,
       })
     }
@@ -139,6 +164,8 @@ export function detectOutlier(
   const mean     = values.reduce((a, g) => a + g.value, 0) / n
   const variance = values.reduce((a, g) => a + (g.value - mean) ** 2, 0) / (n - 1)
   const stddev   = Math.sqrt(variance)
+  // [Z.12.V-4] threshold adaptativo según N
+  const Z_THRESHOLD = _adaptiveZThreshold(n)
   if (stddev < 1e-6) {
     _emitDiag({ n_groups: n, mean: _round2(mean), stddev: 0, outliers_generados: 0, razon: 'homogeneous_group' })
     return []
