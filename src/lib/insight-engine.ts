@@ -1015,8 +1015,24 @@ function buildText(
 // ─── Adapter: InsightCandidate[] → DiagnosticBlock[] ─────────────────────────
 
 function candidateSeverityToBlock(c: InsightCandidate): DiagnosticSeverity {
-  if (c.severity === 'CRITICA') return 'critical'
-  if (c.severity === 'ALTA')    return 'warning'
+  // [Z.12.V-6] Degradación de severity cuando NO hay acción concreta.
+  // Stress test runtime detectó cards "urgentes" con "Sin acciones sugeridas"
+  // — contradicción UX: un dashboard de decisiones que termina en "no sé qué
+  // hacer" no debería etiquetarse urgente. Degrada CRITICA→warning y
+  // ALTA→info cuando c.accion está ausente o vacía.
+  //
+  // accionConcreta = string no vacío de ≥10 caracteres, o un objeto con
+  // texto similar. Mismo criterio que r4 strict-mode en insightStandard.ts.
+  const _accionStr = (
+    typeof c.accion === 'object' && c.accion !== null
+      ? (c.accion as { texto?: string }).texto ?? ''
+      : typeof c.accion === 'string'
+        ? c.accion
+        : ''
+  ).trim()
+  const _hasAccionConcreta = _accionStr.length >= 10
+  if (c.severity === 'CRITICA') return _hasAccionConcreta ? 'critical' : 'warning'
+  if (c.severity === 'ALTA')    return _hasAccionConcreta ? 'warning'  : 'info'
   return 'info'
 }
 
