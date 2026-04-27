@@ -1164,6 +1164,108 @@ para cliente pagador.**
 
 ---
 
+## 16. Playbook de calibración para dataset cliente real
+
+> **Cuándo aplicar.** Cuando el motor pase del demo Los Pinos
+> (`ventaTotalNegocio ≈ $40K UDS`) a su primer dataset productivo. Los
+> umbrales del gate (`floorAbs`, `floorPct`, `MATERIALITY_HIGH`,
+> `executiveTopN`, ranker caps) fueron calibrados sobre el demo. Antes
+> del go-live conviene re-correr la metodología sobre el dataset real
+> para confirmar que escalan.
+>
+> **Qué NO es.** Esto NO es trabajo nuevo de motor — es la red de
+> seguridad de la migración. Si los umbrales escalan bien, son ~30
+> minutos. Si no, los ajustes son quirúrgicos (cambiar constantes,
+> no lógica).
+
+### 16.1 Pre-condiciones
+
+- Cliente cargó datos reales (sales, metas, inventory).
+- App en `/dashboard` con dataset productivo.
+- DevTools abierto.
+- Tener a mano:
+  - `docs/baselines/devtools-runtime-capture.md` (3 bloques de instrumentación).
+  - `docs/BASELINE-Z11-0.md` sección 4 (tabla única demo).
+
+### 16.2 Captura runtime sobre dataset real
+
+1. Hard refresh (`Ctrl+Shift+R`).
+2. Pegar bloque 1 (instrumentación) ANTES del primer render.
+3. Pegar bloque 2 (page-side).
+4. Forzar fallback page-side (toggle multi-mes brevemente y volver).
+5. `window.copyBaseline()`.
+
+Capturar específicamente:
+- `ventaTotalNegocio` (denominador de los floors).
+- Z.11 entrada / sobreviven / suprimidos / pass rate.
+- Z.12 input / surviving / suppressed / pass rate.
+- `store.insights.length` y distribución por tipo.
+- `cross_engine.candidates_total` y outlier scan diag.
+
+### 16.3 Comparación contra benchmarks demo
+
+| Métrica | Demo (Los Pinos) | Cliente real (esperado) | Acción si diverge |
+|---|---:|---:|---|
+| `ventaTotalNegocio` | ~$40K UDS | varia | informativo, no calibrar |
+| Z.11 pass rate | 78-87% | esperado **70-90%** | < 60% → revisar `Z11_ROOT_STRONG_TYPES` |
+| Z.12 pass rate | 80-87% | esperado **65-85%** | < 50% → revisar `MATERIALITY_FLOOR_EXECUTIVE` |
+| Cards visibles | 9-11 | esperado **6-15** | > 25 → revisar `RANKER_TOTAL_CAP` |
+| store.insights | 13-20 | esperado **10-30** | > 40 → revisar caps por tipo |
+| Cross_engine outliers | 0-2 | esperado **0-5** | > 10 → revisar `_adaptiveZThreshold` |
+
+### 16.4 Calibraciones probables y dónde tocarlas
+
+| Síntoma | Causa probable | Constante a ajustar | Archivo |
+|---|---|---|---|
+| Demasiadas cards rojas (saturación) | `MATERIALITY_HIGH=0.10` deja pasar todo en negocio chico | Subir a 0.15 o 0.20 | `insightStandard.ts:2475` |
+| Cards sub-material pasando | `floor_pct=0.02` chico para volumen alto | Subir a 0.03 o ajustar tier por `ventaTotalNegocio` | `insightStandard.ts:2456` |
+| 4+ categorías meta_gap saturando | Cap `meta_gap:categoria=4` | Bajar a 3 o ajustar dinámico | `insight-engine.ts:6655` |
+| Outliers mal calibrados | `_adaptiveZThreshold` no escalada al N real | Revisar tabla N<10/<20/≥20 | `detectors/outlier.ts:73` |
+| Vendedores extremos invisibles | Cap `meta_gap:vendedor=3` chico para empresa grande | Subir a 5-7 | `insight-engine.ts:6656` |
+| Headers urgentes inflados | `EXECUTIVE_TOP_N=4` chico para volumen | Subir a 6-8 | `insightStandard.ts:2483` |
+
+### 16.5 Auditoría UX cliente
+
+Después de calibrar, repetir el stress test estricto sección 11 con
+perspectiva del rol del cliente:
+
+1. ¿Las cards ejecutivas son comprensibles en 30 segundos?
+2. ¿Cada card urgente tiene acción concreta?
+3. ¿Algún protagonista aparece en 4+ cards directas?
+4. ¿Hay headlines técnicos `dim=value`?
+5. ¿Hay narrativa contradictoria (sobrecumpl + "hueco")?
+
+Si los 5 son OK → cliente real puede operar el dashboard.
+Si alguno falla → ajuste quirúrgico (no rediseño).
+
+### 16.6 Criterio de cierre del playbook
+
+El motor queda calibrado para el cliente cuando:
+- Z.11 + Z.12 pass rates estables entre runs (≤2pp variación).
+- Cards visibles en rango 6-15 (no saturación, no escasez).
+- 0 errores en consola.
+- Cero protagonistas duplicados en 4+ cards.
+- 100% headlines naturales.
+
+Documentar resultados en `docs/baselines/insight-pipeline-baseline.${cliente}-${fecha}.json`
+para tener trazabilidad.
+
+### 16.7 Cuándo escalar a sprint Z.13
+
+Si después de calibrar las 6 constantes mencionadas el dashboard sigue
+saturado o vacío, el problema NO es de umbrales — es estructural. En
+ese caso el sprint Z.13 sería:
+- Detector de "tier de empresa" (chica/mediana/grande basado en ventaTotal).
+- Umbrales adaptativos según tier (similar a `_adaptiveZThreshold` pero
+  para todas las constantes del gate).
+
+No ejecutar Z.13 preventivamente. Solo si el playbook 16.4-16.5 falla
+en 2+ clientes reales con datasets no comparables.
+
+**Playbook agregado 2026-04-27. Aplica al primer cliente productivo.**
+
+---
+
 ## 14. Follow-up sprints (post-Z.11)
 
 Tres sprints derivados del stress test final (sección 13.4 backlog + auditoría
