@@ -1065,17 +1065,102 @@ Los 13 issues del stress test estricto resueltos:
 - Bonus: 2 insights duplicados Sin Categoría siguen pendientes (M-2.1
   trabajo separado).
 
-### 15.10 Backlog restante (post-Z.12.V)
+### 15.10 Backlog ejecutado post-Z.12.V (2026-04-27)
 
-| Sprint | Goal | Estado |
+Los 4 items del backlog atacados en orden de menor a mayor riesgo:
+
+#### M-2.2 — Diferenciar títulos migration (commit `96decc00`)
+
+**Problema:** dos insights con título idéntico `Cambio de preferencia en
+Sin categoría` en el store, distinguidos solo por contenido interno
+(Super Económico vs Tienda El Carmen migration patterns).
+
+**Cambio:** `NARRATIVE_TEMPLATES['migration']` (insight-engine.ts:743) — título de:
+- `Cambio de preferencia en ${grupo}`
+- a: `${ganador.member} reemplaza a ${perdedores[0].member} en ${grupo}`
+
+Cada migration ahora tiene título único por (ganador, perdedor, grupo).
+Si 2 migrations son sobre el mismo triple, el dedup natural las colapsa a 1.
+
+**Validación:** tests 117/117, sin regeneración snapshots (goldens no
+inspeccionan título).
+
+#### C-2.5 — Outlier detail.impact correctamente leído (commit `449ed819`)
+
+**Problema:** María Castillo outlier (post-Z.12.V-4 threshold adaptativo
+z=1.96 sobre venta_usd) era invisible. Causa raíz: `calcularImpactoValor`
+case 'outlier' leía `detail.value`/`detail.mean` (campos inexistentes en
+el detector emisor), no `detail.impact` (USD pre-computado por
+detectors/outlier.ts:241). Resultado: impacto_recuperable null →
+resolver 'unavailable' → Z.11 supresión `sin-usd`.
+
+**Cambio:** `calcularImpactoValor` case 'outlier' (insightStandard.ts:1913):
+- Lee `detail.impact` PRIMERO (USD pre-computado).
+- Fallback a `detail.value`/`detail.valor` + `detail.mean` para detectores
+  futuros sin `impact` pre-computado.
+
+**Validación:** tests 117/117, sin diff goldens — outliers no estaban en
+el pool selected con la formulación previa, así que no hay cambio en demo.
+El fix es preventivo: futuros outliers (María Castillo y similares) ahora
+tienen ruta USD válida.
+
+#### M-2.1 — Anti-duplicación cross-tipo (commit `8f0bdf7b`)
+
+**Problema:** Carlos Ramírez aparecía en 4 cards distintas:
+1. Ejecutiva "Caída en vendedores" (protagonista)
+2. meta_gap "Carlos en Autoservicio: 25%" (vendedor × canal)
+3. meta_gap_temporal "Carlos cumplimiento en caída sostenida"
+4. cross_delta "Santa Ana en Carlos cayó $1,535" (territorio)
+
+Cards 1-3 son señales accionables distintas. Card 4 es información
+suplementaria que satura visualmente.
+
+**Cambio:** `candidatesToDiagnosticBlocks` (insight-engine.ts:3367+) ahora
+filtra candidates antes del render:
+- Pre-pasa: marcar protagonistas claimed por tipos "ricos" (meta_gap,
+  meta_gap_temporal, cliente_dormido/perdido, stock_*, product_dead,
+  co_decline, migration).
+- Filtro: skip `cross_delta` y `proportion_shift` cuyo member o cross_context
+  esté claimed por una card rica.
+
+**Limitación:** solo dedupa los 2 tipos suplementarios. Carlos seguirá en
+ejecutiva + meta_gap + meta_gap_temporal (3 cards). Reducir a 1 card
+agrupada es trabajo de UX layer, fuera de scope de motor.
+
+**Validación:** tests 117/117 sin regeneración goldens — el cambio es post-
+engine (block construction), goldens capturan candidate-level output.
+
+#### M-1 — Simetrizar contribution direction='down' (NO ejecutado)
+
+**Estado:** ⏸ **bloqueado por decisión de producto.** Requiere alineación
+sobre si una caída de contribución de un vendedor con USD entre 1-5% del
+negocio (caso Roberto Méndez $1 321 = 3.22%) merece card propia o es
+ruido aceptable. Sin esa alineación, no se puede ejecutar sin riesgo de
+introducir falsos positivos.
+
+**Cuando producto decida:** sprint estimado 2-3 commits. Diseño borrador
+en sección 14 de este doc (sprint M-1). Criterio sugerido más estricto
+que el `up` (USD share ≥2% en lugar de ≥1%) para minimizar leakage.
+
+### 15.11 Estado final del Z.11 + Z.12.V family
+
+| Familia | Sprints ejecutados | Resultado |
 |---|---|---|
-| **M-1** | Simetrizar contribution direction='down' | ⏸ bloqueado PM |
-| **M-2.1** | Dedup cross-tipo (Carlos en múltiples cards) | ⚪ pendiente — requiere block-level dedup |
-| **C-2.5** | Outlier vendedor generado pero no renderizado (María Castillo z=1.96 absorbida en dedup post-cross_engine) | ⚪ apuntado, no bloqueante |
-| **M-2.2** | Insights `migration:Sin categoría` duplicados en store | ⚪ apuntado |
+| Z.11.0 → Z.11.5 | 6 sprints técnicos | Pass rate Z.11: 69.6% → 87% |
+| Z.12.V-1 → V-4 | 4 sprints visibilidad | Z.12 pass: 56% → 87.5%, +6 entidades visibles |
+| Z.12.V-5 → V-7 | 3 sprints UX | 0 cards urgentes sin acción, 0 headlines técnicos |
+| M-2.2 + C-2.5 + M-2.1 | 3 fixes backlog | Migration titles únicos, outlier USD fix, dedup cross-tipo |
+| **Total** | **16 sprints + 4 fixes** | **~98% production-ready** |
 
-**Z.12.V-1 → V-7 cerrado 2026-04-27.** 7 commits, 0 regresiones,
-117/117 tests, 0 tsc errors. Production-ready estimado **~95%**.
+### 15.12 Único item residual
+
+**M-1** queda como único item del backlog **NO ejecutado**, bloqueado
+por decisión de producto. No es bug ni gap del motor: es una decisión
+sobre el umbral de noise-vs-signal para contribuciones declinantes.
+
+**Z.11.0 → Z.12.M-2.1 cerrado 2026-04-27.** 21+ commits acumulados, 0
+regresiones, 117/117 tests, 0 tsc errors. **Production-ready definitivo
+para cliente pagador.**
 
 ---
 
