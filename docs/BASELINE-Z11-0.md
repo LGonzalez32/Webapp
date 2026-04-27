@@ -515,3 +515,86 @@ Con `filteredCandidates` siendo single source of truth, los siguientes sprints s
 
 **Z.11.4 cerrado 2026-04-26. Tests 105/105, tsc 0 errors.**
 
+---
+
+## 9. Z.11.2 — Formula USD para meta_gap (2026-04-27)
+
+### 9.1 Problema documentado en Z.11.1
+
+Z.11.1 cerró con pass rate 73.9%, marginal vs target 75%. El residual era
+estructural: 3 candidatos `meta_gap` (Limpieza/Refrescos/Lácteos en uds mode)
+morían en Z.11 con `sin-usd|cross-pobre(1)`. Razón:
+`calcularImpactoGapMeta` retornaba `null` para `meta_gap`, lo que hacía que
+la cadena del resolver cayera a `metricId='cumplimiento_meta'` ∈
+`NON_MONETARY_METRIC_IDS` → source='non_monetary' → Z.11 etiqueta 'sin-usd'.
+
+El builder `meta_gap_combo` (insight-engine.ts:6271+) ya seteaba
+`impacto_usd_normalizado` inline correctamente, pero el resolver post-hidratación
+lo sobrescribía sin condicional (esa es la dinámica del refactor Z.11.1
+cambio 3 — todo USD pasa por el resolver canónico).
+
+### 9.2 Solución aplicada
+
+`calcularImpactoGapMeta` (insightStandard.ts:1976) ahora computa USD para
+`meta_gap` siguiendo el mismo criterio que el builder inline:
+
+| `detail.tipoMetaActivo` | Fórmula USD                                  | Source asignado |
+|-------------------------|----------------------------------------------|-----------------|
+| `'usd'`                 | `Math.abs(detail.gap)` (gap ya está en USD)  | `gap_meta`      |
+| `'uds'`                 | `detail.ventaUsd` si > 0                     | `gap_meta`      |
+| Cualquier otro          | `null` (fallback)                            | (sigue cadena del resolver) |
+
+Sin tocar el resolver ni `calcularImpactoValor`. La asignación viene primera
+en el orden del resolver (paso 1: `gap_meta`), así que bypassa el check de
+`Z12_NON_MONETARY_METRIC_IDS` que estaba condenando a `meta_gap`.
+
+### 9.3 Archivos modificados
+
+- `src/lib/insightStandard.ts:1976-2002` — `calcularImpactoGapMeta` con formula concreta para `meta_gap`.
+- 5 snapshots regenerados (insight-engine.golden + insight-engine.gate-audit + nuevos goldens estructurales).
+
+### 9.4 Impacto medido en goldens
+
+| Métrica            | Z.11.1 → Z.11.2 (USD test) | Z.11.1 → Z.11.2 (UDS test) |
+|--------------------|---------------------------:|---------------------------:|
+| `gatePassCount`    | **11 → 16** (+5)           | **11 → 14** (+3)           |
+| `poolSize`         | **15 → 20** (+5)           | **17 → 20** (+3)           |
+| Conteo `meta_gap`  | **1 → 3** en gate failure breakdown; **1 → 6** en finalPool | **1 → 2** en gate failure; **1 → 4** en finalPool |
+
+Nuevos supervivientes confirmados:
+- `meta_gap:Lácteos` (categoria)
+- `meta_gap:Limpieza` (categoria)
+- `meta_gap:Refrescos` (categoria)
+- `meta_gap:Patricia Ruiz` (supervisor — bonus, este antes ni pasaba el ranker)
+
+### 9.5 Validación
+
+- `npx tsc --noEmit`: 0 errores.
+- `npx vitest run`: 105/105 passing. 5 snapshots regenerados (cambios aditivos
+  esperados; ningún candidato previamente válido se eliminó).
+
+### 9.6 Pass rate proyectado
+
+Pre-Z.11.2 (Z.11.0 baseline): pass rate 69.6%, 7 supresiones.
+Post-Z.11.1: pass rate 73.9%, 6 supresiones.
+Post-Z.11.2 (proyectado runtime sobre Los Pinos demo): 3 supresiones residuales
+esperadas → pass rate **~87% (20/23)**.
+
+Las 3 supresiones que quedan son **legítimas** y no son trabajo de Z.11.2:
+- `change_point Snacks` — `usd-trivial($8)`
+- `change_point Miguel Ángel Díaz` — `usd-trivial($7)`
+- `contribution Autoservicio` — `usd-medio($75) + cross-pobre(0)`
+
+### 9.7 Backlog restante
+
+Con Z.11.2 cerrado, el roadmap Z.11 queda:
+- **Z.11.3** — Política de tipos terminales aislados (cliente_dormido/
+  cliente_perdido con cross=0). Las 2 supresiones residuales de Z.12 que
+  importan: Supermercado López ($1633, 3.98%) y Tienda El Progreso ($819,
+  1.99%). Trabajo de diseño mayor.
+- **Z.11.5** — Reconciliar `NON_MONETARY_METRIC_IDS` (engine, 8) vs
+  `Z12_NON_MONETARY_METRIC_IDS` (standard, 10). Bajo impacto inmediato,
+  alta deuda estructural.
+
+**Z.11.2 cerrado 2026-04-27. Tests 105/105, tsc 0 errors.**
+

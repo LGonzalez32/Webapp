@@ -1983,7 +1983,22 @@ export function calcularImpactoGapMeta(
   if (c.insightTypeId === 'meta_gap_temporal') {
     return calcularImpactoValor(c, _ctx)   // reusar la fórmula ya definida
   }
-  // meta_gap: gap en % pero sin meta USD → null
+  // [Z.11.2] meta_gap del builder meta_gap_combo (insight-engine.ts:6271+) trae
+  // detail.gap (numérico, en tipoMeta units) + detail.ventaUsd (componente USD).
+  // - Modo USD: gap ya está en USD → magnitud absoluta.
+  // - Modo UDS: ventaUsd es el anchor monetario más estable (mismo criterio que
+  //   el builder inline en insight-engine.ts:6305-6307; usar gap × (ventaUsd /
+  //   ventaActual) introduce división frágil cuando ventaActual≈0).
+  // Antes (Z.11.0) devolvia null, lo que hacía que la cadena del resolver cayera
+  // a metricId='cumplimiento_meta' en NON_MONETARY_METRIC_IDS → 'non_monetary'.
+  // Esto mataba 3 candidatos meta_gap por categoría/vendor en Z.11 con
+  // 'sin-usd|cross-pobre(1)' aunque eran señales reales con gap monetario.
+  const detail = c.detail
+  const tipo = typeof detail.tipoMetaActivo === 'string' ? detail.tipoMetaActivo : null
+  const gap = typeof detail.gap === 'number' && Number.isFinite(detail.gap) ? detail.gap : null
+  const ventaUsd = typeof detail.ventaUsd === 'number' && Number.isFinite(detail.ventaUsd) ? detail.ventaUsd : null
+  if (tipo === 'usd' && gap != null && gap !== 0) return Math.abs(gap)
+  if (ventaUsd != null && ventaUsd > 0) return ventaUsd
   return null
 }
 
