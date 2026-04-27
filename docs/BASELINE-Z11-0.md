@@ -862,6 +862,132 @@ baseline.
 
 ---
 
+## 15. Z.12.V family — Visibilidad y narrativa (2026-04-27)
+
+> **Origen.** Stress test estricto post-Z.11 (sección §11 documentada en
+> chat) reveló que pass rates abstractos (87% Z.11, 80% Z.12) ocultaban
+> 13 issues reales: 3 cuellos de motor, 4 problemas UX, 6 entidades
+> accionables invisibles. El verdict "production-ready sin caveats" del
+> stress test pre-polish era prematuro.
+>
+> **Sprint family Z.12.V** (visibilidad — distinto de Z.12 del gate)
+> ataca los 3 cuellos de motor + algunas inconsistencias narrativas.
+> 4 commits, ~30 minutos.
+
+### 15.1 Z.12.V-1 — Cap meta_gap dim-aware
+
+**Problema:** `ALWAYS_PROTECTED_CAPS.meta_gap = 2` saturaba el slot con
+1 categoría + 1 vendedor. 4 categorías extremas en Los Pinos demo
+(Lácteos 709%, Refrescos 800%, Limpieza 872%, Snacks colapso) +
+1 vendedor extremo competían por 2 slots. Solo Lácteos y Roberto Cruz
+ganaban; las otras 3 categorías invisibles.
+
+**Cambio:** `meta_gap` cap único reemplazado por keys compuestas
+type:dim:
+- `meta_gap:categoria=4` (todas las categorías extremas se ven)
+- `meta_gap:vendedor=3` (top-3 por score)
+- `meta_gap:canal=1`
+- `meta_gap:supervisor=1`
+
+Helper `_capKey(c)` resuelve la clave correcta (composite para meta_gap,
+simple para otros tipos). Lookup actualizado en 3 sitios del ranker.
+
+**Commit:** `3010d003`
+
+### 15.2 Z.12.V-2 — meta_gap exento de enrichment temporal
+
+**Problema:** card R3 Lácteos titulaba "↑ Lácteos: 709% de meta"
+(sobrecumpl) pero descripción enriquecida contenía "El hueco de Lácteos
+viene de Sandra Morales 84% de meta" — narrativa direction='down' en
+candidate direction='up'. Contradicción interna grave.
+
+**Causa:** `meta_gap` NO estaba en `EVENT_TYPES_EXEMPT`. Pasaba por
+`buildContextUniversal` que agrega bullets temporales/dormidos asumiendo
+'down'. Pero el builder `meta_gap_combo` ya emite título/descripción/
+acción direction-aware. La exempción es la solución natural.
+
+**Cambio:** `meta_gap` agregado a `EVENT_TYPES_EXEMPT` (insight-engine.ts:3087).
+Side effect positivo: candidatos meta_gap que antes morían por
+`sinContexto` (crucesCount < minCruces=3) ahora pasan al render path
+dedicado, exponiendo Limpieza/Refrescos/Snacks que antes morían
+silenciosamente.
+
+**Impacto goldens:** meta_gap finalPool 4→8 (+4). passRate 60%→76% USD,
+62.5%→79.2% UDS.
+
+**Commit:** `ffd3af05`
+
+### 15.3 Z.12.V-3 — Fallback meta_gap agregado por vendedor
+
+**Problema:** Miguel Ángel Díaz (cumpl 68.7% agregado) y María Castillo
+(cumpl 145%) no surfaceaban como meta_gap. Ambos extremos comerciales,
+ambos invisibles.
+
+**Cambio dual:**
+1. Nuevo builder `meta_gap_aggregate_vendedor` (insight-engine.ts:6325)
+   que lee `vendorAnalysis` y emite candidate meta_gap si cumpl <70% o
+   >130% Y no está cubierto por meta_gap_combo. Defensivo: `_coveredVendors`
+   set evita duplicación.
+2. Cap `meta_gap:vendedor` 2→3 — permite top-3 por score. Carlos Ramírez
+   (46.7%, score 0.766) + Roberto Cruz (181%, score 0.906) + María
+   Castillo (145%, score 0.725).
+
+**Resultado en demo:** builder dormant (todos los extremos ya cubiertos
+por meta_gap_combo). En datasets futuros con metas combo donde
+meta_gap_combo se confunde con cumpl-por-combo distinto al agregado, V-3
+cubre el gap.
+
+**Commit:** `fb568adb`
+
+### 15.4 Z.12.V-4 — Outlier threshold adaptativo según N
+
+**Problema:** threshold fijo z=2.5 era estadísticamente correcto pero
+comercialmente ciego en universos chicos. María Castillo (+82% sobre
+media en N=8 vendedores) era z=1.96 — top performer invisible.
+
+**Cambio:** `_adaptiveZThreshold(n)` reemplaza const `Z_THRESHOLD`:
+- N < 10 → z=1.5 (~6.7% gaussiana)
+- N < 20 → z=2.0 (~4.6%)
+- N ≥ 20 → z=2.5 (~1.2%) — preservación del comportamiento previo
+
+Refactor de `_emitDiag` para pasar threshold dinámico explícito en cada
+call site.
+
+**Impacto goldens:** candidatesTotal 319→320 (+1). cross_engine outputCount
+1→2 (+1 outlier emitido — probablemente María Castillo entrando con
+threshold=1.5).
+
+**Commit:** `19db1d72`
+
+### 15.5 Estado del Z.12.V family
+
+| Sprint | Estado | Resuelve |
+|---|---|---|
+| Z.12.V-1 | ✅ cerrado | C-1 (cap meta_gap categoría) |
+| Z.12.V-2 | ✅ cerrado | U-1 (narrativa contradictoria meta_gap) |
+| Z.12.V-3 | ✅ cerrado | C-3 (vendedor sub-meta agregado) |
+| Z.12.V-4 | ✅ cerrado | C-2 (outlier ciego en universo chico) |
+
+Los 3 cuellos de motor del stress test estricto (C-1, C-2, C-3) y la
+inconsistencia narrativa más grave (U-1) quedan resueltos.
+
+### 15.6 Lo que sigue en backlog (Z.12.V-5+)
+
+| Sprint | Goal | Estado |
+|---|---|---|
+| **Z.12.V-5** | Anti-duplicación cross-card (Carlos Ramírez en 3 cards, productos sin venta en 3-4 menciones, López en 2 cards) | ⚪ pendiente |
+| **Z.12.V-6** | "Sin acciones sugeridas" debe degradar severity, no etiquetar urgente | ⚪ pendiente |
+| **Z.12.V-7** | Headlines en lenguaje natural (eliminar `dim=value · dim2=value2` syntax) | ⚪ pendiente |
+| **M-1** | Simetrizar contribution direction='down' | ⏸ bloqueado por decisión PM |
+
+V-5/V-6/V-7 son polish UX final. Después de ellos, motor 2 estaría
+~95% production-ready (vs 80% pre-V family, 87% post-V-1..4 estimado).
+
+**Z.12.V-1 → V-4 cerrado 2026-04-27.** 4 commits, 0 regresiones,
+117/117 tests, 0 tsc errors.
+
+---
+
 ## 14. Follow-up sprints (post-Z.11)
 
 Tres sprints derivados del stress test final (sección 13.4 backlog + auditoría
