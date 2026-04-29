@@ -117,11 +117,41 @@ export function smartDecodeText(buffer: ArrayBuffer): string {
  * ─────────────────────────────────────────────────────────────
  */
 export type ColumnRole = 'date' | 'metric' | 'dimension' | 'attribute' | 'ignored'
+// Para agregar una tabla nueva: extender este union, agregar
+// MAPPINGS + FIELDS + schema + entry en TABLE_REGISTRY. El resto del sistema
+// (wizard, plantilla XLSX, dim disponibilidad, validación cross-table) se
+// adapta automáticamente desde el registry.
 export type TableId = 'sales' | 'metas' | 'inventory'
+
+// [Sprint B] Re-export de tipos shared para que consumers existentes que
+// importan desde fileParser.ts no rompan al migrar.
+export type { FieldDefinition, ValueType, FieldRole, CrossTableRule } from './registry-types'
+export { fieldsByRole, rolesConsistentWithFields, type InferRecord } from './registry-types'
+
+import type { FieldDefinition as _FieldDefinition, CrossTableRule as _CrossTableRule } from './registry-types'
 
 export interface TableDefinition {
   id: TableId
   label: string
+  // [Sprint B] Metadata para UI y wizard. Sprint C los consumirá.
+  uploadLabel: string
+  description: string
+  templateSheetName: string
+  /** Si true, aparece en el wizard de carga. False = tabla derivada/interna. */
+  isUserUpload: boolean
+  /** Orden del paso del wizard (asc). */
+  displayOrder: number
+  /**
+   * [Sprint D] Slug usado como `UploadStep.id` en el wizard. Hoy difiere del
+   * `id` canónico (ej. id='sales' / wizardStepId='ventas'). Sprint futuro
+   * puede unificarlos.
+   */
+  wizardStepId: string
+  /** [Sprint D] Si el paso es obligatorio en el wizard. */
+  wizardRequired: boolean
+  /** Catálogo canónico de campos con metadata enriquecida (fuente de verdad). */
+  fields: Record<string, _FieldDefinition>
+  // ── existentes ───────────────────────────────────────────────────────────
   mappings: Record<string, readonly string[]>
   roles: {
     date: readonly string[]
@@ -132,7 +162,29 @@ export interface TableDefinition {
   obligatoriedad: null | {
     requireAllOf?: readonly string[]
     requireAnyOf?: readonly (readonly string[])[]
+    requireOneOfSets?: readonly (readonly string[])[]
   }
+  /** [Sprint E] Reglas cross-table declarativas. Vacío por defecto. */
+  relations?: readonly _CrossTableRule[]
+  /**
+   * [Sprint F.2] Schema zod para validar filas. Si está presente,
+   * `parseFileForTable` lo usa para validar cada row.
+   * Tipo unknown para evitar dependencias circulares con tipos zod
+   * específicos por tabla.
+   */
+  schema?: unknown
+  /**
+   * [Sprint F.2] Hook opcional de post-procesamiento por fila. Recibe la
+   * fila ya validada por schema y devuelve la fila final (puede agregar
+   * campos derivados). Ejemplo: sales agrega `clientKey` derivado.
+   */
+  postProcessRow?: (row: Record<string, unknown>) => Record<string, unknown>
+  /**
+   * [Sprint F.2] Si true, esta tabla usa un parser custom (no se puede
+   * generalizar con el flujo estándar de parseFileForTable). Hoy aplica
+   * solo a `metas` por la decomposición mes_periodo↔mes+anio.
+   */
+  hasCustomParser?: boolean
 }
 
 // [Z.P1.9.2] Aliases que representan "costo total de línea" (cantidad × costo unitario).
@@ -299,17 +351,6 @@ export const SALES_MAPPINGS: Record<string, string[]> = {
     'jefe', 'Jefe', 'gerente', 'Gerente',
     'manager', 'Manager',
   ],
-  codigo_producto: [
-    'codigo_producto', 'Codigo Producto', 'CODIGO_PRODUCTO', 'cod_producto',
-    'SKU', 'sku', 'item_code', 'ItemCode',
-    'product_code', 'ProductCode', 'codigo',
-    'Codigo', 'CODIGO', 'cod', 'Cod',
-  ],
-  codigo_cliente: [
-    'codigo_cliente', 'Codigo Cliente', 'CODIGO_CLIENTE', 'cod_cliente',
-    'customer_code', 'CustomerCode', 'client_code', 'account_code',
-    'cuenta', 'Cuenta', 'CUENTA', 'id_cliente', 'ID_Cliente',
-  ],
   subcategoria: [
     'subcategoria', 'Subcategoria', 'Subcategoría', 'subcategoría',
     'SUBCATEGORIA', 'SUBCATEGORÍA',
@@ -406,6 +447,9 @@ export const META_MAPPINGS: Record<string, string[]> = {
   canal: [
     'canal', 'Canal', 'canal_venta', 'Canal_Venta', 'channel', 'Channel', 'CANAL',
   ],
+  proveedor: [
+    'proveedor', 'Proveedor', 'PROVEEDOR', 'supplier', 'Supplier', 'vendor',
+  ],
 }
 
 // ─── HELPERS PARA METAS ──────────────────────────────────────────────────────
@@ -459,14 +503,19 @@ export const INVENTORY_MAPPINGS: Record<string, string[]> = {
     'disponible', 'Disponible',
   ],
   categoria: ['Categoria', 'categoria', 'Categoría', 'Category', 'category', 'Tipo'],
+  subcategoria: [
+    'subcategoria', 'Subcategoria', 'Subcategoría', 'subcategoría',
+    'SUBCATEGORIA', 'SUBCATEGORÍA',
+    'subcategory', 'Subcategory', 'SUBCATEGORY',
+    'sub_categoria', 'Sub_Categoria', 'sub-categoria',
+    'sub_linea', 'Sub_Linea', 'sublinea', 'Sublinea',
+  ],
   proveedor: ['Proveedor', 'proveedor', 'Supplier', 'Vendor', 'supplier'],
-  codigo_producto: [
-    'codigo_producto', 'Codigo Producto', 'Codigo_Producto',
-    'CODIGO_PRODUCTO', 'cod_producto',
-    'SKU', 'sku',
-    'item_code', 'ItemCode',
-    'product_code', 'ProductCode',
-    'codigo', 'Codigo', 'CODIGO', 'cod', 'Cod',
+  fecha: [
+    'fecha', 'Fecha', 'FECHA', 'date', 'Date', 'DATE',
+    'fecha_corte', 'Fecha Corte', 'FechaCorte',
+    'fecha_inventario', 'Fecha Inventario', 'fecha_snapshot',
+    'snapshot_date', 'Snapshot Date', 'as_of', 'As Of',
   ],
 }
 
@@ -485,8 +534,6 @@ export const saleSchema = z.object({
   canal: z.string().optional(),
   departamento: z.string().optional(),
   supervisor: z.string().optional(),
-  codigo_producto: z.string().optional(),
-  codigo_cliente: z.string().optional(),
   costo_unitario: z.number().optional(),
 }).refine(
   (d) => d.unidades !== undefined || d.venta_neta !== undefined,
@@ -496,12 +543,19 @@ export const saleSchema = z.object({
 // metaSchema omitted — parseMetasFile validates manually for multi-dim support
 
 export const inventorySchema = z.object({
+  fecha: z.coerce.date(),
   producto: z.string().min(1),
   unidades: z.number().min(0),
   categoria: z.string().optional(),
+  subcategoria: z.string().optional(),
   proveedor: z.string().optional(),
-  codigo_producto: z.string().optional(),
-})
+}).refine(
+  // [schema-cleanup] Inventario requiere al menos una columna opcional además
+  // de los obligatorios (fecha, producto, unidades). Evita uploads "vacíos"
+  // que solo declaran stock sin contexto analizable.
+  d => d.categoria !== undefined || d.subcategoria !== undefined || d.proveedor !== undefined,
+  { message: 'Se requiere al menos una columna opcional (categoria, subcategoria o proveedor).', path: ['categoria'] },
+)
 
 /**
  * Schema zod para metas. Cerrado ADITIVAMENTE: parseMetasFile sigue aplicando
@@ -523,14 +577,93 @@ export const metaSchema = z.object({
   departamento: z.string().optional(),
   supervisor: z.string().optional(),
   canal: z.string().optional(),
+  proveedor: z.string().optional(),
 })
 
 // ─── TABLE REGISTRY (fuente única de verdad de roles por tabla) ──────────────
+
+// [Sprint B] Helper para construir FieldDefinition con defaults sensatos.
+function _f(
+  key: string,
+  label: string,
+  role: 'date' | 'metric' | 'dimension' | 'attribute',
+  valueType: 'string' | 'number' | 'date' | 'boolean',
+  nullable: boolean,
+  displayOrder: number,
+  extras: { example?: string | number; description?: string; requirementGroup?: string; visibleInTemplate?: boolean; visibleInPreview?: boolean } = {},
+): _FieldDefinition {
+  return {
+    key, label, role, valueType, nullable, displayOrder,
+    example: extras.example,
+    description: extras.description,
+    requirementGroup: extras.requirementGroup,
+    visibleInTemplate: extras.visibleInTemplate ?? true,
+    visibleInPreview: extras.visibleInPreview ?? true,
+  }
+}
+
+const SALES_FIELDS: Record<string, _FieldDefinition> = {
+  fecha:           _f('fecha',           'Fecha',           'date',      'date',   false,  1, { example: '2026-03-01', description: 'Fecha de la transacción' }),
+  unidades:        _f('unidades',        'Unidades',        'metric',    'number', true,   2, { example: 24, description: 'Cantidad vendida', requirementGroup: 'metric_pair' }),
+  venta_neta:      _f('venta_neta',      'Venta neta',      'metric',    'number', true,   3, { example: 142.80, description: 'Monto de la venta', requirementGroup: 'metric_pair' }),
+  vendedor:        _f('vendedor',        'Vendedor',        'dimension', 'string', true,   4, { example: 'ANA MARIA LOPEZ' }),
+  cliente:         _f('cliente',         'Cliente',         'dimension', 'string', true,   5, { example: 'SUPER SELECTOS S.A.' }),
+  producto:        _f('producto',        'Producto',        'dimension', 'string', true,   6, { example: 'ACEITE CORONA 1L' }),
+  categoria:       _f('categoria',       'Categoría',       'dimension', 'string', true,   7, { example: 'ALIMENTOS' }),
+  subcategoria:    _f('subcategoria',    'Subcategoría',    'dimension', 'string', true,   8, { example: 'ACEITES' }),
+  canal:           _f('canal',           'Canal',           'dimension', 'string', true,   9, { example: 'RUTEO' }),
+  departamento:    _f('departamento',    'Departamento',    'dimension', 'string', true,  10, { example: 'CENTRAL' }),
+  supervisor:      _f('supervisor',      'Supervisor',      'dimension', 'string', true,  11, { example: 'CARLOS HERNANDEZ' }),
+  proveedor:       _f('proveedor',       'Proveedor',       'dimension', 'string', true,  12, { example: 'SIGMA' }),
+  costo_unitario:  _f('costo_unitario',  'Costo unitario',  'metric',    'number', true,  13, { example: 4.25, description: 'Costo del producto por unidad' }),
+}
+
+const META_FIELDS: Record<string, _FieldDefinition> = {
+  // mes_periodo es la forma canónica para la plantilla; mes/anio son alternativas
+  // que el parser acepta pero se ocultan de la plantilla XLSX para no confundir.
+  // En preview de la UI sí se muestran todas (visibleInPreview default true).
+  mes_periodo:  _f('mes_periodo',  'Periodo (mes-año)', 'date',      'string', true,   1, { example: '2026-03', description: 'Período en formato YYYY-MM', requirementGroup: 'period' }),
+  mes:          _f('mes',          'Mes',               'date',      'number', true,   2, { example: 3, description: 'Mes 1-12 (combinable con año)', requirementGroup: 'period', visibleInTemplate: false }),
+  anio:         _f('anio',         'Año',               'date',      'number', true,   3, { example: 2026, description: 'Año (combinable con mes)', requirementGroup: 'period', visibleInTemplate: false }),
+  meta:         _f('meta',         'Meta',              'metric',    'number', false,  4, { example: 800, description: 'Valor objetivo del período' }),
+  vendedor:     _f('vendedor',     'Vendedor',          'dimension', 'string', true,   5, { example: 'ANA MARIA LOPEZ' }),
+  cliente:      _f('cliente',      'Cliente',           'dimension', 'string', true,   6, { example: 'SUPER SELECTOS S.A.' }),
+  producto:     _f('producto',     'Producto',          'dimension', 'string', true,   7, { example: 'ACEITE CORONA 1L' }),
+  categoria:    _f('categoria',    'Categoría',         'dimension', 'string', true,   8, { example: 'ALIMENTOS' }),
+  subcategoria: _f('subcategoria', 'Subcategoría',      'dimension', 'string', true,   9, { example: 'ACEITES' }),
+  departamento: _f('departamento', 'Departamento',      'dimension', 'string', true,  10, { example: 'CENTRAL' }),
+  supervisor:   _f('supervisor',   'Supervisor',        'dimension', 'string', true,  11, { example: 'CARLOS HERNANDEZ' }),
+  canal:        _f('canal',        'Canal',             'dimension', 'string', true,  12, { example: 'MAYOREO' }),
+  proveedor:    _f('proveedor',    'Proveedor',         'dimension', 'string', true,  13, { example: 'SIGMA' }),
+}
+
+const INVENTORY_FIELDS: Record<string, _FieldDefinition> = {
+  fecha:        _f('fecha',        'Fecha snapshot', 'date',      'date',   false,  1, { example: '2026-03-15', description: 'Fecha del corte de inventario' }),
+  producto:     _f('producto',     'Producto',       'dimension', 'string', false,  2, { example: 'ACEITE CORONA 1L' }),
+  unidades:     _f('unidades',     'Unidades',       'metric',    'number', false,  3, { example: 145, description: 'Stock actual disponible' }),
+  categoria:    _f('categoria',    'Categoría',      'dimension', 'string', true,   4, { example: 'ALIMENTOS' }),
+  subcategoria: _f('subcategoria', 'Subcategoría',   'dimension', 'string', true,   5, { example: 'ACEITES' }),
+  proveedor:    _f('proveedor',    'Proveedor',      'dimension', 'string', true,   6, { example: 'SIGMA' }),
+}
 
 export const TABLE_REGISTRY: Readonly<Record<TableId, TableDefinition>> = {
   sales: {
     id: 'sales',
     label: 'Ventas',
+    uploadLabel: 'Datos de Ventas',
+    description: 'Sube tu historial de ventas. Solo necesito tres cosas: la fecha, cuánto vendiste (en unidades ó en dólares) y algo para agrupar (vendedor, cliente, producto…).',
+    templateSheetName: 'Ventas',
+    isUserUpload: true,
+    displayOrder: 1,
+    wizardStepId: 'ventas',
+    wizardRequired: true,
+    schema: saleSchema as unknown,
+    postProcessRow: (row) => {
+      // [Sprint F.2] clientKey = cliente.trim().toUpperCase() — único post-proc.
+      const nombre = typeof row.cliente === 'string' ? row.cliente.trim() : ''
+      return { ...row, clientKey: nombre !== '' ? nombre.toUpperCase() : null }
+    },
+    fields: SALES_FIELDS,
     mappings: SALES_MAPPINGS,
     roles: {
       date: ['fecha'],
@@ -540,7 +673,6 @@ export const TABLE_REGISTRY: Readonly<Record<TableId, TableDefinition>> = {
         'categoria', 'subcategoria',
         'canal', 'departamento',
         'supervisor', 'proveedor',
-        'codigo_producto', 'codigo_cliente',
       ],
       attributes: [],
     },
@@ -550,13 +682,36 @@ export const TABLE_REGISTRY: Readonly<Record<TableId, TableDefinition>> = {
         ['unidades', 'venta_neta'],
         ['vendedor', 'producto', 'cliente', 'categoria',
          'subcategoria', 'canal', 'departamento', 'supervisor',
-         'proveedor', 'codigo_producto', 'codigo_cliente'],
+         'proveedor'],
       ],
     },
   },
   metas: {
     id: 'metas',
     label: 'Metas',
+    uploadLabel: 'Metas de Ventas',
+    description: 'Opcional. Sube tus metas por vendedor, cliente, producto o categoría. Con metas activas se habilita el semáforo de cumplimiento y proyecciones vs. objetivo.',
+    templateSheetName: 'Metas',
+    isUserUpload: true,
+    displayOrder: 2,
+    wizardStepId: 'metas',
+    wizardRequired: false,
+    // [Sprint F.2] metas tiene parser custom por la lógica mes_periodo↔mes+anio
+    // y detección automática de tipo_meta. parseFileForTable delega a parseMetasFile.
+    hasCustomParser: true,
+    fields: META_FIELDS,
+    // [Sprint E] Cross-table rules declarativas. Hoy: metas requieren que las
+    // dimensiones presentes existan también en ventas. Cuando se agreguen
+    // membership o range_overlap, agregarlas a este array.
+    relations: [
+      {
+        type: 'dim_consistency',
+        sourceTable: 'metas',
+        targetTable: 'sales',
+        severity: 'error',
+        requireTargetLoaded: true,
+      },
+    ],
     mappings: META_MAPPINGS,
     roles: {
       date: ['mes_periodo', 'mes', 'anio'],
@@ -565,22 +720,58 @@ export const TABLE_REGISTRY: Readonly<Record<TableId, TableDefinition>> = {
         'vendedor', 'cliente', 'producto',
         'categoria', 'subcategoria',
         'departamento', 'supervisor', 'canal',
+        'proveedor',
       ],
       attributes: [],
     },
-    obligatoriedad: null,
+    obligatoriedad: {
+      requireAllOf: ['meta'],
+      requireOneOfSets: [
+        ['mes_periodo'],
+        ['mes', 'anio'],
+      ],
+      requireAnyOf: [
+        ['vendedor', 'cliente', 'producto', 'categoria',
+         'subcategoria', 'departamento', 'supervisor', 'canal', 'proveedor'],
+      ],
+    },
   },
   inventory: {
     id: 'inventory',
     label: 'Inventario',
+    uploadLabel: 'Inventario Actual',
+    description: 'Opcional. Conecta tu stock por fecha de corte con tus ventas para detectar riesgos de ruptura antes de que ocurran.',
+    templateSheetName: 'Inventario',
+    isUserUpload: true,
+    displayOrder: 3,
+    wizardStepId: 'inventario',
+    wizardRequired: false,
+    fields: INVENTORY_FIELDS,
+    schema: inventorySchema as unknown,
     mappings: INVENTORY_MAPPINGS,
     roles: {
-      date: [],
+      date: ['fecha'],
       metrics: ['unidades'],
-      dimensions: ['producto', 'categoria', 'proveedor', 'codigo_producto'],
+      dimensions: ['producto', 'categoria', 'subcategoria', 'proveedor'],
       attributes: [],
     },
-    obligatoriedad: null,
+    obligatoriedad: {
+      requireAllOf: ['fecha', 'producto', 'unidades'],
+      requireAnyOf: [
+        ['categoria', 'subcategoria', 'proveedor'],
+      ],
+    },
+    // [Sprint F] inventario.producto debe existir en sales.producto.
+    relations: [
+      {
+        type: 'membership',
+        sourceTable: 'inventory',
+        sourceField: 'producto',
+        targetTable: 'sales',
+        targetField: 'producto',
+        severity: 'warning',
+      },
+    ],
   },
 } as const
 
@@ -600,7 +791,7 @@ export function getMetricKeys(tableId: TableId): readonly string[] {
 export function checkObligatoriedad(
   tableId: TableId,
   foundKeys: readonly string[],
-): null | { missingAll: string[]; missingAny: string[][] } {
+): null | { missingAll: string[]; missingAny: string[][]; missingOneOfSets: string[][] } {
   const rule = TABLE_REGISTRY[tableId].obligatoriedad
   if (!rule) return null
   const missingAll = (rule.requireAllOf ?? []).filter((k) => !foundKeys.includes(k))
@@ -608,8 +799,49 @@ export function checkObligatoriedad(
   for (const group of rule.requireAnyOf ?? []) {
     if (!group.some((k) => foundKeys.includes(k))) missingAny.push([...group])
   }
-  if (missingAll.length === 0 && missingAny.length === 0) return null
-  return { missingAll, missingAny }
+  const oneOfSets = rule.requireOneOfSets ?? []
+  const missingOneOfSets: string[][] =
+    oneOfSets.length > 0 && !oneOfSets.some((set) => set.every((k) => foundKeys.includes(k)))
+      ? oneOfSets.map((set) => [...set])
+      : []
+  if (missingAll.length === 0 && missingAny.length === 0 && missingOneOfSets.length === 0) return null
+  return { missingAll, missingAny, missingOneOfSets }
+}
+
+export function buildObligatoriedadParseError(
+  tableId: TableId,
+  foundKeys: readonly string[],
+  unrecognizedHeaders: string[] = [],
+): ParseError | null {
+  const result = checkObligatoriedad(tableId, foundKeys)
+  if (!result) return null
+
+  const def = TABLE_REGISTRY[tableId]
+  const missing = [
+    ...result.missingAll,
+    ...result.missingAny.map((group) => `al menos uno de: ${group.join(', ')}`),
+    ...(result.missingOneOfSets.length > 0
+      ? [result.missingOneOfSets.map((set) => set.join(' + ')).join(' o ')]
+      : []),
+  ]
+  const suggestionKeys = Array.from(new Set([
+    ...result.missingAll,
+    ...result.missingAny.flat(),
+    ...result.missingOneOfSets.flat(),
+  ]))
+
+  return {
+    code: 'MISSING_REQUIRED',
+    missing,
+    found: [...foundKeys],
+    unrecognizedHeaders,
+    suggestions: buildMissingSuggestions(
+      suggestionKeys,
+      unrecognizedHeaders,
+      def.mappings as Record<string, string[]>,
+    ),
+    message: `Faltan columnas requeridas para ${def.label}: ${missing.join('; ')}. Se detectaron: ${foundKeys.length > 0 ? foundKeys.join(', ') : 'ninguna'}.`,
+  }
 }
 
 // Telemetría DEV: detecta inconsistencias registry ↔ schema/mappings al cargar.
@@ -1235,57 +1467,16 @@ export async function parseSalesFileWithOverride(
   }
 
   // [Z.P1.1] Nueva regla: solo fecha obligatoria; al menos 1 entre {unidades, venta_neta}; al menos 1 dimensión.
-  if (!foundKeys.includes('fecha')) {
-    const suggestions = buildMissingSuggestions(['fecha'], ignoredColumns, SALES_MAPPINGS)
-    return {
-      success: false,
-      error: {
-        code: 'MISSING_REQUIRED',
-        missing: ['fecha'],
-        found: foundKeys,
-        unrecognizedHeaders: ignoredColumns,
-        suggestions,
-        message: `Falta columna obligatoria: fecha. Detectadas: ${foundKeys.join(', ')}.`,
-      },
-    }
-  }
-  const hasMetric = foundKeys.includes('unidades') || foundKeys.includes('venta_neta')
-  if (!hasMetric) {
+  const requiredError = buildObligatoriedadParseError('sales', foundKeys, ignoredColumns)
+  if (requiredError) {
     if (import.meta.env.DEV) {
       console.debug('[PR-M1] ingest_summary', {
         filas_total: 0,
-        razon: 'excel_rechazado_sin_metrica',
+        razon: 'excel_rechazado_por_columnas_requeridas',
+        missing: requiredError.code === 'MISSING_REQUIRED' ? requiredError.missing : [],
       })
     }
-    const suggestions = buildMissingSuggestions(['unidades', 'venta_neta'], ignoredColumns, SALES_MAPPINGS)
-    return {
-      success: false,
-      error: {
-        code: 'MISSING_REQUIRED',
-        missing: ['unidades', 'venta_neta'],
-        found: foundKeys,
-        unrecognizedHeaders: ignoredColumns,
-        suggestions,
-        message: "Se requiere al menos una columna de métrica: 'unidades' o 'venta_neta'.",
-      },
-    }
-  }
-  const DIMENSION_KEYS = getDimensionKeys('sales')
-  const hasDimension = DIMENSION_KEYS.some((k) => foundKeys.includes(k))
-  if (!hasDimension) {
-    const dimMissing = [...DIMENSION_KEYS]
-    const suggestions = buildMissingSuggestions(dimMissing, ignoredColumns, SALES_MAPPINGS)
-    return {
-      success: false,
-      error: {
-        code: 'MISSING_REQUIRED',
-        missing: ['al menos 1 dimensión'],
-        found: foundKeys,
-        unrecognizedHeaders: ignoredColumns,
-        suggestions,
-        message: `Se requiere al menos una columna de dimensión (vendedor, producto, cliente, categoria, subcategoria, canal, departamento, supervisor, proveedor, codigo_producto, o codigo_cliente). Detectadas: ${foundKeys.join(', ')}.`,
-      },
-    }
+    return { success: false, error: requiredError }
   }
 
   // [Z.P1.9.2] Regla: costo_unitario solo es válido con columna producto.
@@ -1352,11 +1543,12 @@ export async function parseSalesFileWithOverride(
     const mapped = mappedRows[i]
     const r = saleSchema.safeParse(mapped)
     if (r.success) {
-      // [PR-M1] clientKey = codigo_cliente?.trim() || nombre_cliente?.trim().toUpperCase() || null
+      // clientKey = nombre_cliente?.trim().toUpperCase() || null
+      // (codigo_cliente fue eliminado del schema; clientKey ahora es solo
+      // canonicalización por nombre).
       const rec = r.data as SaleRecord
-      const codigo = typeof rec.codigo_cliente === 'string' ? rec.codigo_cliente.trim() : ''
       const nombre = typeof rec.cliente === 'string' ? rec.cliente.trim() : ''
-      rec.clientKey = codigo !== '' ? codigo : (nombre !== '' ? nombre.toUpperCase() : null)
+      rec.clientKey = nombre !== '' ? nombre.toUpperCase() : null
       data.push(rec)
     } else {
       discardedRows.push({
@@ -1423,28 +1615,8 @@ export async function parseMetasFile(file: File): Promise<ParseResult<MetaRecord
   }
 
   // [Z.P1.3] Aceptar mes_periodo O mes como fuente de período
-  if (!foundKeys.includes('mes_periodo') && !foundKeys.includes('mes')) {
-    return {
-      success: false,
-      error: {
-        code: 'MISSING_REQUIRED',
-        missing: ['periodo (mes_periodo, mes, o period)'],
-        found: foundKeys,
-        message: `No se encontró columna de período. Esperamos 'mes_periodo' (YYYY-MM) o 'mes' + 'anio' separados.`,
-      },
-    }
-  }
-  if (!foundKeys.includes('meta')) {
-    return {
-      success: false,
-      error: {
-        code: 'MISSING_REQUIRED',
-        missing: ['meta'],
-        found: foundKeys,
-        message: `No se encontró columna de meta/objetivo. Esperamos una columna 'meta'.`,
-      },
-    }
-  }
+  const requiredError = buildObligatoriedadParseError('metas', foundKeys, ignoredColumns)
+  if (requiredError) return { success: false, error: requiredError }
 
   const data: MetaRecord[] = []
   const discardedRows: DiscardedRow[] = []
@@ -1515,14 +1687,9 @@ export async function parseMetasFile(file: File): Promise<ParseResult<MetaRecord
       mes, anio,
       ...(tipo_meta === 'venta_neta' ? { meta_usd: meta } : { meta_uds: meta }),
       meta, tipo_meta, // keep for backward compat
-      ...(mapped.vendedor     !== undefined ? { vendedor:     String(mapped.vendedor)     } : {}),
-      ...(mapped.cliente      !== undefined ? { cliente:      String(mapped.cliente)      } : {}),
-      ...(mapped.producto     !== undefined ? { producto:     String(mapped.producto)     } : {}),
-      ...(mapped.categoria    !== undefined ? { categoria:    String(mapped.categoria)    } : {}),
-      ...(mapped.subcategoria !== undefined ? { subcategoria: String(mapped.subcategoria) } : {}),
-      ...(mapped.departamento !== undefined ? { departamento: String(mapped.departamento) } : {}),
-      ...(mapped.supervisor   !== undefined ? { supervisor:   String(mapped.supervisor)   } : {}),
-      ...(mapped.canal        !== undefined ? { canal:        String(mapped.canal)        } : {}),
+    }
+    for (const key of getDimensionKeys('metas')) {
+      if (mapped[key] !== undefined) (record as unknown as Record<string, unknown>)[key] = String(mapped[key])
     }
     data.push(record)
   }
@@ -1575,13 +1742,10 @@ export async function parseInventoryFile(file: File): Promise<ParseResult<Invent
     }
   }
 
-  const missing = ['producto', 'unidades'].filter(c => !foundKeys.includes(c))
-  if (missing.length > 0) {
-    return {
-      success: false,
-      error: { code: 'MISSING_REQUIRED', missing, found: foundKeys, message: `Faltan columnas obligatorias: ${missing.join(', ')}. Se detectaron: ${foundKeys.join(', ')}.` },
-    }
-  }
+  // [schema-cleanup] inventario ahora requiere fecha (snapshot date) además de
+  // producto y unidades — alineado con TABLE_REGISTRY.inventory.obligatoriedad.
+  const requiredError = buildObligatoriedadParseError('inventory', foundKeys, ignoredColumns)
+  if (requiredError) return { success: false, error: requiredError }
 
   const data: InventoryItem[] = []
   const discardedRows: DiscardedRow[] = []
@@ -1601,6 +1765,130 @@ export async function parseInventoryFile(file: File): Promise<ParseResult<Invent
 
   if (data.length === 0) {
     return { success: false, error: { code: 'EMPTY_FILE', message: 'Columnas encontradas pero ninguna fila pudo procesarse. Verifica que unidades sea un número.' } }
+  }
+
+  return {
+    success: true,
+    data,
+    columns: foundKeys,
+    sheetName,
+    discardedRows: discardedRows.length > 0 ? discardedRows : undefined,
+    ignoredColumns: ignoredColumns.length > 0 ? ignoredColumns : undefined,
+  }
+}
+
+/**
+ * [Sprint F.2] Parser genérico para cualquier tabla declarada en TABLE_REGISTRY.
+ * Usa los `mappings`, `obligatoriedad`, `schema` y opcional `postProcessRow`
+ * de la entrada del registry. Reemplaza el patrón parseSalesFile/parseMetasFile/
+ * parseInventoryFile per-tabla, excepto cuando `hasCustomParser=true` (caso
+ * `metas` con su decomposición mes_periodo↔mes+anio): en ese caso delega.
+ *
+ * Agregar tabla nueva = solo declarar entrada en TABLE_REGISTRY con
+ * `mappings`, `schema` y opcional `postProcessRow`. Sin escribir parseXFile.
+ */
+export async function parseFileForTable<T = Record<string, unknown>>(
+  tableId: TableId,
+  file: File,
+): Promise<ParseResult<T>> {
+  const def = TABLE_REGISTRY[tableId]
+  if (!def) {
+    return {
+      success: false,
+      error: { code: 'UNKNOWN', message: `Tabla '${tableId}' no está declarada en TABLE_REGISTRY.` },
+    }
+  }
+
+  // Tablas con parser custom (metas) delegan al parser específico.
+  if (def.hasCustomParser) {
+    if (tableId === 'metas') return parseMetasFile(file) as unknown as ParseResult<T>
+    return {
+      success: false,
+      error: { code: 'UNKNOWN', message: `Tabla '${tableId}' marca hasCustomParser pero no hay parser registrado.` },
+    }
+  }
+
+  const raw = await readFileDataWithMeta(file)
+  if ('code' in raw) return { success: false, error: raw as ParseError }
+
+  const { rows, rawHeaders, sheetName } = raw
+  if (rows.length === 0) {
+    return { success: false, error: { code: 'EMPTY_FILE', message: 'El archivo no contiene filas de datos.' } }
+  }
+
+  // Cast: `as const` hace mappings readonly, pero mapRow/detectIgnoredColumns
+  // esperan Record<string, string[]>. Sin mutación efectiva acá.
+  const mappings = def.mappings as Record<string, string[]>
+  // Coerción type-aware desde el registry: cualquier field con valueType='number'
+  // se intenta parsear como número, sin necesitar lista hardcoded en mapRow.
+  // Esto hace que agregar 'precio' (o cualquier nuevo field numérico) funcione
+  // automáticamente sin modificar mapRow.
+  const numericFields = Object.values(def.fields)
+    .filter((f) => f.valueType === 'number')
+    .map((f) => f.key)
+  const coerceTypes = (mapped: Record<string, unknown>): Record<string, unknown> => {
+    for (const k of numericFields) {
+      if (typeof mapped[k] === 'string') {
+        const n = parseNumericCell(mapped[k])
+        if (n !== null) mapped[k] = n
+      }
+    }
+    return mapped
+  }
+  const mappedRows = rows.map((row) => coerceTypes(mapRow(row, mappings)))
+  const foundKeys = detectMappedColumns(mappedRows, Object.keys(mappings))
+  const ignoredColumns = detectIgnoredColumns(rawHeaders, mappings)
+  if (import.meta.env.DEV && ignoredColumns.length > 0) {
+    console.debug(`[Z.ignored] ${tableId}`, { count: ignoredColumns.length, columns: ignoredColumns })
+  }
+
+  if (foundKeys.length === 0) {
+    const preview = rawHeaders.slice(0, 8).join(', ') + (rawHeaders.length > 8 ? '…' : '')
+    return {
+      success: false,
+      error: {
+        code: 'NO_VALID_COLUMNS',
+        found: rawHeaders,
+        message: `No se encontraron columnas reconocibles. Detectadas: ${preview}. Asegúrate de que los encabezados estén en la primera fila.`,
+      },
+    }
+  }
+
+  // Obligatoriedad declarativa desde el registry — funciona para cualquier tabla.
+  const requiredError = buildObligatoriedadParseError(tableId, foundKeys, ignoredColumns)
+  if (requiredError) return { success: false, error: requiredError }
+
+  if (!def.schema) {
+    return {
+      success: false,
+      error: { code: 'UNKNOWN', message: `Tabla '${tableId}' no tiene schema declarado.` },
+    }
+  }
+  const schema = def.schema as { safeParse: (input: unknown) => { success: boolean; data?: unknown; error?: { issues: unknown[] } } }
+
+  const data: T[] = []
+  const discardedRows: DiscardedRow[] = []
+  for (let i = 0; i < mappedRows.length; i++) {
+    const mapped = mappedRows[i]
+    const result = schema.safeParse(mapped)
+    if (result.success) {
+      const validated = result.data as Record<string, unknown>
+      const final = def.postProcessRow ? def.postProcessRow(validated) : validated
+      data.push(final as T)
+    } else {
+      discardedRows.push({
+        rowNumber: i + 2,
+        rawData: Object.fromEntries(Object.entries(rows[i]).map(([k, v]) => [k, String(v ?? '')])),
+        reason: zodErrorToSpanish(mapped, (result.error?.issues ?? []) as never),
+      })
+    }
+  }
+
+  if (data.length === 0) {
+    return {
+      success: false,
+      error: { code: 'EMPTY_FILE', message: 'Columnas encontradas pero ninguna fila pudo procesarse. Verifica que los tipos coincidan.' },
+    }
   }
 
   return {
@@ -1731,5 +2019,9 @@ export function detectDataAvailability(sales: SaleRecord[]): Omit<DataAvailabili
     has_departamento: sales.some((s) => s.departamento != null && s.departamento !== ''),
     has_unidades,
     has_precio_unitario: has_unidades && has_venta_neta,
+    // [schema-cleanup] flags de columnas opcionales nuevas.
+    has_subcategoria: sales.some((s) => s.subcategoria != null && s.subcategoria !== ''),
+    has_proveedor: sales.some((s) => s.proveedor != null && s.proveedor !== ''),
+    has_costo_unitario: sales.some((s) => s.costo_unitario != null && s.costo_unitario > 0),
   }
 }

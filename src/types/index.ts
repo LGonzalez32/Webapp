@@ -8,6 +8,7 @@ export interface SaleRecord {
   cliente?: string
   venta_neta?: number
   categoria?: string
+  subcategoria?: string
   proveedor?: string
   canal?: string
   departamento?: string
@@ -42,12 +43,17 @@ export interface MetaRecord {
   departamento?: string
   supervisor?:   string
   canal?:        string
+  proveedor?:    string
 }
 
 export interface InventoryItem {
+  // Snapshot date — required: análisis temporal (movimiento de stock,
+  // detección de quiebres) requiere saber la fecha del corte.
+  fecha: Date
   producto: string
   unidades: number
   categoria?: string
+  subcategoria?: string
   proveedor?: string
 }
 
@@ -68,6 +74,12 @@ export interface DataAvailability {
   //   has_precio_unitario: has_unidades && has_venta_neta (derivable)
   has_unidades?: boolean
   has_precio_unitario?: boolean
+  // Sprint cross-dim: nuevas columnas que ya capturaba el parser pero no eran
+  // visibles para el motor. Permiten al cross-engine y al main loop saber
+  // qué dimensiones/métricas adicionales pueden activarse.
+  has_subcategoria?: boolean
+  has_proveedor?: boolean
+  has_costo_unitario?: boolean
 }
 
 // ─── ANÁLISIS POR VENDEDOR ────────────────────────────────────────────────────
@@ -263,6 +275,10 @@ export type ParseError =
   | { code: 'FILE_PROTECTED_OR_CORRUPT'; message: string }
   | { code: 'ENCODING_ISSUE'; sample: string[]; message: string }
   | { code: 'FILE_TOO_LARGE'; sizeMB: number; limitMB: number; message: string }
+  // [schema-cleanup/upload-validation] Metas trae dim que ventas no tiene.
+  // Bloquear evita que el motor genere insights por dim que no existe en ventas.
+  | { code: 'META_DIM_NOT_IN_SALES'; missingFromSales: string[]; message: string }
+  | { code: 'SALES_NOT_LOADED'; message: string }
   | { code: 'UNKNOWN'; message: string }
 
 export interface DiscardedRow {
@@ -324,7 +340,16 @@ export type ParseResult<T> =
 // ─── UPLOAD / SESIÓN ──────────────────────────────────────────────────────────
 
 export interface UploadStep {
-  id: 'ventas' | 'metas' | 'inventario'
+  /**
+   * [Sprint D] Slug del paso, derivado de TABLE_REGISTRY[id].wizardStepId.
+   * Antes era un union cerrado `'ventas' | 'metas' | 'inventario'`, lo que
+   * obligaba a editar este archivo cada vez que se agregaba una tabla nueva.
+   * Ahora es `string` para que agregar una 4ta tabla con `wizardStepId='precios'`
+   * no requiera tocar este tipo. Las comparaciones `step.id === 'ventas'` en
+   * UploadPage siguen siendo válidas — son feature flags per-tabla, no
+   * exhaustividad estructural.
+   */
+  id: string
   label: string
   description: string
   required: boolean

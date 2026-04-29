@@ -16,7 +16,7 @@ import {
   detectDateConvention,
   parseDateWithConvention,
   getDimensionKeys,
-  buildMissingSuggestions,
+  buildObligatoriedadParseError,
   buildEffectiveMappings,
   computeMappingTrace,
   normalizeStr,
@@ -216,55 +216,9 @@ self.onmessage = (event: MessageEvent<ParseWorkerInput>) => {
 
     if (type === 'sales') {
       // [Z.P1.1] Nueva regla: solo fecha obligatoria; al menos 1 entre {unidades, venta_neta}; al menos 1 dimensión.
-      if (!foundKeys.includes('fecha')) {
-        const suggestions = buildMissingSuggestions(['fecha'], ignoredColumns, SALES_MAPPINGS)
-        post({
-          type: 'result',
-          success: false,
-          error: {
-            code: 'MISSING_REQUIRED',
-            missing: ['fecha'],
-            found: foundKeys,
-            unrecognizedHeaders: ignoredColumns,
-            suggestions,
-            message: `Falta columna obligatoria: fecha. Detectadas: ${foundKeys.join(', ')}.`,
-          },
-        })
-        return
-      }
-      const hasMetric = foundKeys.includes('unidades') || foundKeys.includes('venta_neta')
-      if (!hasMetric) {
-        const suggestions = buildMissingSuggestions(['unidades', 'venta_neta'], ignoredColumns, SALES_MAPPINGS)
-        post({
-          type: 'result',
-          success: false,
-          error: {
-            code: 'MISSING_REQUIRED',
-            missing: ['unidades', 'venta_neta'],
-            found: foundKeys,
-            unrecognizedHeaders: ignoredColumns,
-            suggestions,
-            message: "Se requiere al menos una columna de métrica: 'unidades' o 'venta_neta'.",
-          },
-        })
-        return
-      }
-      const DIMENSION_KEYS = getDimensionKeys('sales')
-      const hasDimension = DIMENSION_KEYS.some((k) => foundKeys.includes(k))
-      if (!hasDimension) {
-        const suggestions = buildMissingSuggestions([...DIMENSION_KEYS], ignoredColumns, SALES_MAPPINGS)
-        post({
-          type: 'result',
-          success: false,
-          error: {
-            code: 'MISSING_REQUIRED',
-            missing: ['al menos 1 dimensión'],
-            found: foundKeys,
-            unrecognizedHeaders: ignoredColumns,
-            suggestions,
-            message: `Se requiere al menos una columna de dimensión (vendedor, producto, cliente, categoria, subcategoria, canal, departamento, supervisor, proveedor, codigo_producto, o codigo_cliente). Detectadas: ${foundKeys.join(', ')}.`,
-          },
-        })
+      const requiredError = buildObligatoriedadParseError('sales', foundKeys, ignoredColumns)
+      if (requiredError) {
+        post({ type: 'result', success: false, error: requiredError })
         return
       }
 
@@ -319,49 +273,18 @@ self.onmessage = (event: MessageEvent<ParseWorkerInput>) => {
     }
 
     if (type === 'inventory') {
-      const missing = ['producto', 'unidades'].filter((c) => !foundKeys.includes(c))
-      if (missing.length > 0) {
-        post({
-          type: 'result',
-          success: false,
-          error: {
-            code: 'MISSING_REQUIRED',
-            missing,
-            found: foundKeys,
-            message: `Faltan columnas obligatorias: ${missing.join(', ')}. Se detectaron: ${foundKeys.join(', ')}.`,
-          },
-        })
+      const requiredError = buildObligatoriedadParseError('inventory', foundKeys, ignoredColumns)
+      if (requiredError) {
+        post({ type: 'result', success: false, error: requiredError })
         return
       }
     }
 
     if (type === 'metas') {
       // [Z.P1.3] Aceptar mes_periodo O mes como fuente de período
-      if (!foundKeys.includes('mes_periodo') && !foundKeys.includes('mes')) {
-        post({
-          type: 'result',
-          success: false,
-          error: {
-            code: 'MISSING_REQUIRED',
-            missing: ['periodo (mes_periodo, mes, o period)'],
-            found: foundKeys,
-            message:
-              `No se encontró columna de período. Esperamos 'mes_periodo' (YYYY-MM) o 'mes' + 'anio' separados.`,
-          },
-        })
-        return
-      }
-      if (!foundKeys.includes('meta')) {
-        post({
-          type: 'result',
-          success: false,
-          error: {
-            code: 'MISSING_REQUIRED',
-            missing: ['meta'],
-            found: foundKeys,
-            message: `No se encontró columna de meta/objetivo. Esperamos una columna 'meta'.`,
-          },
-        })
+      const requiredError = buildObligatoriedadParseError('metas', foundKeys, ignoredColumns)
+      if (requiredError) {
+        post({ type: 'result', success: false, error: requiredError })
         return
       }
     }
@@ -470,14 +393,9 @@ self.onmessage = (event: MessageEvent<ParseWorkerInput>) => {
             ...(tipo_meta === 'venta_neta' ? { meta_usd: meta } : { meta_uds: meta }),
             meta,
             tipo_meta,
-            ...(mapped.vendedor !== undefined ? { vendedor: String(mapped.vendedor) } : {}),
-            ...(mapped.cliente !== undefined ? { cliente: String(mapped.cliente) } : {}),
-            ...(mapped.producto !== undefined ? { producto: String(mapped.producto) } : {}),
-            ...(mapped.categoria !== undefined ? { categoria: String(mapped.categoria) } : {}),
-            ...(mapped.subcategoria !== undefined ? { subcategoria: String(mapped.subcategoria) } : {}),
-            ...(mapped.departamento !== undefined ? { departamento: String(mapped.departamento) } : {}),
-            ...(mapped.supervisor !== undefined ? { supervisor: String(mapped.supervisor) } : {}),
-            ...(mapped.canal !== undefined ? { canal: String(mapped.canal) } : {}),
+          }
+          for (const key of getDimensionKeys('metas')) {
+            if (mapped[key] !== undefined) record[key] = String(mapped[key])
           }
           data.push(record)
         }

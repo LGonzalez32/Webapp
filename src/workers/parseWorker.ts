@@ -10,6 +10,9 @@ import {
   inventorySchema,
   detectTipoMeta,
   parseMonthNum,
+  detectMappedColumns,
+  buildObligatoriedadParseError,
+  getDimensionKeys,
 } from '../lib/fileParser'
 
 type ParseType = 'ventas' | 'metas' | 'inventario'
@@ -62,9 +65,12 @@ function getRows(buffer: ArrayBuffer, filename: string): Record<string, unknown>
 }
 
 function parseVentas(rows: Record<string, unknown>[]): unknown[] {
+  const mappedRows = rows.map((row) => mapRow(row, SALES_MAPPINGS))
+  const foundKeys = detectMappedColumns(mappedRows, Object.keys(SALES_MAPPINGS))
+  if (buildObligatoriedadParseError('sales', foundKeys)) return []
+
   const parsed: unknown[] = []
-  for (const row of rows) {
-    const mapped = mapRow(row, SALES_MAPPINGS)
+  for (const mapped of mappedRows) {
     const result = saleSchema.safeParse(mapped)
     if (result.success) parsed.push(result.data)
   }
@@ -74,11 +80,13 @@ function parseVentas(rows: Record<string, unknown>[]): unknown[] {
 function parseMetas(rows: Record<string, unknown>[]): unknown[] {
   const rawHeaders = rows.length > 0 ? Object.keys(rows[0]) : []
   const tipo_meta = detectTipoMeta(rawHeaders)
+  const mappedRows = rows.map((row) => mapRow(row, META_MAPPINGS))
+  const foundKeys = detectMappedColumns(mappedRows, Object.keys(META_MAPPINGS))
+  if (buildObligatoriedadParseError('metas', foundKeys)) return []
+
   const parsed: unknown[] = []
 
-  for (const row of rows) {
-    const mapped = mapRow(row, META_MAPPINGS)
-
+  for (const mapped of mappedRows) {
     let mes: number | null = null
     let anio: number | null = null
 
@@ -120,7 +128,7 @@ function parseMetas(rows: Record<string, unknown>[]): unknown[] {
       mes, anio, meta, tipo_meta,
       ...(tipo_meta === 'venta_neta' ? { meta_usd: meta } : { meta_uds: meta }),
     }
-    for (const key of ['vendedor', 'cliente', 'producto', 'categoria', 'departamento', 'supervisor', 'canal']) {
+    for (const key of getDimensionKeys('metas')) {
       if (mapped[key] !== undefined) record[key] = String(mapped[key])
     }
     parsed.push(record)
@@ -130,9 +138,12 @@ function parseMetas(rows: Record<string, unknown>[]): unknown[] {
 }
 
 function parseInventario(rows: Record<string, unknown>[]): unknown[] {
+  const mappedRows = rows.map((row) => mapRow(row, INVENTORY_MAPPINGS))
+  const foundKeys = detectMappedColumns(mappedRows, Object.keys(INVENTORY_MAPPINGS))
+  if (buildObligatoriedadParseError('inventory', foundKeys)) return []
+
   const parsed: unknown[] = []
-  for (const row of rows) {
-    const mapped = mapRow(row, INVENTORY_MAPPINGS)
+  for (const mapped of mappedRows) {
     const result = inventorySchema.safeParse(mapped)
     if (result.success) parsed.push(result.data)
   }
