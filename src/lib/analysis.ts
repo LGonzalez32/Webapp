@@ -15,6 +15,12 @@ import type {
   CategoriaAnalysis,
   CanalAnalysis,
 } from '../types'
+import {
+  getFechaReferencia,
+  buildDefaultYtdRange,
+  buildMonthlyRange,
+  buildComparisonRangeYoY,
+} from './periods'
 
 // ─── HELPERS DE FECHA ─────────────────────────────────────────────────────────
 
@@ -84,7 +90,10 @@ export function buildSaleIndex(sales: SaleRecord[]): SaleIndex {
   const byVendor = new Map<string, SaleRecord[]>()
   const byProduct = new Map<string, SaleRecord[]>()
   const byClient = new Map<string, SaleRecord[]>()
-  let fechaReferencia = new Date(0)
+  // Ticket 2.2-C: max(sales.fecha) centralizado en lib/periods.ts.
+  // Conservamos sentinel epoch 0 cuando sales es vacío — computeCommercialAnalysis
+  // detecta el sentinel y retorna shape vacío (Ticket 2.2-A).
+  const fechaReferencia = getFechaReferencia(sales) ?? new Date(0)
   let has_producto = false, has_cliente = false, has_venta_neta = false
   let has_categoria = false, has_canal = false, has_supervisor = false, has_departamento = false
   let has_subcategoria = false, has_proveedor = false, has_costo_unitario = false
@@ -92,7 +101,6 @@ export function buildSaleIndex(sales: SaleRecord[]): SaleIndex {
   let _filasConUnidades = 0
 
   for (const s of sales) {
-    if (s.fecha > fechaReferencia) fechaReferencia = s.fecha
     appendToMap(byPeriod, periodKey(s.fecha.getFullYear(), s.fecha.getMonth()), s)
     if (s.vendedor) appendToMap(byVendor, s.vendedor, s)
     if (s.producto) { appendToMap(byProduct, s.producto, s); has_producto = true }
@@ -286,14 +294,14 @@ function computeYTD(
   ytd_anterior_usd?: number
   variacion_ytd_usd_pct?: number | null
 } {
-  const yearActual = fechaReferencia.getFullYear()
-  const startActual = new Date(yearActual, 0, 1)
-  const startAnterior = new Date(yearActual - 1, 0, 1)
-  // Mismo día/mes del año anterior
-  const endAnterior = new Date(yearActual - 1, fechaReferencia.getMonth(), fechaReferencia.getDate(), 23, 59, 59, 999)
+  // Ticket 2.2-C: rangos YTD centralizados en lib/periods.ts.
+  // buildDefaultYtdRange devuelve [1-ene, endOfDay(fechaRef)].
+  // buildComparisonRangeYoY devuelve mismo rango año anterior con clamp 29-feb.
+  const rangeActual = buildDefaultYtdRange(fechaReferencia)
+  const rangeAnterior = buildComparisonRangeYoY(rangeActual)
 
-  const salesActual   = sales.filter((s) => s.fecha >= startActual && s.fecha <= fechaReferencia)
-  const salesAnterior = sales.filter((s) => s.fecha >= startAnterior && s.fecha <= endAnterior)
+  const salesActual   = sales.filter((s) => s.fecha >= rangeActual.start && s.fecha <= rangeActual.end)
+  const salesAnterior = sales.filter((s) => s.fecha >= rangeAnterior.start && s.fecha <= rangeAnterior.end)
 
   const ytd_actual_uds   = salesActual.reduce((a, s) => a + s.unidades, 0)
   const ytd_anterior_uds = salesAnterior.reduce((a, s) => a + s.unidades, 0)
@@ -571,10 +579,9 @@ function computeClientesDormidos(
   // inventar "hoy" desde el browser. La función no tiene base para calcular
   // "días sin comprar" sin datos.
   if (sales.length === 0) return []
-  const today = sales.reduce(
-    (max, s) => { const d = s.fecha; return d > max ? d : max },
-    new Date(0),
-  )
+  // safe: sales.length > 0 (early return arriba) garantiza que getFechaReferencia
+  // no retorna null. Ticket 2.2-C: cálculo centralizado en lib/periods.ts.
+  const today = getFechaReferencia(sales)!
 
   const clientMap = byClient ?? (() => {
     const m = new Map<string, SaleRecord[]>()
@@ -788,13 +795,19 @@ export function computeCommercialAnalysis(
   const diasRestantes = Math.max(0, diasTotales - diasTranscurridos)
 
   // MTD YoY: compare same month previous year, same day range
+  // Ticket 2.2-C: rangos centralizados en lib/periods.ts. buildMonthlyRange con
+  // monthStart === monthEnd === month devuelve [1-mes, endOfDay(fechaRef)] si el
+  // mes contiene fechaRef, o mes calendario completo si no.
   const prevYoY = { year: year - 1, month }
-  const periodStart = startOfPeriod(year, month)
-  const periodEnd = isCurrentMonth ? new Date(year, month, diasTranscurridos, 23, 59, 59, 999) : endOfPeriod(year, month)
-  const prevStart = startOfPeriod(prevYoY.year, prevYoY.month)
-  const prevEnd = isCurrentMonth
-    ? new Date(prevYoY.year, prevYoY.month, diasTranscurridos, 23, 59, 59, 999)
-    : endOfPeriod(prevYoY.year, prevYoY.month)
+  const periodRange = buildMonthlyRange(
+    { year, monthStart: month, monthEnd: month },
+    fechaReferencia,
+  )
+  const prevRange = buildComparisonRangeYoY(periodRange)
+  const periodStart = periodRange.start
+  const periodEnd = periodRange.end
+  const prevStart = prevRange.start
+  const prevEnd = prevRange.end
 
   const vendedores = Array.from(idx.byVendor.keys())
   const vendorAnalysis = vendedores.map((v) =>
@@ -1154,22 +1167,25 @@ export function analyzeSupervisor(
 ): SupervisorAnalysis[] {
   const { year, month } = selectedPeriod
   const fr = index.fechaReferencia
-  const ytdYear = fr.getFullYear()
-  const startYTDActual  = new Date(ytdYear, 0, 1)
-  const startYTDAnterior = new Date(ytdYear - 1, 0, 1)
-  const endYTDAnterior  = new Date(ytdYear - 1, fr.getMonth(), fr.getDate(), 23, 59, 59, 999)
 
-  // BUG-FIX (Ticket 2.2-B): truncar período anterior al mismo día cuando
-  // selectedPeriod es el mes en curso. Replica patrón de computeCommercialAnalysis
-  // L766-770. Sin esto, MTD parcial vs mes anterior completo viola regla CONTEXT.md.
-  const isCurrentMonth = fr.getFullYear() === year && fr.getMonth() === month
-  const diasTotalesPrevYear = getDaysInMonth(year - 1, month)
-  const diasTranscurridosPrev = isCurrentMonth
-    ? Math.min(fr.getDate(), diasTotalesPrevYear)  // clamp para ej. 31-mar -> 28-feb cross-year
-    : diasTotalesPrevYear
+  // Ticket 2.2-C: rangos centralizados en lib/periods.ts.
+  // YTD: año en curso vs año anterior (truncado al día por buildDefaultYtdRange).
+  const ytdActualRange = buildDefaultYtdRange(fr)
+  const ytdAnteriorRange = buildComparisonRangeYoY(ytdActualRange)
+  // MTD: mes seleccionado vs mismo mes año anterior. buildMonthlyRange trunca
+  // si el mes contiene fr; buildComparisonRangeYoY clampea 29-feb cross-year.
+  // El Math.min defensivo del Commit 2.2-B queda implícito en la primitiva.
+  const periodRange = buildMonthlyRange(
+    { year, monthStart: month, monthEnd: month },
+    fr,
+  )
+  const prevYearRange = buildComparisonRangeYoY(periodRange)
 
-  const prevYearStart = new Date(year - 1, month, 1)
-  const prevYearEnd   = new Date(year - 1, month, diasTranscurridosPrev, 23, 59, 59, 999)
+  const startYTDActual = ytdActualRange.start
+  const startYTDAnterior = ytdAnteriorRange.start
+  const endYTDAnterior = ytdAnteriorRange.end
+  const prevYearStart = prevYearRange.start
+  const prevYearEnd = prevYearRange.end
 
   // Predominant supervisor per vendor
   const supervisorByVendor: Record<string, string> = {}
@@ -1567,15 +1583,10 @@ export function buildAggregatedSummaries(
   const { year, month } = selectedPeriod
   const hasVenta = dataAvailability.has_venta_neta
 
-  // Compute fechaReferencia (max sale date) for same-day-range YTD logic
-  let fechaRef = new Date(0)
-  for (const s of sales) {
-    if (s.fecha > fechaRef) fechaRef = s.fecha
-  }
-  // NOTA (Ticket 2.2-A): este fallback queda intencionalmente para pantallas
-  // que esperan SIEMPRE un fechaRef. Las funciones internas (computeClientesDormidos,
-  // computeCommercialAnalysis) ya no inventan "hoy"; retornan vacío.
-  if (fechaRef.getTime() === 0) fechaRef = new Date()
+  // NOTA (Ticket 2.2-A/C): fallback intencional al browser cuando no hay datos.
+  // Las funciones internas ya retornan empty; este orquestador externo
+  // requiere SIEMPRE un fechaRef para pantallas que dependen de él.
+  const fechaRef = getFechaReferencia(sales) ?? new Date()
   const refMonth = fechaRef.getMonth()
   const refDay = fechaRef.getDate()
 
