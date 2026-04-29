@@ -651,7 +651,7 @@ export default function LandingPage() {
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16 sm:py-20">
           <div className="text-center mb-10">
             <h2 className="text-2xl sm:text-3xl font-bold" style={{ color: '#1a1a2e' }}>
-              Todo lo que incluye tu reporte
+              Funciones
             </h2>
             <p className="mt-2 text-base" style={{ color: '#64748b' }}>
               Un solo archivo. Todo este análisis.
