@@ -21,6 +21,23 @@ import {
 
 const RIESGO_ORDER: Record<string, number> = { critico: 0, riesgo: 1, ok: 2, superando: 3 }
 
+// Tooltips Tarea 2.4 — definiciones desde src/lib/analysis.ts:420-432
+// Con meta:  proyeccion_cierre vs meta. <70% crítico, 70-90% riesgo, 90-105% ok, >105% superando.
+// Sin meta:  variacion_vs_anio (YTD). <-20% crítico, -20% a -10% riesgo, -10% a +10% ok, >+10% superando.
+const ESTADO_VENDEDOR_TOOLTIPS: Record<'critico' | 'riesgo' | 'ok' | 'superando', string> = {
+  critico:   'Cumplimiento proyectado al cierre menor al 70% de la meta (o, sin meta, caída anual mayor al 20% vs año anterior).',
+  riesgo:    'Cumplimiento proyectado entre 70% y 90% de la meta (o, sin meta, caída anual entre 10% y 20%).',
+  ok:        'Cumplimiento proyectado entre 90% y 105% de la meta (o, sin meta, variación anual entre -10% y +10%).',
+  superando: 'Cumplimiento proyectado mayor al 105% de la meta (o, sin meta, crecimiento anual mayor al 10%).',
+}
+const TT_VEND_EN_RIESGO   = 'Vendedores en estado CRÍTICO o RIESGO.'
+const TT_VEND_SUPERANDO   = 'Vendedores con cumplimiento proyectado mayor al 105% de la meta.'
+const TT_CUMPL_PROM       = 'Promedio simple del cumplimiento de meta de los vendedores con meta asignada.'
+const TT_ACUMULADO_PROM   = 'Promedio simple de la variación del año a la fecha del equipo vs mismo período del año anterior.'
+const TT_PULSO_EQUIPO     = 'Porcentaje del equipo en buen estado: (OK + SUPERANDO) / total de vendedores.'
+const TT_ESTADO_HEADER    = 'Estado del vendedor: CRÍTICO, RIESGO, OK o SUPERANDO según cumplimiento proyectado vs meta (o variación anual sin meta).'
+const TT_ALERTAS_HEADER   = 'Hallazgos activos del motor de insights asignados al vendedor (clientes dormidos, productos sin movimiento, caídas sostenidas, etc.).'
+
 const RIESGO_CONFIG = {
   critico:   { label: 'CRÍTICO', badgeBg: '#FF4D4D15', badgeColor: '#FF4D4D', dot: '#FF4D4D' },
   riesgo:    { label: 'RIESGO',  badgeBg: '#FFB80015', badgeColor: '#FFB800', dot: '#FFB800' },
@@ -432,15 +449,15 @@ CONVENCIÓN DE UNIDADES (R57 — obligatoria):
       <div style={{ paddingLeft: 16 }}>
         {hdrBtn('vendedor', 'Vendedor', 'start')}
       </div>
-      <div>{hdrBtn('estado', 'Estado', 'center')}</div>
+      <div title={TT_ESTADO_HEADER} style={{ cursor: 'help' }}>{hdrBtn('estado', 'Estado', 'center')}</div>
       <div className={cn(colCls, 'flex items-center justify-center')} style={{ color: 'var(--sf-t5)' }}>IA</div>
-      <div style={{ borderLeft: '1px solid var(--sf-border)', paddingLeft: '16px' }}>
+      <div title={TT_ALERTAS_HEADER} style={{ borderLeft: '1px solid var(--sf-border)', paddingLeft: '16px', cursor: 'help' }}>
         {hdrBtn('alertas', 'Alertas', 'center')}
       </div>
       <div>{hdrBtn('ytd', selectedPeriod?.year ?? new Date().getFullYear())}</div>
       <div>{hdrBtn('ytd_ant', (selectedPeriod?.year ?? new Date().getFullYear()) - 1)}</div>
-      <div>{hdrBtn('var', 'Var')}</div>
-      <div>{hdrBtn('var_pct', 'Var %')}</div>
+      <div>{hdrBtn('var', 'Variación')}</div>
+      <div>{hdrBtn('var_pct', 'Variación %')}</div>
       <div>{hdrBtn('peso', 'Peso %')}</div>
       {dataAvailability.has_metas && (
         <div>{hdrBtn('meta', 'Meta %')}</div>
@@ -524,11 +541,15 @@ CONVENCIÓN DE UNIDADES (R57 — obligatoria):
 
         {/* ESTADO */}
         <div className="flex items-center justify-center">
-          <span style={{
-            background: rc.badgeBg, color: rc.badgeColor,
-            padding: '3px 8px', borderRadius: 4,
-            fontSize: 11, fontWeight: 500,
-          }}>
+          <span
+            title={ESTADO_VENDEDOR_TOOLTIPS[v.riesgo as 'critico' | 'riesgo' | 'ok' | 'superando'] ?? TT_ESTADO_HEADER}
+            style={{
+              background: rc.badgeBg, color: rc.badgeColor,
+              padding: '3px 8px', borderRadius: 4,
+              fontSize: 11, fontWeight: 500,
+              cursor: 'help',
+            }}
+          >
             {rc.label}
           </span>
         </div>
@@ -599,7 +620,7 @@ CONVENCIÓN DE UNIDADES (R57 — obligatoria):
           className="flex items-center justify-end tabular-nums"
           style={{ ...mono, fontSize: 13, color: varAbs == null ? 'var(--sf-t5)' : varAbs >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}
         >
-          {varAbs == null ? '—' : `${varAbs >= 0 ? '+' : ''}${metrica === 'dolares' ? fmtMoney(Math.abs(varAbs)) : Math.round(Math.abs(varAbs)).toLocaleString()}`}
+          {varAbs == null ? '—' : `${varAbs > 0 ? '+' : varAbs < 0 ? '-' : ''}${metrica === 'dolares' ? fmtMoney(Math.abs(varAbs)) : Math.round(Math.abs(varAbs)).toLocaleString()}`}
         </div>
 
         {/* VAR % */}
@@ -689,7 +710,7 @@ CONVENCIÓN DE UNIDADES (R57 — obligatoria):
         {/* VAR abs */}
         <div className="flex items-center justify-end tabular-nums"
           style={{ ...mono, fontSize: 13, color: varAbs >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
-          {`${varAbs >= 0 ? '+' : ''}${metrica === 'dolares' ? fmtMoney(Math.abs(varAbs)) : Math.round(Math.abs(varAbs)).toLocaleString()}`}
+          {`${varAbs > 0 ? '+' : varAbs < 0 ? '-' : ''}${metrica === 'dolares' ? fmtMoney(Math.abs(varAbs)) : Math.round(Math.abs(varAbs)).toLocaleString()}`}
         </div>
 
         {/* VAR % */}
@@ -773,6 +794,7 @@ CONVENCIÓN DE UNIDADES (R57 — obligatoria):
               <button
                 key={estado}
                 onClick={() => toggleFilterEstado(estado)}
+                title={ESTADO_VENDEDOR_TOOLTIPS[estado as 'critico' | 'riesgo' | 'ok' | 'superando']}
                 style={{
                   background: isActive ? `${color}25` : `${color}15`,
                   color,
@@ -809,13 +831,13 @@ CONVENCIÓN DE UNIDADES (R57 — obligatoria):
         return (
           <div className="flex flex-wrap gap-2 mb-1">
             {[
-              { label: 'Vendedores', value: String(totalV), color: 'var(--sf-t3)' },
-              { label: 'En riesgo', value: String(enRiesgoCount), color: enRiesgoCount > 0 ? '#FF4D4D' : 'var(--sf-green)' },
-              { label: 'Superando', value: String(superandoCount), color: superandoCount > 0 ? '#60A5FA' : 'var(--sf-t4)' },
-              { label: 'Cumpl. prom.', value: avgCumplimiento != null ? `${avgCumplimiento}%` : '—', color: avgCumplimiento != null ? (avgCumplimiento >= 100 ? 'var(--sf-green)' : avgCumplimiento >= 70 ? '#FFB800' : '#FF4D4D') : 'var(--sf-t5)' },
-              { label: 'YTD prom.', value: avgYtd != null ? `${avgYtd >= 0 ? '+' : ''}${avgYtd.toFixed(1)}%` : '—', color: avgYtd != null ? (avgYtd >= 0 ? 'var(--sf-green)' : '#FF4D4D') : 'var(--sf-t5)' },
+              { label: 'Vendedores', value: String(totalV), color: 'var(--sf-t3)', tip: 'Cantidad total de vendedores en el equipo.' },
+              { label: 'En riesgo', value: String(enRiesgoCount), color: enRiesgoCount > 0 ? '#FF4D4D' : 'var(--sf-green)', tip: TT_VEND_EN_RIESGO },
+              { label: 'Superando', value: String(superandoCount), color: superandoCount > 0 ? '#60A5FA' : 'var(--sf-t4)', tip: TT_VEND_SUPERANDO },
+              { label: 'Cumpl. prom.', value: avgCumplimiento != null ? `${avgCumplimiento}%` : '—', color: avgCumplimiento != null ? (avgCumplimiento >= 100 ? 'var(--sf-green)' : avgCumplimiento >= 70 ? '#FFB800' : '#FF4D4D') : 'var(--sf-t5)', tip: TT_CUMPL_PROM },
+              { label: 'Acumulado año prom.', value: avgYtd != null ? `${avgYtd >= 0 ? '+' : ''}${avgYtd.toFixed(1)}%` : '—', color: avgYtd != null ? (avgYtd >= 0 ? 'var(--sf-green)' : '#FF4D4D') : 'var(--sf-t5)', tip: TT_ACUMULADO_PROM },
             ].map(kpi => (
-              <div key={kpi.label} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
+              <div key={kpi.label} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', cursor: 'help' }} title={kpi.tip}>
                 <span className="text-[10px]" style={{ color: 'var(--sf-t5)' }}>{kpi.label}</span>
                 <span className="text-[12px] font-bold" style={{ color: kpi.color, fontFamily: "'DM Mono', monospace" }}>{kpi.value}</span>
               </div>
@@ -865,7 +887,7 @@ CONVENCIÓN DE UNIDADES (R57 — obligatoria):
               <div className="flex items-center gap-2 mt-1">
                 {mejorYtdPct != null && (
                   <span className="text-xs font-medium" style={{ color: mejorYtdPct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
-                    {mejorYtdPct >= 0 ? '+' : ''}{mejorYtdPct.toFixed(1)}% YTD
+                    {mejorYtdPct >= 0 ? '+' : ''}{mejorYtdPct.toFixed(1)}% año a la fecha
                   </span>
                 )}
                 {mejorDelMes.cumplimiento_pct != null && (
@@ -892,7 +914,7 @@ CONVENCIÓN DE UNIDADES (R57 — obligatoria):
               <div className="flex items-center gap-2 mt-1">
                 {atencionYtdPct != null && (
                   <span className="text-xs font-medium" style={{ color: atencionYtdPct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
-                    {atencionYtdPct >= 0 ? '+' : ''}{atencionYtdPct.toFixed(1)}% YTD
+                    {atencionYtdPct >= 0 ? '+' : ''}{atencionYtdPct.toFixed(1)}% año a la fecha
                   </span>
                 )}
                 <span className="text-[11px]" style={{ color: 'var(--sf-t4)' }}>
@@ -906,7 +928,7 @@ CONVENCIÓN DE UNIDADES (R57 — obligatoria):
               className="rounded-xl p-4"
               style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}
             >
-              <div className="flex items-center gap-2 mb-2">
+              <div className="flex items-center gap-2 mb-2" style={{ cursor: 'help' }} title={TT_PULSO_EQUIPO}>
                 <span className="w-2 h-2 rounded-full" style={{ background: saludColor }} />
                 <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--sf-t5)' }}>Pulso del equipo</span>
               </div>
@@ -1063,7 +1085,7 @@ CONVENCIÓN DE UNIDADES (R57 — obligatoria):
             title={drawerVendedor?.vendedor ?? ''}
             subtitle={(() => {
               const p = drawerVendedor ? (drawerVendedor.variacion_ytd_usd_pct ?? drawerVendedor.variacion_ytd_uds_pct ?? null) : null
-              return p != null ? `${p >= 0 ? '+' : ''}${p.toFixed(1)}% YTD` : undefined
+              return p != null ? `${p >= 0 ? '+' : ''}${p.toFixed(1)}% año a la fecha` : undefined
             })()}
             badges={rc ? [{ label: rc.label, color: rc.badgeColor, bg: rc.badgeBg }] : []}
             analysisText={analysis?.text ?? null}

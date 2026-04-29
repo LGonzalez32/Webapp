@@ -188,7 +188,7 @@ export default function ConfiguracionPage() {
               onChange={(e) => setLocal({ ...local, dias_dormido_threshold: Number(e.target.value) })}
               className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-amber-500/50 transition-all"
             />
-            <p className="text-[10px] text-zinc-600">Días sin compra para marcar dormido</p>
+            <p className="text-[10px] text-zinc-600">Este valor se usa en todas las pantallas. En /clientes podés cambiarlo temporalmente para explorar.</p>
           </div>
           <div className="space-y-1.5">
             <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1.5">

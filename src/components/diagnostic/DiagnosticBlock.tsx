@@ -142,7 +142,9 @@ export default function DiagnosticBlockView({
               border:      '1px solid var(--sf-border-subtle)',
               fontFamily:  'ui-monospace, monospace',
               letterSpacing: '0.03em',
+              cursor:      'help',
             }}
+            title="Tipo de hallazgo: ventana de análisis (Acumulado, Mes actual, Últimos 3 meses) y métrica observada (Inactividad, Uds, USD, %Meta, etc.)."
           >
             {block.chip}
           </span>

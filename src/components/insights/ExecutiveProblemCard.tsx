@@ -42,6 +42,19 @@ function fmtPct(v: number): string {
   return `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`
 }
 
+// Tooltips Tarea 2.3 — definiciones desde decision-engine.ts
+// material_magnitude: materiality.ratio >= MATERIALITY_FLOOR (0.02 = 2%)
+// statistical_anomaly: rootScore >= _STAT_ANOMALY_SCORE (0.85)
+// chain_depth: maxChainDepth >= 3
+const RELEVANCE_TOOLTIP: Record<'material_magnitude' | 'statistical_anomaly' | 'chain_depth', string> = {
+  material_magnitude:  'Hallazgo con impacto significativo: representa al menos 2% del período base.',
+  statistical_anomaly: 'Comportamiento fuera del patrón histórico (puntaje estadístico ≥ 0.85).',
+  chain_depth:         'Hallazgo conectado en cadena con otros niveles de causa (3 o más).',
+}
+const TOOLTIP_ENT_COUNT = 'Número de entidades (vendedores, productos o clientes) involucradas en este hallazgo.'
+const TOOLTIP_PCT_PERIODO = 'Porcentaje que representa este impacto sobre la base del período comparado.'
+const TOOLTIP_BASE_PERIODO = 'Total de ventas del año anterior en el mismo período. Es la base contra la que se mide el impacto.'
+
 export default function ExecutiveProblemCard({ problem }: Props) {
   const sev = SEV_STYLES[problem.severity] ?? SEV_STYLES.MEDIA
 
@@ -63,14 +76,20 @@ export default function ExecutiveProblemCard({ problem }: Props) {
           </span>
           <div className="flex items-center gap-1 flex-wrap shrink-0">
             {problem.entityCount > 1 && (
-              <span className="text-[11px] text-[var(--sf-text-muted)]">
+              <span
+                className="text-[11px] text-[var(--sf-text-muted)]"
+                style={{ cursor: 'help' }}
+                title={TOOLTIP_ENT_COUNT}
+              >
                 · {problem.entityCount} ent.
               </span>
             )}
             {problem.relevanceReason.map(r => (
               <span key={r}
-                className="text-[9px] px-1.5 py-0.5 rounded border bg-[var(--sf-overlay-medium)] border-[var(--sf-border-subtle)] text-[var(--sf-text-muted)] uppercase tracking-wide">
-                {r === 'material_magnitude' ? 'material' : r === 'statistical_anomaly' ? 'anomalía' : 'causal'}
+                className="text-[9px] px-1.5 py-0.5 rounded border bg-[var(--sf-overlay-medium)] border-[var(--sf-border-subtle)] text-[var(--sf-text-muted)] uppercase tracking-wide"
+                style={{ cursor: 'help' }}
+                title={RELEVANCE_TOOLTIP[r]}>
+                {r === 'material_magnitude' ? 'Importante' : r === 'statistical_anomaly' ? 'anomalía' : 'causal'}
               </span>
             ))}
           </div>
@@ -80,7 +99,7 @@ export default function ExecutiveProblemCard({ problem }: Props) {
         {problem.primaryCause && (
           <div className="space-y-0.5">
             <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--sf-text-muted)]">
-              Causa raíz
+              Por qué pasa
             </p>
             <p className="text-[13px] leading-snug text-[var(--sf-t2)]">
               {problem.primaryCause}
@@ -115,7 +134,11 @@ export default function ExecutiveProblemCard({ problem }: Props) {
                 </span>
               )}
               {problem.materiality.ratio != null && (
-                <span className="text-[11px] tabular-nums text-[var(--sf-text-muted)]">
+                <span
+                  className="text-[11px] tabular-nums text-[var(--sf-text-muted)]"
+                  style={{ cursor: 'help' }}
+                  title={TOOLTIP_PCT_PERIODO}
+                >
                   · {(problem.materiality.ratio * 100).toFixed(1)}% del período
                   {problem.materiality.degraded && (
                     <span className="ml-1 text-[9px] px-1 rounded bg-amber-500/10 text-amber-400">~LY</span>
@@ -124,7 +147,11 @@ export default function ExecutiveProblemCard({ problem }: Props) {
               )}
             </div>
             {problem.contextSnapshot.salesLYSamePeriod != null && problem.contextSnapshot.periodLabel && (
-              <p className="text-[10px] text-[var(--sf-text-muted)]">
+              <p
+                className="text-[10px] text-[var(--sf-text-muted)]"
+                style={{ cursor: 'help' }}
+                title={TOOLTIP_BASE_PERIODO}
+              >
                 Base: ${fmtUSD(problem.contextSnapshot.salesLYSamePeriod)} ({problem.contextSnapshot.periodLabel})
               </p>
             )}
@@ -135,7 +162,7 @@ export default function ExecutiveProblemCard({ problem }: Props) {
         {hasFocus && (
           <div className="space-y-0.5">
             <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--sf-text-muted)]">
-              Concentración
+              Dónde se concentra
             </p>
             <p className="text-[12px] text-[var(--sf-t2)]">
               <span className="font-medium">{problem.focusBlock!.entityName}</span>

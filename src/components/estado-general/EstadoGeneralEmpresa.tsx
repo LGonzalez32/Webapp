@@ -88,7 +88,9 @@ export default function EstadoGeneralEmpresa() {
               background: 'var(--sf-overlay-light)',
               border:     '1px solid var(--sf-border-subtle)',
               fontFamily: 'ui-monospace, monospace',
+              cursor:     'help',
             }}
+            title="Cantidad de hallazgos independientes que apuntan al mismo problema o conclusión."
           >
             {data.senalesConvergentes} señal{data.senalesConvergentes === 1 ? '' : 'es'} convergente{data.senalesConvergentes === 1 ? '' : 's'}
           </span>

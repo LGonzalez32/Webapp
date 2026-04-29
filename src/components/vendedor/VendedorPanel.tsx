@@ -336,6 +336,12 @@ export default function VendedorPanel({
     has_producto: false,
     has_categoria: false,
     has_inventario: false,
+    has_departamento: false,
+    has_unidades: false,
+    has_precio_unitario: false,
+    has_subcategoria: false,
+    has_proveedor: false,
+    has_costo_unitario: false,
   }
 
   // USD values computed from raw sales when global metric is USD
@@ -575,7 +581,7 @@ export default function VendedorPanel({
                       <th style={{ paddingBottom: 4, textAlign: 'left' }}>Producto</th>
                       <th style={{ paddingBottom: 4, textAlign: 'right' }}>{selectedPeriod.year}</th>
                       <th style={{ paddingBottom: 4, textAlign: 'right' }}>{selectedPeriod.year - 1}</th>
-                      <th style={{ paddingBottom: 4, textAlign: 'right' }}>Var %</th>
+                      <th style={{ paddingBottom: 4, textAlign: 'right' }}>Variación %</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -645,8 +651,8 @@ export default function VendedorPanel({
                         </div>
                         <p className="text-[11px] leading-relaxed" style={{ color: 'var(--sf-t3)' }}>{d.recovery_explicacion}</p>
                         <div className="flex items-center justify-between text-[10px]" style={{ color: 'var(--sf-t5)' }}>
-                          <span>{d.dias_sin_actividad} días sin comprar · {d.transacciones_yoy} txns YoY</span>
-                          {d.valor_yoy_usd > 0 && <span>{d.valor_yoy_usd.toLocaleString()} YoY</span>}
+                          <span>{d.dias_sin_actividad} días sin comprar · {d.transacciones_yoy} transacciones vs año anterior</span>
+                          {d.valor_yoy_usd > 0 && <span>{d.valor_yoy_usd.toLocaleString()} hist.</span>}
                         </div>
                         <div style={{ height: 3, background: 'var(--sf-border)', borderRadius: 999, overflow: 'hidden' }}>
                           <div style={{ height: '100%', width: `${d.recovery_score}%`, background: barColor, borderRadius: 999 }} />
@@ -964,7 +970,7 @@ function ClientesPrincipales({ sales, vendedor, selectedPeriod, clientesDormidos
             <th style={{ paddingBottom: 4, textAlign: 'right' }}>{selectedPeriod.year}</th>
             <th style={{ paddingBottom: 4, textAlign: 'right' }}>{selectedPeriod.year - 1}</th>
             <th style={{ paddingBottom: 4, textAlign: 'right' }}>%</th>
-            <th style={{ paddingBottom: 4, textAlign: 'right' }}>Var %</th>
+            <th style={{ paddingBottom: 4, textAlign: 'right' }}>Variación %</th>
           </tr>
         </thead>
         <tbody>

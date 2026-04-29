@@ -1911,7 +1911,11 @@ export default function EstadoComercialPage() {
           {empresaName}
         </span>
         {urgentPendingCount > 0 ? (
-          <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.2)' }}>
+          <span
+            className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold"
+            style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.2)', cursor: 'help' }}
+            title="Hallazgos con severidad crítica o de advertencia pendientes de revisión."
+          >
             ⚠ Atención — {urgentPendingCount} {urgentPendingCount === 1 ? 'diagnóstico urgente' : 'diagnósticos urgentes'}
           </span>
         ) : insights.length > 0 ? (
@@ -2249,7 +2253,11 @@ export default function EstadoComercialPage() {
               </div>
             </div>
             {estadoGeneral.señalesConvergentes != null && (
-              <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-full" style={{ background: 'var(--sf-inset)', color: 'var(--sf-t3)' }}>
+              <span
+                className="shrink-0 text-[11px] px-2 py-0.5 rounded-full"
+                style={{ background: 'var(--sf-inset)', color: 'var(--sf-t3)', cursor: 'help' }}
+                title="Cantidad de hallazgos independientes que apuntan al mismo problema o conclusión."
+              >
                 {estadoGeneral.señalesConvergentes} señales convergentes
               </span>
             )}
@@ -2462,13 +2470,17 @@ export default function EstadoComercialPage() {
           {/* Encabezado */}
           <div className="flex items-center gap-3 pb-1">
             <span className="text-[13px] font-semibold uppercase tracking-wider text-[var(--sf-text-muted)]">
-              {EXECUTIVE_COMPRESSION_ENABLED && _executiveProblems.length > 0 ? 'DETALLE RESIDUAL' : 'DIAGNÓSTICO DEL MES'}
+              {EXECUTIVE_COMPRESSION_ENABLED && _executiveProblems.length > 0 ? 'OTROS HALLAZGOS' : 'DIAGNÓSTICO DEL MES'}
             </span>
             <span className="text-[12px] font-medium px-2 py-0.5 rounded-full bg-[var(--sf-bg)] border border-[var(--sf-border)] text-[var(--sf-text-muted)]">
               {enrichedBlocks.length} hallazgos
             </span>
             {diagUrgentes.length > 0 && (
-              <span className="text-[12px] font-semibold px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">
+              <span
+                className="text-[12px] font-semibold px-2 py-0.5 rounded-full bg-red-500/15 text-red-400"
+                style={{ cursor: 'help' }}
+                title="Hallazgos con severidad crítica o de advertencia."
+              >
                 {diagUrgentes.length} {diagUrgentes.length === 1 ? 'urgente' : 'urgentes'}
               </span>
             )}
