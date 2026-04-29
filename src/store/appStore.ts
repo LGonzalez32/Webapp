@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { saveDraft as wizardSaveDraft, loadDraft as wizardLoadDraft, clearDraft as wizardClearDraft, flushPendingSaves as wizardFlushPending } from '../lib/wizardCache'
 import type {
   ClienteSummary,
   ProductoSummary,
@@ -190,7 +191,8 @@ interface AppState {
 
   // [B1] Borrador del wizard de carga
   setWizardDraft: (draft: AppState['wizardDraft']) => void
-  clearWizardDraft: () => void
+  clearWizardDraft: () => Promise<void>
+  hydrateWizardDraftFromCache: () => Promise<void>
 
   resetAll: () => void
 }
@@ -335,8 +337,35 @@ export const useAppStore = create<AppState>()(
       setComparisonPeriod: (comparisonPeriod) => set({ comparisonPeriod }),
 
       // [B1] Borrador del wizard
-      setWizardDraft: (wizardDraft) => set({ wizardDraft }),
-      clearWizardDraft: () => set({ wizardDraft: null }),
+      setWizardDraft: (wizardDraft) => {
+        set({ wizardDraft })
+        if (wizardDraft) {
+          // debounced 500ms internamente; saturar es seguro
+          void wizardSaveDraft(wizardDraft).catch(() => { /* graceful */ })
+        }
+      },
+      clearWizardDraft: async () => {
+        // Flush antes de set/clear para evitar race "save-after-clear"
+        try { await wizardFlushPending() } catch { /* graceful */ }
+        set({ wizardDraft: null })
+        try { await wizardClearDraft() } catch { /* graceful */ }
+      },
+      hydrateWizardDraftFromCache: async () => {
+        try {
+          const cached = await wizardLoadDraft()
+          if (!cached) return
+          const current = (useAppStore.getState() as AppState).wizardDraft
+          // No sobrescribir si la memoria ya tiene draft útil
+          const memoryHasDraft = current && (
+            (current.ventas?.length ?? 0) > 0 ||
+            (current.metas?.length ?? 0) > 0 ||
+            (current.inventario?.length ?? 0) > 0 ||
+            (current.currentStep ?? 0) > 0
+          )
+          if (memoryHasDraft) return
+          set({ wizardDraft: cached as AppState['wizardDraft'] })
+        } catch { /* graceful */ }
+      },
 
       resetAll: () => {
         localStorage.removeItem('salesflow-storage')

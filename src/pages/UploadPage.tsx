@@ -106,7 +106,7 @@ function TablaEjemplo({ headers, rows }: { headers: { col: string; req: boolean 
 }
 
 export default function UploadPage() {
-  const { setSales, setMetas, setInventory, setIsProcessed, setSelectedPeriod, setDataSource, resetAll, configuracion, setConfiguracion, dataSource, metas: existingMetas, sales: existingSales, inventory: existingInventory, wizardDraft, setWizardDraft, clearWizardDraft } = useAppStore()
+  const { setSales, setMetas, setInventory, setIsProcessed, setSelectedPeriod, setDataSource, resetAll, configuracion, setConfiguracion, dataSource, metas: existingMetas, sales: existingSales, inventory: existingInventory, wizardDraft, setWizardDraft, clearWizardDraft, hydrateWizardDraftFromCache } = useAppStore()
   const { org } = useOrgStore()
   const canEdit = useOrgStore(s => s.canEdit())
   const { canUpload } = useUserRole()
@@ -142,6 +142,14 @@ export default function UploadPage() {
   useEffect(() => {
     setShowDiscarded(false)
   }, [currentStep])
+
+  // [B1+IDB] Hidratar wizardDraft desde IndexedDB al montar.
+  // Si el usuario recargó la página mid-wizard, el draft persiste en IDB
+  // (wizardCache.ts, commit b291bd3a). El cargado dispara un set en el
+  // store que re-triggerea el useEffect de restore de abajo.
+  useEffect(() => {
+    void hydrateWizardDraftFromCache()
+  }, [hydrateWizardDraftFromCache])
 
   // [P1 + B1] Hidratar el wizard al montarse. Tres fuentes en orden de prioridad:
   // 1. existingSales (post-análisis): el store tiene datos analizados → reflejar steps
@@ -192,7 +200,7 @@ export default function UploadPage() {
       if (typeof wizardDraft.currentStep === 'number') setCurrentStep(wizardDraft.currentStep)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [existingSales.length, existingMetas.length, existingInventory.length])
+  }, [existingSales.length, existingMetas.length, existingInventory.length, wizardDraft])
 
   // [B1] Persistir el borrador del wizard en el store cuando hay actividad
   // pre-análisis. Si el usuario navega fuera (sidebar → dashboard → bounce),

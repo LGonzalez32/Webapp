@@ -127,6 +127,21 @@ queda como follow-up opcional (no bloquea agregar tablas nuevas):
 
 ## Deuda técnica
 
+### `wizardCache` usa module-level state para debounce
+- `pendingDraft`/`pendingTimer`/`pendingPromise`/`pendingResolve` viven a
+  nivel de módulo, lo que requirió exponer `_resetForTests()` para que
+  los casos no se contaminen entre sí.
+- Si en el futuro el módulo crece a manejar múltiples drafts en paralelo
+  (ej. uno por organización), refactorizar a clase `WizardCache` con
+  instance state.
+
+### E2E de hidratación wizardCache requiere auth mock
+- `/cargar` está auth-protected. Sin auth, `UploadPage` no monta y
+  `hydrateWizardDraftFromCache` nunca se dispara.
+- Cobertura actual: 5 unit tests del wizardCache + typecheck post-wireup.
+- Para E2E real (seed IDB → reload → verificar restore visible en UI)
+  hace falta auth-mock setup. Ticket separado cuando se priorice.
+
 ### `npx vitest run` vs `npm run test:unit` — diferencia de cwd
 - `npx vitest run <files>` falla con `TypeError: Cannot read properties of
   undefined (reading 'config')` al evaluar `describe(...)`.
