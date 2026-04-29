@@ -34,6 +34,26 @@ pero cada uno tiene un evento que los vuelve críticos.
 
 ## Follow-ups del ticket 1.5
 
+### Migrar a Data Router para usar `useBlocker` nativo
+- `src/lib/useUnsavedGuard.ts` usa un click-interceptor sobre `<a>` tags
+  (compatible con `<BrowserRouter>` declarativo) en lugar de
+  `useBlocker` de react-router-dom v7, que requiere `createBrowserRouter`
+  (Data Router).
+- Limitación actual: llamadas programáticas a `useNavigate()` bypasean
+  el guard. Aceptable hoy porque `doAnalyze()` limpia el draft antes
+  de navegar, pero si en el futuro se agregan más nav programáticas
+  pre-clear, hay que migrar a Data Router.
+- Costo estimado de la migración: refactor de `App.tsx` (`<BrowserRouter>`
+  + `<Routes>` JSX → `createBrowserRouter` con array de objetos route).
+  Puede romper el patrón actual de `RequireAuth` wrapper.
+
+### beforeunload — verificación manual
+- El guard incluye listener `beforeunload` para reload / cierre de
+  pestaña / nav externa. Playwright no permite testear el dialog
+  nativo de browser. Verificación queda manual: abrir `/cargar`,
+  subir archivo, intentar reload o cerrar tab → debe aparecer prompt
+  nativo "Cambios sin guardar".
+
 ### E2E coverage gap — post-analyze cleanup nivel UI
 El spec `upload-wizard-persist.spec.ts` cubre persistencia y restore
 end-to-end, pero los pasos f-g (click "Analizar" → reload → wizard

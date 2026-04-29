@@ -9,6 +9,8 @@ import { parseSalesFileInWorker, parseMetasFileInWorker, parseInventoryFileInWor
 import { getUiHeaders, getTemplateExampleRow, getTemplateHeaderRow, getPreviewExampleRow, getUserUploadTables, getInitialWizardSteps, getStepIdToTableIdMap } from '../lib/registry-ui'
 import { uploadOrgFile, getOrgStorageFiles, deleteOrgFiles } from '../lib/orgService'
 import { saveDatasets, clearDatasets } from '../lib/dataCache'
+import { useUnsavedGuard } from '../lib/useUnsavedGuard'
+import UnsavedDraftModal from '../components/upload/UnsavedDraftModal'
 import { findMetaDimsMissingFromSales, selectSalesForMetasValidation, evaluateAllRulesForTable, type CrossTableValidationIssue } from '../lib/uploadValidation'
 import LoadingOverlay from '../components/ui/LoadingOverlay'
 import StepIndicator from '../components/upload/StepIndicator'
@@ -150,6 +152,16 @@ export default function UploadPage() {
   useEffect(() => {
     void hydrateWizardDraftFromCache()
   }, [hydrateWizardDraftFromCache])
+
+  // [1.5.5] Guard de navegación: modal in-app + beforeunload nativo.
+  // isDirty = hay rows parseadas en memoria (no commiteadas a dataCache).
+  // Post-doAnalyze, clearWizardDraft() deja wizardDraft=null → isDirty=false.
+  const isDirty = !!wizardDraft && (
+    (wizardDraft.ventas?.length ?? 0) > 0 ||
+    (wizardDraft.metas?.length ?? 0) > 0 ||
+    (wizardDraft.inventario?.length ?? 0) > 0
+  )
+  const unsavedGuard = useUnsavedGuard(isDirty)
 
   // [P1 + B1] Hidratar el wizard al montarse. Tres fuentes en orden de prioridad:
   // 1. existingSales (post-análisis): el store tiene datos analizados → reflejar steps
@@ -1637,6 +1649,12 @@ export default function UploadPage() {
         </div>
         )
       })()}
+
+      <UnsavedDraftModal
+        open={unsavedGuard.showModal}
+        onConfirmLeave={unsavedGuard.confirmLeave}
+        onCancelLeave={unsavedGuard.cancelLeave}
+      />
     </div>
   )
 }
