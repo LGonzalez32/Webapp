@@ -3,6 +3,20 @@ import { X } from 'lucide-react'
 import { useAppStore } from '../../store/appStore'
 import type { PulsoPanelData } from '../../lib/pulso-engine'
 
+/**
+ * PulsoPanel es deliberadamente period-agnostic.
+ * Consume fechaRef + agregados pre-computados (categoriasInventario, clientesDormidos, etc.)
+ * y deriva ventanas relativas a fechaRef. NO debe consumir selectedPeriod.
+ *
+ * Razón: este panel muestra alertas operativas (declives, oportunidades, dormidos)
+ * que se evalúan contra el "ahora" del negocio (fechaRef), no contra el rango
+ * que el usuario filtró en TopBar. Cambiar esto requiere redefinir el contrato
+ * del panel a nivel producto.
+ *
+ * Si en el futuro PulsoPanel necesita consumir selectedPeriod, abrir ticket
+ * de redefinición de contrato antes de modificar.
+ */
+
 interface Props {
   data: PulsoPanelData
   moneda: string
