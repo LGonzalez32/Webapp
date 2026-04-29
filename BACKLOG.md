@@ -73,6 +73,25 @@ Sin deuda.
   ArrowLeft/Right/Home/End. El mismo componente sirve `/demo/clientes`
   y `/clientes` (no se necesitó ticket 1.2.b).
 
+## Follow-ups del refactor motor-visibility (post-Sprint H')
+
+Roadmap principal cerrado en commits `b5b0af97` + `18017494`. El roadmap
+está marcado `SUPERSEDIDO PARA TRABAJO NUEVO` — no ejecutar más cambios
+de gate/ranker/caps desde ese documento. Lo que queda como follow-up
+opcional:
+
+- **Sub-sprint registry-driven**: migrar `Z12_ROOT_STRONG_TYPES`,
+  `Z12_VALID_USD_SOURCES`, `Z11_ROOT_STRONG_TYPES`, `ALWAYS_PROTECTED_CAPS`
+  y `NON_MONETARY_METRIC_IDS` a un `INSIGHT_TYPE_REGISTRY` centralizado
+  (mismo patrón declarativo que `TABLE_REGISTRY` del bucket C). Hoy son
+  4 arrays hardcoded en `src/lib/insightStandard.ts` y
+  `src/lib/insight-engine.ts:6607`. Cada tipo nuevo requiere editar 4
+  lugares. Decisión D3.c del roadmap explícitamente lo difirió.
+- **Tests con metas multi-dim**: el demo dataset tiene metas mayoritariamente
+  single-dim (solo vendedor) → `meta_gap_combo` falla regla B de Z.11 en
+  ~todos los casos. Agregar baseline test con metas multi-dim
+  (vendedor+cliente+producto) para validar el path completo.
+
 ## Follow-ups del refactor ingesta-registry (post-Sprint F.2)
 
 Roadmap principal cerrado en commits `bcf2b832` → `42ed86ed`. Lo que
