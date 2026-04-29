@@ -73,6 +73,21 @@ Sin deuda.
   ArrowLeft/Right/Home/End. El mismo componente sirve `/demo/clientes`
   y `/clientes` (no se necesitó ticket 1.2.b).
 
+## Follow-ups del refactor metas-pivot
+
+Commiteado en `3c9c93b5` + `9d416117`. Lo que queda:
+
+- **Tests dedicados de `MetasPivotPanel`**: cubrir agregaciones por combo
+  (vendedor×cliente×producto), drag-drop reorder via `@dnd-kit`,
+  persistencia `localStorage` (`sf_metas_pivot_dims`), gating de
+  `availableDims` (no mostrar pills para dims sin data en metas YTD).
+  Hoy 0 tests específicos — la cobertura actual es vía golden tests del
+  motor, no del componente UI.
+- **Extraer hook reutilizable**: si `RendimientoPage` necesita el mismo
+  pattern de árbol/agregación multi-dim contra meta YTD, considerar
+  extraer `buildMetaTree`/`flattenTree` (en `MetasPivotPanel.tsx`) a un
+  hook `usePivotTree(metas, sales, dims, scope)` reutilizable.
+
 ## Follow-ups del refactor motor-visibility (post-Sprint H')
 
 Roadmap principal cerrado en commits `b5b0af97` + `18017494`. El roadmap
