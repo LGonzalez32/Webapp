@@ -182,6 +182,11 @@ interface AppState {
   // `month` se conserva como input legacy: si el caller pasa `month`, se mapea
   // a monthStart = monthEnd = month (comportamiento equivalente al setter viejo).
   setSelectedPeriod: (period: Partial<{ year: number; monthStart: number; monthEnd: number; month: number }>) => void
+  // [Ticket 2.3.4] Setter del rango Desde/Hasta del TopBar. lastChanged indica
+  // qué dropdown movió el usuario para resolver inversiones (Desde>Hasta o
+  // Hasta<Desde) sin perder la intención: el lado que el usuario tocó manda,
+  // el otro se ajusta. Sincroniza month = monthEnd.
+  setSelectedPeriodRange: (monthStart: number, monthEnd: number, lastChanged: 'start' | 'end') => void
   setSelectedMonths: (months: { year: number; month: number }[] | null) => void
   setTipoMetaActivo: (tipo: 'uds' | 'usd') => void
   setConfiguracion: (config: Partial<Configuracion>) => void
@@ -308,6 +313,28 @@ export const useAppStore = create<AppState>()(
       setIsProcessed: (isProcessed) => set({ isProcessed }),
       setLoadingMessage: (loadingMessage) => set({ loadingMessage }),
       setIsLoading: (isLoading) => set({ isLoading }),
+      // [Ticket 2.3.4] Setter del rango Desde/Hasta. La auto-corrección de
+      // inversiones vive acá (regla única, no duplicada en el componente):
+      // - lastChanged='start' y monthStart>monthEnd: end = start (Desde manda).
+      // - lastChanged='end' y monthEnd<monthStart: start = end (Hasta manda).
+      // Sincroniza month = monthEnd.
+      setSelectedPeriodRange: (monthStart, monthEnd, lastChanged) => set((state) => {
+        let s = monthStart
+        let e = monthEnd
+        if (e < s) {
+          if (lastChanged === 'start') e = s
+          else s = e
+        }
+        return {
+          selectedPeriod: {
+            year: state.selectedPeriod.year,
+            monthStart: s,
+            monthEnd: e,
+            month: e,
+          },
+          isProcessed: false,
+        }
+      }),
       // [Ticket 2.3.2] Setter merge-partial. Acepta `month` legacy (mapea a
       // monthStart=monthEnd=month) o `monthStart`/`monthEnd` nuevos. Auto-corrige
       // monthEnd >= monthStart. `month` siempre = monthEnd (alias compat = mes activo).

@@ -19,7 +19,18 @@ const PAGE_TITLES: Record<string, { title: string; sub: string }> = {
 export default function TopBar() {
   const location  = useLocation()
   const navigate  = useNavigate()
-  const { dataSource, configuracion, setConfiguracion, dataAvailability, setTipoMetaActivo } = useAppStore()
+  const { dataSource, configuracion, setConfiguracion, dataAvailability, setTipoMetaActivo, selectedPeriod, setSelectedPeriodRange, fechaRefISO } = useAppStore()
+
+  // [Ticket 2.3.4] Selector global de período (Desde/Hasta). Se renderiza
+  // solo cuando el store materializó el shape (year !== 0 = fechaRef llegó).
+  // Mientras year === 0 los dropdowns están ocultos — pattern más limpio que
+  // disabled+placeholder porque evita que el usuario interactúe con un
+  // control sin opciones válidas.
+  const periodReady = selectedPeriod.year !== 0
+  const fechaRefMonth = fechaRefISO ? new Date(fechaRefISO).getMonth() : 11
+  const fechaRefYear = fechaRefISO ? new Date(fechaRefISO).getFullYear() : selectedPeriod.year
+  const isCurrentYear = selectedPeriod.year === fechaRefYear
+  const MESES_CORTOS = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
   const tema = configuracion.tema
   const metricaGlobal = configuracion.metricaGlobal ?? 'usd'
 
@@ -61,6 +72,42 @@ export default function TopBar() {
       </div>
 
       <div className="flex items-center gap-2">
+        {/* [Ticket 2.3.4] Selector global de período Desde/Hasta */}
+        {periodReady && (
+          <div className="sf-no-print flex items-center gap-1.5" data-testid="period-range-selector">
+            <label className="text-[11px] font-semibold" style={{ color: 'var(--sf-t5)' }}>Desde</label>
+            <select
+              data-testid="period-monthStart"
+              value={selectedPeriod.monthStart}
+              onChange={(e) => {
+                const newStart = Number(e.target.value)
+                setSelectedPeriodRange(newStart, selectedPeriod.monthEnd, 'start')
+              }}
+              className="px-2 py-1 rounded-md text-xs font-medium cursor-pointer"
+              style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', color: 'var(--sf-t1)' }}
+            >
+              {MESES_CORTOS.map((m, i) => (
+                <option key={i} value={i}>{m}</option>
+              ))}
+            </select>
+            <label className="text-[11px] font-semibold" style={{ color: 'var(--sf-t5)' }}>Hasta</label>
+            <select
+              data-testid="period-monthEnd"
+              value={selectedPeriod.monthEnd}
+              onChange={(e) => {
+                const newEnd = Number(e.target.value)
+                setSelectedPeriodRange(selectedPeriod.monthStart, newEnd, 'end')
+              }}
+              className="px-2 py-1 rounded-md text-xs font-medium cursor-pointer"
+              style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', color: 'var(--sf-t1)' }}
+            >
+              {MESES_CORTOS.map((m, i) => (
+                <option key={i} value={i} disabled={isCurrentYear && i > fechaRefMonth}>{m}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {dataSource === 'demo' && !location.pathname.startsWith('/demo') && (
           <div className="relative">
             <button
