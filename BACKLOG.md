@@ -31,3 +31,13 @@ Se atacan en sprints futuros con tickets propios.
 
 ### Typecheck (tsc --noEmit) — 0 errores ✓
 Sin deuda.
+
+## Sprint 0.4 — smoke E2E (descubierto)
+
+### tests/e2e/smoke.spec.ts — 2 tests en `fixme`
+- **`demo rotacion loads`** (Sprint 1.1): RotacionPage crashea por hooks
+  llamados condicionalmente. Reactivar tras fix.
+- **`demo clientes has at least 3 tabs`** (Sprint 1.2): los tabs en
+  `src/pages/ClientesPage.tsx` (~L575) son `<button>` planos sin
+  `role="tab"`. Deuda de accesibilidad. Cuando se migre el tab strip a
+  un componente con `role="tablist"`/`role="tab"`, reactivar el test.
