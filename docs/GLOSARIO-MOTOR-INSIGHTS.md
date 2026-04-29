@@ -9,6 +9,8 @@
 
 - `getLastInsightEngineStatus()` expone stages internos, origenes y ranker audit.
 - `getLastInsightRuntimeAuditReport()` completa gate, compresion ejecutiva y render.
+- Z.11.0 esta activo: reconciliar worker vs page-side antes de tocar gate,
+  ranker, listas o normalizacion USD. Ver `docs/ROADMAP-Z11-PIPELINE-BASELINE.md`.
 - Los registries declarativos (`metricRegistry`, `dimensionRegistry`,
   `insightTypeRegistry`) siguen siendo metadata parcial: no son la fuente
   principal del runtime hasta que una migracion futura los conecte.
@@ -43,6 +45,8 @@ Primera parada cuando una sesión nueva pregunta "¿dónde va X?".
 | Telemetría del motor | `getLastInsightEngineStatus()` en `insight-engine.ts` |
 | Reglas operativas / DO NOT TOUCH | `CLAUDE.md` |
 | Contrato del motor | `docs/MANIFIESTO-MOTOR-INSIGHTS.md` |
+| Roadmap activo Z.11 | `docs/ROADMAP-Z11-PIPELINE-BASELINE.md` |
+| Baseline Z.11.0 | `docs/BASELINE-Z11-0.md` |
 
 ---
 
@@ -145,6 +149,10 @@ Tipo central: `InsightCandidate` en `insight-engine.ts:313`.
 Gate orquestado por `filtrarConEstandar` (en `insight-engine.ts:3791` —
 wrapper temporal). Reglas viven en `insightStandard.ts`. Detalle en
 manifiesto §4.
+
+Nota Z.11.0: `tipo-debil(...)` debe tratarse como hipotesis a confirmar. La
+lectura inicial sugiere que puede ser derivado de `usd == null` y no pertenecer
+a `Z11_ROOT_STRONG_TYPES`, no una blacklist formal.
 
 ---
 

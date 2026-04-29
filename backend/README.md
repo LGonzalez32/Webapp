@@ -39,6 +39,7 @@ docker run -p 8000:8000 --env-file .env salesflow-forecast
 
 Todo el motor de insights vive en `/src/lib/`. Para el detalle ver
 `docs/MANIFIESTO-MOTOR-INSIGHTS.md` y `docs/GLOSARIO-MOTOR-INSIGHTS.md`.
+Trabajo activo de baseline: `docs/ROADMAP-Z11-PIPELINE-BASELINE.md`.
 Resumen rápido:
 
 - `insight-engine.ts` — pipeline canónico (detectores → ranker/cap → gate)

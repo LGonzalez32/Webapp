@@ -34,6 +34,8 @@ datos para explorarla.
 |---|---|
 | [`CLAUDE.md`](./CLAUDE.md) | Reglas operativas, ownership documental, read order |
 | [`docs/MANIFIESTO-MOTOR-INSIGHTS.md`](./docs/MANIFIESTO-MOTOR-INSIGHTS.md) | Pipeline canónico del motor de insights, baseline operacional |
+| [`docs/ROADMAP-Z11-PIPELINE-BASELINE.md`](./docs/ROADMAP-Z11-PIPELINE-BASELINE.md) | Roadmap activo para reconciliar baseline worker/page antes de tocar gate o ranker |
+| [`docs/BASELINE-Z11-0.md`](./docs/BASELINE-Z11-0.md) | Plantilla/artefacto de baseline real del pipeline de insights |
 | [`docs/GLOSARIO-MOTOR-INSIGHTS.md`](./docs/GLOSARIO-MOTOR-INSIGHTS.md) | Mapa compacto de "dónde va cada cosa" |
 | [`docs/historico/`](./docs/historico/) | Documentación histórica preservada |
 

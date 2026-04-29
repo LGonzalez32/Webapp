@@ -228,10 +228,21 @@ El mapeo no es 1:1; cada capa tiene su semántica.
 
 ---
 
-## 7. Baseline operacional (golden master)
+## 7. Baseline operacional
 
-Demo dataset (Los Pinos S.A.) con reloj congelado en `2026-04-24 12:00`.
-Dos casos cubiertos: `tipoMetaActivo='usd'` y `tipoMetaActivo='uds'`.
+> **Estado Z.11.0:** la baseline numerica esta en reconciliacion. No usar
+> esta seccion para justificar cambios funcionales hasta cerrar
+> `docs/BASELINE-Z11-0.md`.
+>
+> Motivo: existe evidencia contradictoria entre un audit runtime previo
+> (pass rate Z.11 de 16.7% con `sin-usd` dominante) y los goldens/audit tests
+> del repo (fallos sin `monetaryCoherence`). La proxima fuente de verdad debe
+> comparar worker `[Step B] motor2_insights` contra la corrida page-side de
+> `EstadoComercialPage`.
+
+Baseline previa documentada para demo Los Pinos S.A. con reloj congelado en
+`2026-04-24 12:00`. Dos casos cubiertos: `tipoMetaActivo='usd'` y
+`tipoMetaActivo='uds'`.
 
 | Capa | USD | UDS |
 |---|---|---|
@@ -268,6 +279,7 @@ para el detalle de la hipótesis 7.1 refutada.
 
 Snapshots exactos en `src/lib/__tests__/__snapshots__/insight-engine.golden.test.ts.snap`.
 Cualquier cambio rompe el test — si es intencional, regenerar con `npx vitest -u`.
+Durante Z.11.0 no se regeneran snapshots.
 
 ---
 

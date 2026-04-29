@@ -3,6 +3,35 @@
 Items pendientes que **no se arreglan en el ticket que los descubre**.
 Se atacan en sprints futuros con tickets propios.
 
+## 🔒 Seguridad — Bloqueantes con fecha de vencimiento
+
+Ítems vivos detectados al cerrar bucket G del triage 1.4.5. NO son
+emergencia hoy (repo privado en GitHub, sin despliegue en Render),
+pero cada uno tiene un evento que los vuelve críticos.
+
+### S1 — Rotar DeepSeek API key (vence: cuando se invite a colaboradores o antes del primer push a Render)
+- Key sk-be7fa627... commiteada en initial commit `01fc8fd6` (14-mar-2026).
+- Backend lee correctamente de `os.getenv("DEEPSEEK_API_KEY")`; `.env` ya
+  está en `.gitignore`.
+- Acción: rotar en DeepSeek dashboard, actualizar `backend/.env` local.
+- NO requiere `git filter-repo` mientras el repo siga privado y solo.
+
+### S2 — Rate limiting en POST /chat (vence: antes del primer despliegue a Render)
+- `backend/app/api/routes/chat.py` expone `/chat` sin slowapi/rate-limit.
+- Riesgo: billing abuse contra DeepSeek vía proxy.
+- Acción: agregar slowapi (o equivalente) con límite por IP + por
+  usuario autenticado. Confirmar también que `/chat` exige JWT de Supabase.
+
+### S3 — RLS en sales_forecasts / sales_forecast_results / sales_aggregated (vence: antes de cablear feature de forecasts al frontend)
+- `supabase/migrations/002_sales_forecast_schema.sql:107-109` tiene
+  `DISABLE ROW LEVEL SECURITY` explícito.
+- Acción: nueva migration con `ENABLE ROW LEVEL SECURITY` + política
+  `members_select_own_org` (mismo patrón que `alert_status`).
+
+### S4 — Auditar resto de tablas Supabase (recomendado, no bloqueante)
+- Verificar que no haya otras tablas con RLS off "por descuido".
+- Media hora de trabajo, mejor antes que después.
+
 ## Sprint 0.3 — sprint-check pipeline (descubierto)
 
 ### Lint (eslint . --max-warnings=0) — 238 errors, 28 warnings

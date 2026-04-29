@@ -6,6 +6,11 @@ updated: 2026-03-29
 
 # Frontend — React 19 + Vite + Tailwind v4
 
+> **Nota legacy:** esta pagina pertenece al wiki `_docs/` y puede tener LOC o
+> nombres historicos. Para el motor de insights activo, usar
+> `docs/ROADMAP-Z11-PIPELINE-BASELINE.md`, `docs/MANIFIESTO-MOTOR-INSIGHTS.md`
+> y `docs/GLOSARIO-MOTOR-INSIGHTS.md`.
+
 ## Stack
 - React 19 + TypeScript + Vite
 - Zustand v5 (persist v3, key: `salesflow-storage`, version 6)
@@ -59,7 +64,8 @@ src/
 │
 ├── lib/ (14 archivos)
 │   ├── chatService.ts      — buildSystemPrompt, callAI, parseAIResponse
-│   ├── insightEngine.ts    — 22 detectores de insights
+│   ├── insight-engine.ts   — motor 2 activo de insights
+│   ├── insightEngine.ts    — motor 1 legacy, no tocar salvo instruccion explicita
 │   ├── analysis.ts         — buildSaleIndex, compute*, analyze*
 │   ├── analysisWorker.ts   — Web Worker análisis off-thread
 │   ├── fileParser.ts       — Parse CSV/XLSX + Zod

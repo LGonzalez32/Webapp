@@ -115,18 +115,28 @@ SOLO MEMORIA: vendorAnalysis, teamStats, insights, clientesDormidos,
 
 ---
 
-## INSIGHTS (insightEngine.ts)
-Prioridades: CRITICA > ALTA > MEDIA > BAJA
-fechaReferencia propagada a todos los detectores.
-~26 detectores activos con cross-table analysis (vendedores × clientes × productos × inventario).
-Same-day-range para comparaciones YoY.
-Impacto económico (solo si has_venta_neta): Meta en Peligro, Concentración Sistémica,
-  Equipo No Cerrará Meta, Doble Riesgo, Caída Explicada
+## INSIGHTS (motor activo)
+
+- Motor activo: `src/lib/insight-engine.ts` (motor 2).
+- Motor 1 legado: `src/lib/insightEngine.ts` queda intacto; no tocarlo salvo
+  instruccion explicita.
+- Prioridades: CRITICA > ALTA > MEDIA > BAJA.
+- `fechaReferencia` debe venir de `max(sales.fecha)`.
+- Same-day-range para comparaciones YoY.
+- Trabajo activo: `docs/ROADMAP-Z11-PIPELINE-BASELINE.md`.
 
 ---
 
 ## MOTOR DE INSIGHTS — OWNERSHIP DOCUMENTAL Y READ ORDER
 
+> **Sprint activo Z.11.0 - baseline real.** Antes de tocar gate, ranker,
+> builders, listas root-strong o normalizacion USD, leer y cerrar
+> `docs/ROADMAP-Z11-PIPELINE-BASELINE.md` y completar
+> `docs/BASELINE-Z11-0.md`.
+>
+> Z.11.0 es forense/documental: no cambia codigo funcional, no regenera
+> snapshots y no toca `src/lib/insightEngine.ts`.
+>
 > **Fase 0 (timing del refactor).** El refactor lógico grande del motor va
 > **después** de estabilizar docs + gate, en este orden estricto:
 > 1. CLAUDE.md (este archivo) actualizado con ownership y read order ← **hecho**
@@ -197,7 +207,9 @@ Impacto económico (solo si has_venta_neta): Meta en Peligro, Concentración Sis
 | Dominio | Archivo canónico | Notas |
 |---|---|---|
 | **Pass/fail de un insight** | `src/lib/insightStandard.ts` → `evaluateInsightCandidate(c, ctx)` / `shouldInsightPass(c, ctx)` | Gate canónico Z.12 movido en Fase 6A. `filtrarConEstandar` (en insight-engine.ts:3791) queda como orquestador array-level que precomputa contexto y aplica mutación `_z122_relaxed`. Reglas extra (filtro-ruido, proporcionalidad, dedup, cascadas) siguen orquestadas en filtrarConEstandar — migración pendiente Fase 6B. |
-| **Pipeline completo del motor** | `docs/MANIFIESTO-MOTOR-INSIGHTS.md` | Tabla canónica de 10 etapas + baseline operacional + invariantes. v3.0.0, 258 líneas. Histórico v2.x en `docs/historico/`. |
+| **Roadmap activo Z.11** | `docs/ROADMAP-Z11-PIPELINE-BASELINE.md` | Fuente de verdad para reconciliar baseline worker/page, duplicacion USD y listas Z.11/Z.12 antes de fixes funcionales. |
+| **Baseline Z.11.0** | `docs/BASELINE-Z11-0.md` | Artefacto humano de la tabla unica del pipeline. Se completa durante Z.11.0. |
+| **Pipeline completo del motor** | `docs/MANIFIESTO-MOTOR-INSIGHTS.md` | Tabla canónica de 10 etapas + invariantes. La baseline numerica queda en reconciliacion hasta cerrar Z.11.0. Histórico v2.x en `docs/historico/`. |
 | **Dónde va cada cosa** | `docs/GLOSARIO-MOTOR-INSIGHTS.md` | Mapa compacto (232 líneas, regla "≤ 5 líneas por entrada") de métricas, dimensiones, detectores, registries, narrativa. Primera parada para "¿dónde agrego X?". |
 | **Detectores y candidatos** | `src/lib/insight-engine.ts` | Genera candidatos. NO debería decidir pass/fail — eso es de insightStandard.ts. Migración pendiente (Fase 6). |
 | **Cadenas de causalidad / problema ejecutivo** | `src/lib/decision-engine.ts` | Z.9 framework (InsightChains, ExecutiveProblems). Consume insights ya filtrados. |
@@ -208,10 +220,12 @@ Impacto económico (solo si has_venta_neta): Meta en Peligro, Concentración Sis
 
 Antes de tocar lógica de insights, leer en este orden (para minimizar tokens):
 
-1. **`docs/GLOSARIO-MOTOR-INSIGHTS.md`** — para saber dónde vive lo que vas a tocar (cuando exista).
-2. **`docs/MANIFIESTO-MOTOR-INSIGHTS.md`** — para entender qué etapa del pipeline estás afectando.
-3. **`src/lib/insightStandard.ts`** — para entender las reglas pass/fail vigentes.
-4. **Archivo concreto de la tarea** — leer con offset/limit, nunca completo.
+1. **`docs/ROADMAP-Z11-PIPELINE-BASELINE.md`** — si el trabajo toca motor/gate/ranker/insights.
+2. **`docs/BASELINE-Z11-0.md`** — si Z.11.0 aun no esta cerrado, no ejecutar fixes funcionales.
+3. **`docs/GLOSARIO-MOTOR-INSIGHTS.md`** — para saber dónde vive lo que vas a tocar.
+4. **`docs/MANIFIESTO-MOTOR-INSIGHTS.md`** — para entender qué etapa del pipeline estás afectando.
+5. **`src/lib/insightStandard.ts`** — para entender las reglas pass/fail vigentes.
+6. **Archivo concreto de la tarea** — leer con offset/limit, nunca completo.
 
 Si la tarea es "agregar detector nuevo": glosario → manifiesto → `insight-engine.ts` (sección de detectores) → `insightStandard.ts` (qué reglas debe satisfacer el output).
 Si la tarea es "ajustar umbral / regla de filtrado": glosario → `insightStandard.ts` directo.

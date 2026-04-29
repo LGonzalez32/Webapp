@@ -48,4 +48,4 @@ updated: 2026-03-29
 - Light mode: Sí
 - Dark mode: Sí
 
-Ver: [[Frontend]], [[Prompts Inline]], [[Motor de Insights]]
+Ver: [[Frontend]], [[Prompts Inline]], `docs/MANIFIESTO-MOTOR-INSIGHTS.md`
