@@ -286,6 +286,36 @@ Si un cliente reporta "mis metas cambiaron solas", apuntar acá.
 
 ## Deuda técnica
 
+### Verificación visual de flicker primer render (post-Ticket 2.3.2)
+
+Con localStorage limpio, el initial state del store es neutro
+(`selectedPeriod = {year:0, monthStart:0, monthEnd:0, month:0}`)
+hasta que `setFechaRefISO` materializa el shape al cargar datos.
+Riesgo teórico de flicker visible en consumers que rendean antes
+de la materialización:
+
+- `EstadoComercialPage` chip selector: `MESES_LARGO[selectedPeriod.month]`
+  podría mostrar "enero" durante 1 frame antes del corregido.
+- `ClientesPage:265`: `${selectedPeriod.year - 1}` muestra "-1" como
+  literal antes de tener año real.
+- Headers tipo "Año X" o "vs año anterior" en pantallas dependientes.
+
+**Due:** smoke test pre-clientes reales / Sprint 4.
+**Acción:** verificación manual con Network throttling para amplificar
+la ventana, decidir si se necesita loading overlay extendido o si los
+frames intermedios son imperceptibles.
+
+### Refactor `migrate` de appStore a firma `(state, version)` (post-Ticket 2.3.2)
+
+La función `migrate` actual (`src/store/appStore.ts:481`) ignora el
+parámetro `version` que Zustand le pasa, y discrimina por shape del
+`persistedState`. Funciona hoy pero es frágil: si una versión futura
+cambia el shape conservando `monthStart`, la rama de detección se
+dispara incorrectamente.
+
+**Acción:** refactor a `migrate: (state, version) => { switch(version) { case 9: ...; case 10: ...; } }`.
+**Due:** deuda técnica, sin urgencia. Reabrir cuando se planifique v12+.
+
 ### ~~`wizardCache` usa module-level state para debounce~~ → movido a Follow-ups del ticket 1.5
 
 ### ~~E2E de hidratación wizardCache requiere auth mock~~ ✓ RESUELTO

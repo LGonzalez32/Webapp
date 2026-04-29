@@ -136,6 +136,13 @@ export default function RendimientoPage() {
   const [showBudget, setShowBudget] = useState(true)
   const [selectedVendor, setSelectedVendor] = useState<string>('todos')
   const [selectedYear, setSelectedYear] = useState<number>(selectedPeriod.year)
+  // [Ticket 2.3.3] Sincronizar selectedYear local con el store cuando éste
+  // materializa selectedPeriod.year desde 0 (initial state neutro post-2.3.2)
+  // al año real vía setFechaRefISO al cargar datos. Sin este efecto, el
+  // SFSelect del año queda en 0 hasta interacción del usuario.
+  useEffect(() => {
+    setSelectedYear(selectedPeriod.year)
+  }, [selectedPeriod.year])
   const [selectedCliente, setSelectedCliente] = useState<string>('all')
   const [selectedCanal, setSelectedCanal] = useState<string>('all')
   const [selectedProducto, setSelectedProducto] = useState<string>('all')
