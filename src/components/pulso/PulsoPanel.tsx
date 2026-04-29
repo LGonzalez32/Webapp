@@ -616,15 +616,45 @@ function OportunidadContent({ data }: { data: PulsoPanelData }) {
 }
 
 function ProductoDecliveContent({ data }: { data: PulsoPanelData }) {
-  const { sales, vendorAnalysis, clientesDormidos, categoriaAnalysis, categoriasInventario } = useAppStore()
+  const { sales, vendorAnalysis, clientesDormidos, categoriaAnalysis, categoriasInventario, fechaRefISO } = useAppStore()
+  const fechaRef = useMemo(
+    () => fechaRefISO ? new Date(fechaRefISO) : new Date(),
+    [fechaRefISO]
+  )
 
   const insights = useMemo(() => {
     if (!data.producto) return { vendedores: [], clientesPerdidos: [], catCtx: null, señales: [] }
-    const sp = { year: new Date().getFullYear(), month: new Date().getMonth() }
-    const prevMonth = sp.month === 0 ? { year: sp.year - 1, month: 11 } : { year: sp.year, month: sp.month - 1 }
 
-    const ventasAct = sales.filter(s => s.producto === data.producto && new Date(s.fecha).getFullYear() === sp.year && new Date(s.fecha).getMonth() === sp.month)
-    const ventasAnt = sales.filter(s => s.producto === data.producto && new Date(s.fecha).getFullYear() === prevMonth.year && new Date(s.fecha).getMonth() === prevMonth.month)
+    // BUG-FIX (Ticket 2.0): comparación MTD truncada al día de fechaRef del store,
+    // no new Date() del browser. Cumple regla CONTEXT.md: mes en curso parcial
+    // vs mismo número de días del mes anterior. Será refactorizado a lib/periods.ts
+    // en Ticket 2.1.
+    const yearActual = fechaRef.getFullYear()
+    const monthActual = fechaRef.getMonth()
+    const dayActual = fechaRef.getDate()
+
+    const startActual = new Date(yearActual, monthActual, 1, 0, 0, 0, 0)
+    const endActual = new Date(yearActual, monthActual, dayActual, 23, 59, 59, 999)
+
+    // Mes anterior, mismo número de días truncado
+    const prevMonthYear = monthActual === 0 ? yearActual - 1 : yearActual
+    const prevMonth = monthActual === 0 ? 11 : monthActual - 1
+    // Clamp para evitar overflow cuando fechaRef es día que no existe en mes anterior (ej: 31-mar -> feb)
+    const lastDayOfPrevMonth = new Date(prevMonthYear, prevMonth + 1, 0).getDate()
+    const dayAnteriorClamped = Math.min(dayActual, lastDayOfPrevMonth)
+    const startAnterior = new Date(prevMonthYear, prevMonth, 1, 0, 0, 0, 0)
+    const endAnterior = new Date(prevMonthYear, prevMonth, dayAnteriorClamped, 23, 59, 59, 999)
+
+    const ventasAct = sales.filter(s => {
+      if (s.producto !== data.producto) return false
+      const f = new Date(s.fecha)
+      return f >= startActual && f <= endActual
+    })
+    const ventasAnt = sales.filter(s => {
+      if (s.producto !== data.producto) return false
+      const f = new Date(s.fecha)
+      return f >= startAnterior && f <= endAnterior
+    })
 
     // Vendedores
     const vendAct: Record<string, number> = {}, vendAnt: Record<string, number> = {}
@@ -656,7 +686,7 @@ function ProductoDecliveContent({ data }: { data: PulsoPanelData }) {
     if (data.stock && data.stock > 0) señales.push(`${data.stock.toLocaleString()} uds en bodega (${data.diasInventario ?? '?'} días de stock)`)
 
     return { vendedores, clientesPerdidos, catCtx, señales }
-  }, [data, sales, vendorAnalysis, clientesDormidos, categoriaAnalysis])
+  }, [data, sales, vendorAnalysis, clientesDormidos, categoriaAnalysis, fechaRef])
 
   return (
     <div className="space-y-4">
