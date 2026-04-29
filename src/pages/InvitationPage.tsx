@@ -21,11 +21,11 @@ export default function InvitationPage() {
 
   useEffect(() => {
     if (!orgId) return
+    // [S3] RPC SECURITY DEFINER reemplaza el SELECT directo. Retorna solo
+    // {id, name} y no requiere política RLS abierta sobre organizations.
     supabase
-      .from('organizations')
-      .select('id, name')
-      .eq('id', orgId)
-      .single()
+      .rpc('get_org_public_info', { p_org_id: orgId })
+      .single<{ id: string; name: string }>()
       .then(({ data }) => {
         setOrgName(data?.name ?? null)
         setFetching(false)
