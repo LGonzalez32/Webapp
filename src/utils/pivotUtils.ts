@@ -1,6 +1,16 @@
 import type { SaleRecord, MetaRecord } from '../types'
 
-export type DimKey = 'mes' | 'vendedor' | 'canal' | 'cliente' | 'producto'
+export type DimKey =
+  | 'mes'
+  | 'vendedor'
+  | 'canal'
+  | 'cliente'
+  | 'producto'
+  | 'categoria'
+  | 'subcategoria'
+  | 'departamento'
+  | 'supervisor'
+  | 'proveedor'
 
 export interface PivotNode {
   id: string
@@ -23,11 +33,16 @@ const MESES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'O
 export function getSalesVal(s: SaleRecord, dim: DimKey): string {
   const d = new Date(s.fecha)
   switch (dim) {
-    case 'mes':      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-    case 'vendedor': return s.vendedor
-    case 'canal':    return s.canal ?? 'Sin canal'
-    case 'cliente':  return s.cliente ?? '(sin cliente)'
-    case 'producto': return s.producto ?? '(sin producto)'
+    case 'mes':          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+    case 'vendedor':     return s.vendedor
+    case 'canal':        return s.canal ?? 'Sin canal'
+    case 'cliente':      return s.cliente ?? '(sin cliente)'
+    case 'producto':     return s.producto ?? '(sin producto)'
+    case 'categoria':    return s.categoria ?? 'Sin categoría'
+    case 'subcategoria': return s.subcategoria ?? 'Sin subcategoría'
+    case 'departamento': return s.departamento ?? 'Sin departamento'
+    case 'supervisor':   return s.supervisor ?? 'Sin supervisor'
+    case 'proveedor':    return s.proveedor ?? 'Sin proveedor'
   }
 }
 
