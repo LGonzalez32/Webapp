@@ -158,6 +158,24 @@ queda como follow-up opcional (no bloquea agregar tablas nuevas):
 - **`orgService` storage iteration**: hardcoded a 3 tablas. Iterar el
   registry para storage keys.
 
+## Código huérfano post-drop
+
+### sales-forecast-service-tabla-dropeada (post-S4.1)
+
+`backend/app/services/sales_forecast_service.py` (L328, L380) hace
+`supabase.table("sales_forecasts").insert(...)` y `.select(...)`. La
+tabla `sales_forecasts` fue dropeada en migration
+`003_drop_legacy_forecast_tables.sql` (commit `6ccf12b9`). El servicio
+está en código pero el módulo forecast viejo no está conectado al
+frontend ni se invoca en runtime, por lo que no rompe nada hoy.
+
+**Acción pendiente:** cuando se decida si el módulo forecast viejo se
+descarta del backend o se reemplaza, eliminar `sales_forecast_service.py`
+o reescribirlo apuntando al nuevo modelo de forecast.
+
+**Riesgo si se ignora:** llamar a este servicio en runtime fallará con
+error de tabla inexistente (`relation "sales_forecasts" does not exist`).
+
 ## Migraciones silenciosas
 
 ### `migracion-metas-keyword-fix` (commit 220711ea)
