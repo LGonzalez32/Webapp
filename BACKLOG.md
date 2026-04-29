@@ -36,15 +36,23 @@ pero cada uno tiene un evento que los vuelve críticos.
 - Acción: agregar slowapi (o equivalente) con límite por IP + por
   usuario autenticado. Confirmar también que `/chat` exige JWT de Supabase.
 
-### S3 — RLS en sales_forecasts / sales_forecast_results / sales_aggregated (vence: antes de cablear feature de forecasts al frontend)
-- `supabase/migrations/002_sales_forecast_schema.sql:107-109` tiene
-  `DISABLE ROW LEVEL SECURITY` explícito.
-- Acción: nueva migration con `ENABLE ROW LEVEL SECURITY` + política
-  `members_select_own_org` (mismo patrón que `alert_status`).
+### ~~S3 — RLS en sales_forecasts / sales_forecast_results / sales_aggregated~~ ✓ RESUELTO en S4.1
+- Las 3 tablas dropeadas en migration `003_drop_legacy_forecast_tables.sql`
+  (commit `6ccf12b9`) — eran zombies sin uso en runtime. Sin RLS pero
+  ya no existen.
 
-### S4 — Auditar resto de tablas Supabase (recomendado, no bloqueante)
-- Verificar que no haya otras tablas con RLS off "por descuido".
-- Media hora de trabajo, mejor antes que después.
+### ~~S3.placebo — políticas placebo en organizations + organization_invitations~~ ✓ RESUELTO
+- `Anyone can read invitation by token` y `Anyone can read org name by id`
+  reemplazadas por RPC `get_org_public_info(uuid)` con SECURITY DEFINER.
+- Migration `004_tighten_org_invitation_policies.sql` (commit `df9f1cf1`).
+- Frontend migrado a `.rpc()` (commit `33f86022`).
+- E2E coverage (commit `9c4d39c4`).
+
+### ~~S4 — Auditar resto de tablas Supabase~~ ✓ RESUELTO
+- Auditoría completa: 58 tablas → 14 dropeadas (legacy forecast) + 2
+  políticas placebo cerradas. **0 tablas sin RLS y 0 políticas
+  USING (true) restantes en schema public.**
+- Estado final: 45 tablas, 100% con RLS ON.
 
 ## Follow-ups del ticket 1.5
 
@@ -157,6 +165,31 @@ queda como follow-up opcional (no bloquea agregar tablas nuevas):
   handler. Refactor a un dispatcher genérico que use `TableId` del registry.
 - **`orgService` storage iteration**: hardcoded a 3 tablas. Iterar el
   registry para storage keys.
+
+## Decisiones de producto futuras
+
+### invitation-model-uuid-vs-token
+
+**Estado:** decisión pendiente
+**Due:** antes del primer cliente con equipo de >2 personas
+
+Hoy SalesFlow usa modelo UUID-as-invitation: el owner comparte link
+`/join/<orgId>`, cualquiera con el UUID puede unirse si
+`allow_open_join=true`. La tabla `organization_invitations` existe pero
+está sin frontend (política placebo dropeada en S3, commit `df9f1cf1`).
+
+Modelo alternativo (B): tokens en `organization_invitations` con email +
+expiración + revocación, ruta `/invite/<token>`.
+
+**Trade-offs:**
+- **Modelo A actual**: simple, kill-switch via `allow_open_join`, UUIDs
+  no-enumerables. Riesgo si UUID se filtra mientras flag está ON.
+- **Modelo B futuro**: tracking, audit log, expiración. Requiere infra
+  de email (Resend/Supabase SMTP), diseño de pantalla `/invite/<token>`,
+  flujo invitee-sin-cuenta. Estimado 1-2 sprints.
+
+**Acción:** revisar cuando se invite el primer colaborador real fuera
+del owner.
 
 ## Código huérfano post-drop
 
