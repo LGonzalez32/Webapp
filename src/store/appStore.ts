@@ -109,7 +109,10 @@ interface AppState {
   loadingMessage: string
   orgId: string
   dataSource: 'none' | 'demo' | 'real'
-  selectedPeriod: { year: number; month: number }
+  // [Ticket 2.3] Shape multi-mes. monthStart/monthEnd son los nuevos drivers
+  // del rango mensual; `month` queda como alias compat de monthStart hasta que
+  // todos los consumers migren a [monthStart, monthEnd] en Ticket 2.4.
+  selectedPeriod: { year: number; monthStart: number; monthEnd: number; month: number }
   selectedMonths: { year: number; month: number }[] | null
   tipoMetaActivo: 'uds' | 'usd'
 
@@ -175,7 +178,10 @@ interface AppState {
   setIsLoading: (val: boolean) => void
   setLoadingMessage: (msg: string) => void
   setDataSource: (source: 'none' | 'demo' | 'real') => void
-  setSelectedPeriod: (period: { year: number; month: number }) => void
+  // [Ticket 2.3] Acepta partial merge { year?, monthStart?, monthEnd?, month? }.
+  // `month` se conserva como input legacy: si el caller pasa `month`, se mapea
+  // a monthStart = monthEnd = month (comportamiento equivalente al setter viejo).
+  setSelectedPeriod: (period: Partial<{ year: number; monthStart: number; monthEnd: number; month: number }>) => void
   setSelectedMonths: (months: { year: number; month: number }[] | null) => void
   setTipoMetaActivo: (tipo: 'uds' | 'usd') => void
   setConfiguracion: (config: Partial<Configuracion>) => void
@@ -241,9 +247,12 @@ export const useAppStore = create<AppState>()(
       dataSource: 'none',
       comparisonEnabled: false,
       comparisonPeriod: null,
+      // [Ticket 2.3] Default = YTD: monthStart=0, monthEnd=mesActual. `month`=monthStart.
       selectedPeriod: {
         year: new Date().getFullYear(),
-        month: new Date().getMonth(), // 0-indexed
+        monthStart: 0,
+        monthEnd: new Date().getMonth(),
+        month: 0, // alias compat de monthStart
       },
       selectedMonths: null,
       configuracion: DEFAULT_CONFIG,
@@ -278,7 +287,13 @@ export const useAppStore = create<AppState>()(
         // Si selectedMonths es null, actualizar selectedPeriod a la nueva fecha de referencia
         if (state.selectedMonths === null && fechaRefISO) {
           const fechaRef = new Date(fechaRefISO)
-          updates.selectedPeriod = { year: fechaRef.getFullYear(), month: fechaRef.getMonth() }
+          // [Ticket 2.3] Default YTD desde fechaRef: monthStart=0, monthEnd=mesDeFechaRef
+          updates.selectedPeriod = {
+            year: fechaRef.getFullYear(),
+            monthStart: 0,
+            monthEnd: fechaRef.getMonth(),
+            month: 0, // alias compat de monthStart
+          }
         }
         return updates
       }),
@@ -287,11 +302,33 @@ export const useAppStore = create<AppState>()(
       setIsProcessed: (isProcessed) => set({ isProcessed }),
       setLoadingMessage: (loadingMessage) => set({ loadingMessage }),
       setIsLoading: (isLoading) => set({ isLoading }),
-      setSelectedPeriod: (selectedPeriod) => set({ selectedPeriod, isProcessed: false }),
+      // [Ticket 2.3] Setter merge-partial. Acepta `month` legacy (mapea a
+      // monthStart=monthEnd=month) o `monthStart`/`monthEnd` nuevos. Auto-corrige
+      // monthEnd >= monthStart. `month` siempre = monthStart (alias compat).
+      setSelectedPeriod: (partial) => set((state) => {
+        const sp = state.selectedPeriod
+        const monthStart = partial.monthStart ?? (partial.month !== undefined ? partial.month : sp.monthStart)
+        let monthEnd = partial.monthEnd ?? (partial.month !== undefined ? partial.month : sp.monthEnd)
+        if (monthEnd < monthStart) monthEnd = monthStart
+        return {
+          selectedPeriod: {
+            year: partial.year ?? sp.year,
+            monthStart,
+            monthEnd,
+            month: monthStart,
+          },
+          isProcessed: false,
+        }
+      }),
       setSelectedMonths: (months) => {
         if (months && months.length > 0) {
           const latest = months.reduce((a, b) => (a.year > b.year || (a.year === b.year && a.month > b.month)) ? a : b)
-          set({ selectedMonths: months, selectedPeriod: latest })
+          // [Ticket 2.3] Convertir shape legacy {year, month} a multi-mes con
+          // monthStart=monthEnd=latest.month (comportamiento equivalente al previo).
+          set({
+            selectedMonths: months,
+            selectedPeriod: { year: latest.year, monthStart: latest.month, monthEnd: latest.month, month: latest.month },
+          })
         } else {
           set((state) => {
             // Cuando es null, mantener selectedPeriod en la fecha de referencia más reciente (fechaRefISO)
@@ -299,7 +336,12 @@ export const useAppStore = create<AppState>()(
               const fechaRef = new Date(state.fechaRefISO)
               return {
                 selectedMonths: null,
-                selectedPeriod: { year: fechaRef.getFullYear(), month: fechaRef.getMonth() }
+                selectedPeriod: {
+                  year: fechaRef.getFullYear(),
+                  monthStart: 0,
+                  monthEnd: fechaRef.getMonth(),
+                  month: 0,
+                },
               }
             }
             // Fallback: mes más reciente de monthlyTotals
@@ -307,7 +349,10 @@ export const useAppStore = create<AppState>()(
             if (keys.length > 0) {
               const latestKey = keys.sort((a, b) => b.localeCompare(a))[0]
               const [y, m] = latestKey.split('-').map(Number)
-              return { selectedMonths: null, selectedPeriod: { year: y, month: m } }
+              return {
+                selectedMonths: null,
+                selectedPeriod: { year: y, monthStart: m, monthEnd: m, month: m },
+              }
             }
             return { selectedMonths: null }
           })
@@ -410,24 +455,32 @@ export const useAppStore = create<AppState>()(
           isLoading: false,
           selectedPeriod: {
             year: new Date().getFullYear(),
-            month: new Date().getMonth(),
+            monthStart: 0,
+            monthEnd: new Date().getMonth(),
+            month: 0,
           },
         })
       },
     }),
     {
       name: 'salesflow-storage',
-      version: 9,
+      version: 10,
       migrate: (persistedState: any) => {
         // v8: remove deepseek_api_key from persisted config (now handled by backend proxy)
         // v9: migrate moneda 'USD' → '$' for display consistency
+        // v10 [Ticket 2.3]: selectedPeriod shape pasa de {year, month} a
+        //   {year, monthStart, monthEnd, month}. Sesiones viejas con shape legacy
+        //   se mapean a YTD (monthStart=0, monthEnd=month previo).
         const { deepseek_api_key: _, ...cleanConfig } = persistedState?.configuracion ?? {}
         if (cleanConfig.moneda === 'USD') cleanConfig.moneda = '$'
+        const legacySp = persistedState?.selectedPeriod
+        const migratedSp = legacySp && typeof legacySp.monthStart === 'number'
+          ? legacySp // ya es shape nuevo
+          : legacySp && typeof legacySp.month === 'number'
+            ? { year: legacySp.year, monthStart: 0, monthEnd: legacySp.month, month: 0 }
+            : { year: new Date().getFullYear(), monthStart: 0, monthEnd: new Date().getMonth(), month: 0 }
         return {
-        selectedPeriod: persistedState?.selectedPeriod ?? {
-          year: new Date().getFullYear(),
-          month: new Date().getMonth(),
-        },
+        selectedPeriod: migratedSp,
         configuracion: {
           ...DEFAULT_CONFIG,
           ...cleanConfig,
