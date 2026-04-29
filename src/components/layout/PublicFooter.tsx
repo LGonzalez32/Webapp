@@ -60,12 +60,6 @@ export default function PublicFooter() {
             </h4>
             <ul className="space-y-2.5">
               <li>
-                {/* ⚠️ IMPORTANTE: Configurar este email real o redirigir a un alias */}
-                <a href="mailto:soporte@data-solutions-hub.com" className="text-sm hover:text-[#00D68F] transition-colors" style={{ color: 'var(--sf-footer-text, #94a3b8)' }}>
-                  soporte@data-solutions-hub.com
-                </a>
-              </li>
-              <li>
                 <a
                   href={`https://wa.me/${WHATSAPP_NUMBER.replace('+', '')}?text=Hola,%20me%20interesa%20SalesFlow`}
                   target="_blank"
