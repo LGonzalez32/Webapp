@@ -483,10 +483,70 @@ export function detectTipoMeta(rawHeaders: string[]): 'unidades' | 'venta_neta' 
   )
   if (!metaHeader) return 'unidades'
   const norm = normalizeStr(metaHeader)
-  if (['venta', 'revenue', 'importe', 'monto', 'neta'].some((kw) => norm.includes(kw))) {
+  // [1.6.1] Lista alineada con isUnambiguousMetaHeader. Antes solo
+  // matcheaba {venta, revenue, importe, monto, neta} — headers como
+  // "meta_usd" o "Meta MXN" caían a default 'unidades' silenciosamente.
+  const usdKeywords = ['venta', 'revenue', 'importe', 'monto', 'neta', 'usd', 'bs', 'mxn', 'cop', 'ars', 'clp']
+  if (usdKeywords.some((kw) => norm.includes(kw))) {
     return 'venta_neta'
   }
   return 'unidades'
+}
+
+// [1.6.1] Headers genéricos que matchean META_MAPPINGS.meta pero NO contienen
+// keyword que desambigüe USD vs unidades. detectTipoMeta cae al default
+// 'unidades' silenciosamente — el cliente real con "Meta" o "Cuota" piensa
+// USD y queda mal etiquetado. UploadPage debe interceptar este caso y
+// preguntar antes de confirmar el parse (commit 1.6.2).
+export const AMBIGUOUS_META_HEADERS: readonly string[] = [
+  'meta', 'Meta', 'META',
+  'target', 'Target',
+  'budget', 'Budget',
+  'objetivo', 'Objetivo',
+  'goal', 'Goal',
+  'cuota', 'Cuota',
+  'cuota_mensual', 'meta_mes', 'objetivo_mes',
+  'presupuesto', 'Presupuesto',
+  'budget_mensual',
+]
+
+const AMBIGUOUS_META_HEADERS_NORM = new Set(
+  AMBIGUOUS_META_HEADERS.map((h) => normalizeStr(h))
+)
+
+function isUnambiguousMetaHeader(headerNorm: string): boolean {
+  // Header inequívoco si contiene keyword USD/uds que rompe la ambigüedad.
+  const usd = ['venta', 'revenue', 'importe', 'monto', 'neta', 'usd', 'bs', 'mxn', 'cop', 'ars', 'clp']
+  const uds = ['unidades', 'units']
+  return usd.some((kw) => headerNorm.includes(kw)) || uds.some((kw) => headerNorm.includes(kw))
+}
+
+/**
+ * [1.6.1] Inspecciona los headers crudos y reporta si la columna meta
+ * detectada es ambigua (no podemos decidir USD vs uds por el nombre).
+ *
+ * Si coexisten un header inequívoco (ej. `meta_usd`) y uno ambiguo
+ * (ej. `Meta`), prioriza el inequívoco — `ambiguous=false`.
+ */
+export function isAmbiguousMetaHeader(rawHeaders: string[]): {
+  ambiguous: boolean
+  matchedHeader: string | null
+} {
+  let ambiguousCandidate: string | null = null
+  for (const h of rawHeaders) {
+    const norm = normalizeStr(h)
+    if (!META_MAPPINGS.meta.some((a) => normalizeStr(a) === norm)) continue
+    if (isUnambiguousMetaHeader(norm)) {
+      // Header inequívoco encontrado: cancela cualquier ambigüedad previa.
+      return { ambiguous: false, matchedHeader: null }
+    }
+    if (AMBIGUOUS_META_HEADERS_NORM.has(norm) && ambiguousCandidate === null) {
+      ambiguousCandidate = h
+    }
+  }
+  return ambiguousCandidate !== null
+    ? { ambiguous: true, matchedHeader: ambiguousCandidate }
+    : { ambiguous: false, matchedHeader: null }
 }
 
 export const INVENTORY_MAPPINGS: Record<string, string[]> = {
@@ -1585,7 +1645,10 @@ export async function parseSalesFileWithOverride(
   }
 }
 
-export async function parseMetasFile(file: File): Promise<ParseResult<MetaRecord>> {
+export async function parseMetasFile(
+  file: File,
+  options?: { forceTipoMeta?: 'unidades' | 'venta_neta' },
+): Promise<ParseResult<MetaRecord>> {
   const raw = await readFileDataWithMeta(file)
   if ('code' in raw) return { success: false, error: raw as ParseError }
 
@@ -1594,7 +1657,9 @@ export async function parseMetasFile(file: File): Promise<ParseResult<MetaRecord
     return { success: false, error: { code: 'EMPTY_FILE', message: 'El archivo no contiene filas de datos.' } }
   }
 
-  const tipo_meta = detectTipoMeta(rawHeaders)
+  // [1.6.1] Override del usuario tras modal de desambiguación tiene prioridad
+  // sobre el auto-detect basado en header.
+  const tipo_meta = options?.forceTipoMeta ?? detectTipoMeta(rawHeaders)
   const mappedRows = rows.map((row) => mapRow(row, META_MAPPINGS))
   const foundKeys = detectMappedColumns(mappedRows, Object.keys(META_MAPPINGS))
   const ignoredColumns = detectIgnoredColumns(rawHeaders, META_MAPPINGS)
