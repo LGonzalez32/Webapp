@@ -3,7 +3,7 @@ import { useAppStore } from '../store/appStore'
 import { useAuthStore } from '../store/authStore'
 import { useOrgStore } from '../store/orgStore'
 import { useEmpresaName } from '../lib/useEmpresaName'
-import { Store, BarChart3, Save, Package, Bell, Info, RotateCcw, HelpCircle } from 'lucide-react'
+import { Store, BarChart3, Save, Package, Bell, RotateCcw, HelpCircle } from 'lucide-react'
 import { GIRO_OPTIONS } from '../lib/giroOptions'
 
 interface NotifPrefs {
@@ -414,14 +414,6 @@ export default function ConfiguracionPage() {
             {notifSaved && (
               <span className="text-xs text-purple-400 font-medium animate-in fade-in duration-200">Guardado</span>
             )}
-          </div>
-
-          {/* Banner próximamente */}
-          <div className="flex items-start gap-3 p-4 rounded-xl bg-blue-500/5 border border-blue-500/15">
-            <Info className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
-            <p className="text-xs text-blue-300/80 leading-relaxed">
-              Las notificaciones por email estarán disponibles próximamente. Tus preferencias quedarán guardadas.
-            </p>
           </div>
         </div>
       </div>
