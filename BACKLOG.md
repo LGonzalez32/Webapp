@@ -235,6 +235,42 @@ error de tabla inexistente (`relation "sales_forecasts" does not exist`).
 
 ## Migraciones silenciosas
 
+### `bugfix-analyzeSupervisor-mtd-yoy` (Ticket 2.2-B)
+
+**Antes del fix:** La función `analyzeSupervisor` en `src/lib/analysis.ts`
+(L1134-1135) calculaba el rango "mes anterior año previo" como mes
+calendario completo:
+
+```ts
+prevYearStart = new Date(year - 1, month, 1)
+prevYearEnd   = new Date(year - 1, month + 1, 0, 23, 59, 59, 999)
+```
+
+Mientras que el período actual (`ventas_periodo` en L1161) venía de
+`vendorAnalysis` ya truncado al día actual. Resultado: `variacion_pct`
+comparaba MTD parcial actual contra mes completo del año pasado,
+sobreestimando sistemáticamente el "anterior" cuando el período actual
+era el mes en curso.
+
+**Después del fix:** El rango anterior se trunca al mismo día
+(`fr.getDate()`), aplicando el mismo patrón que ya usaban `computeYTD`
+(L290-296) y `computeCommercialAnalysis` (L766-770).
+
+**Impacto observable:** Los valores de `variacion_pct` de la tabla de
+supervisores cambian para el mes en curso. Supervisores cuyo "anterior"
+era inflado pueden subir aparentemente. Este NO es un cambio del
+rendimiento real del supervisor — es la primera vez que el número se
+calcula correctamente.
+
+**Snapshot pre-fix:** commit anterior al hash del 2.2-B (registrar
+hash post-commit).
+
+**Goldens del motor:** se espera regeneración tras el fix (similar a lo
+que pasó en Sprint 1.3 con Z.13.V).
+
+**Si un cliente reporta "mis números de supervisor cambiaron solos":**
+apuntar a esta entrada.
+
 ### `migracion-metas-keyword-fix` (commit 220711ea)
 `detectTipoMeta` ahora reconoce headers con sufijos de moneda (`usd`,
 `bs`, `mxn`, `cop`, `ars`, `clp`) como `'venta_neta'`. Antes el
