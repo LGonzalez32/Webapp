@@ -133,10 +133,25 @@ function getSalesByPeriod(index: SaleIndex, year: number, month: number): SaleRe
 
 // ─── FILTROS DE PERÍODO ───────────────────────────────────────────────────────
 
-export function salesInPeriod(sales: SaleRecord[], year: number, month: number): SaleRecord[] {
-  const start = startOfPeriod(year, month)
-  const end = endOfPeriod(year, month)
+export function salesInRange(
+  sales: SaleRecord[],
+  year: number,
+  monthStart: number,
+  monthEnd: number,
+): SaleRecord[] {
+  // Invariante: monthEnd >= monthStart. Mirror del patrón de lib/periods.ts
+  // (buildMonthlyRange throws). NaN/fuera-de-rango propagan a Invalid Date
+  // como en salesInPeriod legacy → filter retorna [].
+  if (monthEnd < monthStart) {
+    throw new Error(`monthEnd (${monthEnd}) < monthStart (${monthStart})`)
+  }
+  const start = startOfPeriod(year, monthStart)
+  const end = endOfPeriod(year, monthEnd)
   return sales.filter((s) => s.fecha >= start && s.fecha <= end)
+}
+
+export function salesInPeriod(sales: SaleRecord[], year: number, month: number): SaleRecord[] {
+  return salesInRange(sales, year, month, month)
 }
 
 /** Filter sales to only include days <= maxDay within the month */
