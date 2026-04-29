@@ -25,15 +25,23 @@ import { TrendingUp, TrendingDown, Minus, Calendar, Loader2, Settings, ChevronRi
 import { cn } from '../lib/utils'
 import { callAI } from '../lib/chatService'
 import AnalysisDrawer from '../components/ui/AnalysisDrawer'
-import type { SaleRecord, MetaRecord, ForecastData } from '../types'
+import type { SaleRecord, MetaRecord, ForecastData, DataAvailability } from '../types'
 import { DIM_META } from '../config/metaConfig'
 import { SFSelect } from '../components/ui/SFSelect'
 
-const DIM_TOGGLES: { key: DimKey; label: string; icon: string; requiresDim?: string }[] = [
-  { key: 'canal',    label: 'Canal',    icon: '🏪', requiresDim: 'canal' },
-  { key: 'vendedor', label: 'Vendedor', icon: '👤' },
-  { key: 'producto', label: 'Producto', icon: '📦', requiresDim: 'producto' },
-  { key: 'mes',      label: 'Mes',      icon: '📅' },
+// schema-cleanup: TODAS las dimensiones disponibles. La gating por availability
+// se hace abajo en el render con un check explícito por dim.
+const DIM_TOGGLES: { key: DimKey; label: string; icon: string; requiresDim?: keyof DataAvailability }[] = [
+  { key: 'mes',          label: 'Mes',          icon: '📅' },
+  { key: 'vendedor',     label: 'Vendedor',     icon: '👤' },
+  { key: 'canal',        label: 'Canal',        icon: '🏪', requiresDim: 'has_canal' },
+  { key: 'cliente',      label: 'Cliente',      icon: '🧾', requiresDim: 'has_cliente' },
+  { key: 'producto',     label: 'Producto',     icon: '📦', requiresDim: 'has_producto' },
+  { key: 'categoria',    label: 'Categoría',    icon: '🏷️', requiresDim: 'has_categoria' },
+  { key: 'subcategoria', label: 'Subcategoría', icon: '🔖', requiresDim: 'has_subcategoria' },
+  { key: 'departamento', label: 'Departamento', icon: '🌎', requiresDim: 'has_departamento' },
+  { key: 'supervisor',   label: 'Supervisor',   icon: '🧑‍💼', requiresDim: 'has_supervisor' },
+  { key: 'proveedor',    label: 'Proveedor',    icon: '🏭', requiresDim: 'has_proveedor' },
 ]
 
 const MESES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
@@ -825,7 +833,7 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
         {/* Dimension toggles — always visible */}
         <div className="px-6 py-3 flex items-center flex-wrap gap-2" style={{ borderBottom: '1px solid var(--sf-border)' }}>
           {DIM_TOGGLES
-            .filter(t => !t.requiresDim || (t.requiresDim === 'canal' && dataAvailability.has_canal) || (t.requiresDim === 'producto' && (dataAvailability.has_producto || dataAvailability.has_categoria)))
+            .filter(t => !t.requiresDim || dataAvailability[t.requiresDim] === true)
             .map(toggle => {
               const isActive = pivotDims.includes(toggle.key)
               return (
