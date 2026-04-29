@@ -9,6 +9,18 @@ Se atacan en sprints futuros con tickets propios.
 emergencia hoy (repo privado en GitHub, sin despliegue en Render),
 pero cada uno tiene un evento que los vuelve críticos.
 
+### Sprint 0.6 — cierre parcial (4/5 resueltos)
+
+- **S1**: ✅ parcial (key rotada en DeepSeek dashboard; limpieza de
+  historia git pendiente — due: invitar colaboradores o push a Render)
+- **S3** (políticas placebo): ✅ cerrado (commits `df9f1cf1`, `33f86022`,
+  `9c4d39c4`, `a6d6daae`)
+- **S4** (auditoría): ✅ cerrado (commit `6ccf12b9` drop + auditoría
+  completa)
+- **S4.1** (drop 14 tablas legacy): ✅ cerrado
+- **S2** (rate limit /chat): ⏳ movido a deuda con due-date event-anchored
+  (ver sección abajo)
+
 ### S1 — Rotación de DeepSeek key
 
 **Estado:** Parcialmente resuelto (29-abr-2026)
@@ -30,11 +42,23 @@ pero cada uno tiene un evento que los vuelve críticos.
   confirmado, force-push viable).
 - Checklist completo guardado en historial de chat.
 
-### S2 — Rate limiting en POST /chat (vence: antes del primer despliegue a Render)
-- `backend/app/api/routes/chat.py` expone `/chat` sin slowapi/rate-limit.
-- Riesgo: billing abuse contra DeepSeek vía proxy.
-- Acción: agregar slowapi (o equivalente) con límite por IP + por
-  usuario autenticado. Confirmar también que `/chat` exige JWT de Supabase.
+### S2 — Rate limiting en POST /chat
+
+**Estado:** pendiente
+**Due:** antes de cablear backend Python al frontend (o primer push a
+Render con backend activo).
+
+**Riesgo si se ignora:** sin rate limit, un atacante autenticado podría
+drenar la cuota de DeepSeek API enviando requests masivos al endpoint
+`/chat`. La key actual (post-S1) tiene tope de gasto en DeepSeek
+dashboard como mitigación parcial.
+
+**Decisión técnica pendiente al implementar:**
+- Stack: `slowapi` (FastAPI nativo) vs middleware custom vs Redis-based.
+- Política: por `user_id` (ya autenticado vía JWT), por IP, o combinada.
+- Límite: TBD según patrón de uso esperado (ej. 30 req/min por user).
+
+**Estimado al implementar:** 3-5 commits (config + middleware + tests + docs).
 
 ### ~~S3 — RLS en sales_forecasts / sales_forecast_results / sales_aggregated~~ ✓ RESUELTO en S4.1
 - Las 3 tablas dropeadas en migration `003_drop_legacy_forecast_tables.sql`
