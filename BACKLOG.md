@@ -44,6 +44,25 @@ Sin deuda.
   ArrowLeft/Right/Home/End. El mismo componente sirve `/demo/clientes`
   y `/clientes` (no se necesitó ticket 1.2.b).
 
+## Sprint 1.4 — fuera de scope, anotado
+
+### Centralizar entrada/salida de modo demo
+- 6 puntos del código escriben `DEMO_EMPRESA` a `appStore.configuracion.empresa`:
+  `WelcomeModal.tsx`, `DemoPage.tsx`, `UploadPage.tsx`, `EmptyState.tsx`,
+  `useAutoLoad.ts` (rama demo). Sugiere falta una helper `enterDemoMode()` /
+  `exitDemoMode()` que centralice el seteo del bundle demo (empresa, sales,
+  metas, inventory, dataSource).
+- Próximo ticket de refactor (no urgente): consolidar y dejar 1 sola entrada.
+- Riesgo si no se hace: cualquier campo nuevo de org (NIT, dirección, logo)
+  hereda el mismo bug de doble fuente que arreglamos en sprint-1.4.
+
+### sprint-check separator (Windows cmd)
+- Cambiado `;` → `&` en `package.json:scripts.sprint-check` porque cmd.exe
+  pasa `;` como argumento literal a `tsc`. `&` es el sequencer de cmd
+  (always-run-next) y mantiene la semántica relajada hasta que lint quede
+  en 0/0. En posix bash `&` backgroundea — si el equipo migra a Mac/Linux,
+  cambiar a `npm-run-all2 --continue-on-error`.
+
 ## Sprint 0.5 — diagnóstico (sin fix)
 
 ### ~~A. Bug de hooks en /rotacion (Sprint 1.1)~~ ✓ RESUELTO en sprint-1.1

@@ -13,7 +13,7 @@
     "test": "vitest run",
     "test:unit": "vitest run",
     "test:e2e": "playwright test",
-    "sprint-check": "npm run typecheck ; npm run lint ; npm run test:unit"
+    "sprint-check": "npm run typecheck & npm run lint & npm run test:unit"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

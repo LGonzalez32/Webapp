@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useAppStore } from '../store/appStore'
 import { useAuthStore } from '../store/authStore'
+import { useOrgStore } from '../store/orgStore'
+import { useEmpresaName } from '../lib/useEmpresaName'
 import { Store, BarChart3, Save, Package, Bell, Info, RotateCcw, HelpCircle } from 'lucide-react'
 import { GIRO_OPTIONS } from '../lib/giroOptions'
 
@@ -49,6 +51,8 @@ const CURRENCIES = [
 export default function ConfiguracionPage() {
   const { configuracion, setConfiguracion, setIsProcessed } = useAppStore()
   const userEmail = useAuthStore(s => s.user?.email ?? '')
+  const hasOrg = useOrgStore(s => s.org !== null)
+  const empresaName = useEmpresaName()
   const [local, setLocal] = useState({ ...configuracion })
   const [notif, setNotif] = useState<NotifPrefs>(() => loadNotifPrefs(userEmail))
   const [notifSaved, setNotifSaved] = useState(false)
@@ -88,11 +92,24 @@ export default function ConfiguracionPage() {
             </label>
             <input
               type="text"
-              value={local.empresa}
+              value={hasOrg ? empresaName : local.empresa}
               onChange={(e) => setLocal({ ...local, empresa: e.target.value })}
+              readOnly={hasOrg}
+              disabled={hasOrg}
               className="w-full rounded-xl px-4 py-3 text-sm focus:outline-none transition-all"
-              style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', color: 'var(--sf-t1)' }}
+              style={{
+                background: 'var(--sf-inset)',
+                border: '1px solid var(--sf-border)',
+                color: 'var(--sf-t1)',
+                opacity: hasOrg ? 0.65 : 1,
+                cursor: hasOrg ? 'not-allowed' : 'text',
+              }}
             />
+            {hasOrg && (
+              <p className="text-[10px] text-zinc-500">
+                Para cambiar el nombre, ve a <a href="/organizacion" className="text-[#00B894] hover:underline">/organizacion</a>.
+              </p>
+            )}
           </div>
           <div className="space-y-1.5">
             <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">

@@ -9,6 +9,7 @@ import { salesInPeriod } from '../lib/analysis'
 import { callAI } from '../lib/chatService'
 import VendedorPanel from '../components/vendedor/VendedorPanel'
 import { useDemoPath } from '../lib/useDemoPath'
+import { useEmpresaName } from '../lib/useEmpresaName'
 import { runInsightEngine, candidatesToDiagnosticBlocks, filtrarConEstandar, buildRichBlocksFromInsights, recordInsightRuntimeAuditReport, type DiagnosticBlock } from '../lib/insight-engine'
 import DiagnosticBlockView from '../components/diagnostic/DiagnosticBlock'
 import EstadoGeneralEmpresa from '../components/estado-general/EstadoGeneralEmpresa'
@@ -248,6 +249,7 @@ function relativeTime(isoString: string): string {
 export default function EstadoComercialPage() {
   const navigate = useNavigate()
   const dp = useDemoPath()
+  const empresaName = useEmpresaName()
   useAnalysis()
   const {
     insights, vendorAnalysis, teamStats, dataAvailability,
@@ -1906,7 +1908,7 @@ export default function EstadoComercialPage() {
         style={{ animationDelay: '0ms' }}
       >
         <span className="text-[13px] font-semibold" style={{ color: 'var(--sf-t2)' }}>
-          {configuracion.empresa}
+          {empresaName}
         </span>
         {urgentPendingCount > 0 ? (
           <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.2)' }}>
