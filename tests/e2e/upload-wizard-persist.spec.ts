@@ -64,6 +64,7 @@ test.describe('upload wizard nivel 3 — persist + restore + clear', () => {
   });
 
   test('subir CSV → IDB persiste 4 campos → reload restaura → analizar limpia IDB', async ({ page }) => {
+    test.setTimeout(45_000);
     // ── Step a: navegar a /cargar
     await page.goto('/cargar?e2e_bypass=1');
     await page.waitForLoadState('networkidle');

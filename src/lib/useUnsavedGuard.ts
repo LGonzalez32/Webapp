@@ -1,16 +1,21 @@
 /**
- * Combina interceptor de clicks sobre <a> in-app + beforeunload nativo.
+ * Hook que combina interceptor de clicks DOM + beforeunload nativo
+ * para advertir al usuario antes de perder un wizard draft activo.
  *
- * Limitación conocida: el proyecto usa <BrowserRouter> declarativo, no
- * createBrowserRouter (Data Router). useBlocker de react-router-dom
- * v6.4+/v7 requiere Data Router y crashea con declarativo. Como pivote,
- * interceptamos clicks sobre anchors in-app a nivel document.
+ * LIMITACIÓN CONOCIDA: solo intercepta clicks en <a> dentro del
+ * DOM. Cualquier navegación programática (navigate('/x') desde
+ * código) NO dispara el guard. Si agregás un navigate() en código,
+ * limpiá el draft antes (clearWizardDraft) o el usuario perderá
+ * el aviso.
+ *
+ * Razón del approach: React Router v7 useBlocker requiere
+ * createBrowserRouter (Data Router), pero la app usa BrowserRouter
+ * declarativo. Migración documentada en BACKLOG.
  *
  * Cobertura:
  *   ✓ Click en sidebar / nav links / cualquier <a href="/..."> in-app.
  *   ✓ Reload / cierre de pestaña / nav externa (via beforeunload).
- *   ✗ Llamadas programáticas a useNavigate() bypasean. Aceptable para
- *     UploadPage porque doAnalyze() limpia el draft antes de navegar.
+ *   ✗ Llamadas programáticas a useNavigate() bypasean.
  *
  * Cuando el modal está abierto, llamar confirmLeave navega al href
  * pendiente; cancelLeave cierra el modal y descarta el intent.
