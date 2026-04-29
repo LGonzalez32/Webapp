@@ -328,6 +328,22 @@ Si un cliente reporta "mis metas cambiaron solas", apuntar acá.
 
 ## Deuda técnica
 
+### useRecomendaciones B1 estricto en rango multi-mes (Ticket 2.4.2)
+
+En rangos multi-mes (ej. Mar–Jun), el body de recomendaciones de
+`useRecomendaciones` (VendedorPanel) dice "el mes pasado" / "vs el mes
+anterior" refiriéndose a `monthEnd - 1` (Mayo en el ejemplo), que cae
+**dentro del rango activo** del usuario. Mismatch sutil aceptado como
+deuda al cierre de Ticket 2.4.2.
+
+Razón: el hook calcula `prev = prevPeriod(year, monthEnd)` (sequential)
+y los labels acoplan dato + texto. Migrar a B2 (acumular rango YoY)
+requeriría reformular los copies a "vs el rango anterior" o similar,
+lo cual es una decisión de producto, no de refactor.
+
+Escalar si visualmente molesta con clientes reales. Due: smoke test
+pre-clientes reales / Sprint 4.
+
 ### Verificación visual de flicker primer render (post-Ticket 2.3.2)
 
 Con localStorage limpio, el initial state del store es neutro

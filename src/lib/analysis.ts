@@ -154,6 +154,42 @@ export function salesInPeriod(sales: SaleRecord[], year: number, month: number):
   return salesInRange(sales, year, month, month)
 }
 
+/**
+ * Devuelve las ventas YoY del rango [monthStart..monthEnd] del año anterior,
+ * truncando al maxDay SOLO en el último mes del rango (regla CONTEXT.md
+ * "MTD vs MTD same-day, YTD vs YTD same-day"). Meses intermedios completos.
+ *
+ * @param year año DEL RANGO ACTUAL (la función calcula year-1 internamente).
+ * @param maxDay día del mes de cutoff [1-31]. Si <= 0, retorna [].
+ * @throws si monthStart > monthEnd.
+ */
+export function salesInRangeYoYSameDay(
+  sales: SaleRecord[],
+  year: number,
+  monthStart: number,
+  monthEnd: number,
+  maxDay: number,
+): SaleRecord[] {
+  if (monthStart > monthEnd) {
+    throw new Error(`monthEnd (${monthEnd}) < monthStart (${monthStart})`)
+  }
+  if (maxDay <= 0) return []
+
+  const result: SaleRecord[] = []
+  for (let m = monthStart; m <= monthEnd; m++) {
+    const monthSales = salesInPeriod(sales, year - 1, m)
+    if (m === monthEnd) {
+      const cutoff = new Date(year - 1, m, maxDay, 23, 59, 59, 999)
+      for (const s of monthSales) {
+        if (s.fecha <= cutoff) result.push(s)
+      }
+    } else {
+      result.push(...monthSales)
+    }
+  }
+  return result
+}
+
 /** Filter sales to only include days <= maxDay within the month */
 export function filterSalesByDayRange(sales: SaleRecord[], maxDay: number): SaleRecord[] {
   return sales.filter(s => s.fecha.getDate() <= maxDay)
