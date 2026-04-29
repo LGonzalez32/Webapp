@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useDemoPath } from '../lib/useDemoPath'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
-import type { ClasificacionInventario, CategoriaInventario } from '../types'
+import type { ClasificacionInventario, CategoriaInventario, Configuracion } from '../types'
 import { ChevronDown, ChevronUp, Upload } from 'lucide-react'
 // callAI removed — analysis is now computed locally
 import ProductoPanel from '../components/producto/ProductoPanel'
@@ -31,6 +31,23 @@ const CLASI_CONFIG: Record<
   sin_movimiento:   { label: 'Sin movimiento',      color: '#64748b', defaultOpen: false },
 }
 
+// ─── Tooltips explicativos (Tarea 2.2) ───────────────────────────────────────
+// Definiciones extraídas de src/lib/analysis.ts:1061-1106. Umbrales viven en
+// configuracion (user-configurable) — los tooltips se construyen con valores vivos.
+
+const TOOLTIP_PM3 = 'Promedio móvil de los últimos 3 meses cerrados (uds/mes).'
+const TOOLTIP_DIAS_INV = 'Días que durará el inventario actual al ritmo de venta de los últimos 3 meses.'
+
+function buildEstadoTooltips(c: Configuracion): Record<ClasificacionInventario, string> {
+  return {
+    riesgo_quiebre:   `${c.umbral_riesgo_quiebre} días o menos de inventario al ritmo actual. Reabastece pronto.`,
+    baja_cobertura:   `Entre ${c.umbral_riesgo_quiebre + 1} y ${c.umbral_baja_cobertura} días de inventario. Vigila.`,
+    normal:           `Entre ${c.umbral_baja_cobertura + 1} y ${c.umbral_normal} días. Cobertura saludable.`,
+    lento_movimiento: `Más de ${c.umbral_normal} días al ritmo actual, o sin ventas recientes.`,
+    sin_movimiento:   'Sin ventas registradas, o más de 120 días desde el último movimiento.',
+  }
+}
+
 // ─── Sección colapsable por categoría ────────────────────────────────────────
 
 interface CategorySectionProps {
@@ -40,6 +57,7 @@ interface CategorySectionProps {
   hasCategoria: boolean
   forceOpen?: boolean
   onOpenPanel?: (item: CategoriaInventario) => void
+  estadoTooltips: Record<ClasificacionInventario, string>
   // IA analysis props (only used for riesgo_quiebre + baja_cobertura)
   analysisMap?: Record<string, { loading: boolean; text: string | null }>
   expandedProducto?: string | null
@@ -48,7 +66,7 @@ interface CategorySectionProps {
   onProfundizar?: (item: CategoriaInventario, analysisText: string) => void
 }
 
-const CategorySection: FC<CategorySectionProps> = ({ clasificacion, items, totalUnits, hasCategoria, forceOpen, onOpenPanel, analysisMap, expandedProducto, onAnalyze, onToggleExpand, onProfundizar }) => {
+const CategorySection: FC<CategorySectionProps> = ({ clasificacion, items, totalUnits, hasCategoria, forceOpen, onOpenPanel, estadoTooltips, analysisMap, expandedProducto, onAnalyze, onToggleExpand, onProfundizar }) => {
   const cfg = CLASI_CONFIG[clasificacion]
   const [expanded, setExpanded] = useState(cfg.defaultOpen || !!forceOpen)
 
@@ -107,8 +125,8 @@ const CategorySection: FC<CategorySectionProps> = ({ clasificacion, items, total
                 <th style={{ ...thBase, borderLeft: '2px solid #1D9E75' }}>Producto</th>
                 {hasCategoria && <th style={thBase}>Categoría</th>}
                 <th style={{ ...thBase, textAlign: 'right' }}>Uds. actuales</th>
-                <th style={{ ...thBase, textAlign: 'right' }}>PM3</th>
-                <th style={{ ...thBase, textAlign: 'right' }}>Días inv.</th>
+                <th style={{ ...thBase, textAlign: 'right', cursor: 'help' }} title={TOOLTIP_PM3}>PM3</th>
+                <th style={{ ...thBase, textAlign: 'right', cursor: 'help' }} title={TOOLTIP_DIAS_INV}>Días inv.</th>
                 <th style={{ ...thBase, textAlign: 'center' }}>Estado</th>
                 <th style={{ ...thBase, textAlign: 'right' }}>Último mov.</th>
                 {showIA && <th style={{ ...thBase, textAlign: 'center' }}>IA</th>}
@@ -148,7 +166,7 @@ const CategorySection: FC<CategorySectionProps> = ({ clasificacion, items, total
                       {d >= 9999 ? '∞' : d}
                     </td>
                     <td style={{ padding: '8px 12px', textAlign: 'center' }}>
-                      <span style={{ ...badgeStyle, fontSize: '10px', padding: '2px 8px', borderRadius: '3px', fontWeight: 600 }}>
+                      <span style={{ ...badgeStyle, fontSize: '10px', padding: '2px 8px', borderRadius: '3px', fontWeight: 600, cursor: 'help' }} title={estadoTooltips[clasificacion]}>
                         {cfg.label}
                       </span>
                     </td>
@@ -417,6 +435,10 @@ export default function RotacionPage() {
     ORDER.reduce((s, k) => s + filteredGrouped[k].length, 0),
   [filteredGrouped])
 
+  const estadoTooltips = useMemo(
+    () => buildEstadoTooltips(configuracion),
+    [configuracion.umbral_riesgo_quiebre, configuracion.umbral_baja_cobertura, configuracion.umbral_normal]
+  )
 
   if (!dataAvailability.has_inventario) {
     return (
@@ -466,13 +488,13 @@ export default function RotacionPage() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
-          <span style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'rgba(226,75,74,0.15)', color: '#E24B4A', border: '1px solid rgba(226,75,74,0.25)' }}>
+          <span style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'rgba(226,75,74,0.15)', color: '#E24B4A', border: '1px solid rgba(226,75,74,0.25)', cursor: 'help' }} title={estadoTooltips.riesgo_quiebre}>
             {grouped.riesgo_quiebre.length} riesgo quiebre
           </span>
-          <span style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'rgba(239,159,39,0.15)', color: '#EF9F27', border: '1px solid rgba(239,159,39,0.25)' }}>
+          <span style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'rgba(239,159,39,0.15)', color: '#EF9F27', border: '1px solid rgba(239,159,39,0.25)', cursor: 'help' }} title={estadoTooltips.baja_cobertura}>
             {grouped.baja_cobertura.length} baja cobertura
           </span>
-          <span style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'var(--sf-inset)', color: 'var(--sf-t5)', border: '1px solid var(--sf-border)' }}>
+          <span style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'var(--sf-inset)', color: 'var(--sf-t5)', border: '1px solid var(--sf-border)', cursor: 'help' }} title={estadoTooltips.sin_movimiento}>
             {grouped.sin_movimiento.length} sin movimiento
           </span>
         </div>
@@ -550,7 +572,7 @@ export default function RotacionPage() {
             return (
               <div key={k} style={{ display: 'grid', gridTemplateColumns: '12px 1fr auto auto auto', alignItems: 'center', gap: '12px', marginBottom: '6px' }}>
                 <span style={{ width: '12px', height: '12px', borderRadius: '2px', background: cfg.color, flexShrink: 0 }} />
-                <span style={{ fontSize: '12px', opacity: 0.7 }}>{cfg.label}</span>
+                <span style={{ fontSize: '12px', opacity: 0.7, cursor: 'help' }} title={estadoTooltips[k]}>{cfg.label}</span>
                 <span style={{ fontSize: '12px', opacity: 0.4, fontVariantNumeric: 'tabular-nums', textAlign: 'right', width: '60px' }}>{grouped[k].length} prod.</span>
                 <span style={{ fontSize: '12px', opacity: 0.4, fontVariantNumeric: 'tabular-nums', textAlign: 'right', width: '90px' }}>{units.toLocaleString()} uds</span>
                 <span style={{ fontSize: '12px', opacity: 0.4, fontVariantNumeric: 'tabular-nums', textAlign: 'right', width: '45px' }}>{pct.toFixed(1)}%</span>
@@ -578,6 +600,7 @@ export default function RotacionPage() {
             hasCategoria={hasCategoria}
             forceOpen={!!(filterCategory || searchText)}
             onOpenPanel={setPanelProducto}
+            estadoTooltips={estadoTooltips}
             analysisMap={analysisMap}
             expandedProducto={expandedProducto}
             onAnalyze={handleAnalyzeProducto}

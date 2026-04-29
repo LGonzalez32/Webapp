@@ -21,9 +21,9 @@ test.describe('smoke', () => {
     }
   });
 
-  test.fixme('demo rotacion loads', async ({ page }) => {
-    // Sprint 1.1: React hooks crash
+  test('demo rotacion loads', async ({ page }) => {
     await page.goto('/demo/rotacion');
+    await expect(page.locator('h1, h2').first()).toBeVisible();
   });
 
   test.fixme('demo clientes has at least 3 tabs', async ({ page }) => {

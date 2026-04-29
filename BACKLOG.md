@@ -44,7 +44,7 @@ Sin deuda.
 
 ## Sprint 0.5 — diagnóstico (sin fix)
 
-### A. Bug de hooks en /rotacion (Sprint 1.1)
+### ~~A. Bug de hooks en /rotacion (Sprint 1.1)~~ ✓ RESUELTO en sprint-1.1
 - **Archivo:** `src/pages/RotacionPage.tsx:462`
 - **Regla:** `react-hooks/rules-of-hooks` (error)
 - **Diagnóstico:** `useMemo(buildEstadoTooltips, [...])` en L462 se llama
