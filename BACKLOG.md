@@ -144,6 +144,21 @@ queda como follow-up opcional (no bloquea agregar tablas nuevas):
 - **`orgService` storage iteration**: hardcoded a 3 tablas. Iterar el
   registry para storage keys.
 
+## Migraciones silenciosas
+
+### `migracion-metas-keyword-fix` (commit 220711ea)
+`detectTipoMeta` ahora reconoce headers con sufijos de moneda (`usd`,
+`bs`, `mxn`, `cop`, `ars`, `clp`) como `'venta_neta'`. Antes el
+keyword list solo cubría `venta|revenue|importe|monto|neta`, así que
+headers como `meta_usd`, `Meta USD`, `target_usd`, `meta_bs`,
+`meta_mxn`, `meta_cop`, `meta_ars`, `meta_clp` caían a default
+`'unidades'` silenciosamente.
+
+Datos previamente parseados como `'unidades'` con esos headers
+**cambian de unidad al re-procesar**. Sin migración automática — el
+override del modal del 1.6.2 cubre los casos que el usuario note.
+Si un cliente reporta "mis metas cambiaron solas", apuntar acá.
+
 ## Deuda técnica
 
 ### ~~`wizardCache` usa module-level state para debounce~~ → movido a Follow-ups del ticket 1.5
