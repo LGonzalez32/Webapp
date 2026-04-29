@@ -9,12 +9,26 @@ Se atacan en sprints futuros con tickets propios.
 emergencia hoy (repo privado en GitHub, sin despliegue en Render),
 pero cada uno tiene un evento que los vuelve críticos.
 
-### S1 — Rotar DeepSeek API key (vence: cuando se invite a colaboradores o antes del primer push a Render)
-- Key sk-be7fa627... commiteada en initial commit `01fc8fd6` (14-mar-2026).
-- Backend lee correctamente de `os.getenv("DEEPSEEK_API_KEY")`; `.env` ya
-  está en `.gitignore`.
-- Acción: rotar en DeepSeek dashboard, actualizar `backend/.env` local.
-- NO requiere `git filter-repo` mientras el repo siga privado y solo.
+### S1 — Rotación de DeepSeek key
+
+**Estado:** Parcialmente resuelto (29-abr-2026)
+
+**Resuelto:**
+- Key vieja (`sk-be7fa627...`, expuesta en commit `01fc8fd6`) revocada en
+  dashboard de DeepSeek.
+- Key nueva en `backend/.env` local, chat funcional.
+- Riesgo de uso indebido cerrado: la key vieja ya no abre ninguna puerta.
+
+**Pendiente:**
+- Limpieza de historia de git con `git filter-repo` para borrar la key
+  vieja del commit `01fc8fd6` y descendientes.
+- **Due-date:** antes de cualquiera de estos eventos:
+  - Invitar colaborador al repo de GitHub.
+  - Primer push a Render (o cualquier hosting con logs/builds visibles).
+  - Cambio de visibilidad del repo a público.
+- Camino aprobado: B (Python 3.14.3 disponible, único colaborador
+  confirmado, force-push viable).
+- Checklist completo guardado en historial de chat.
 
 ### S2 — Rate limiting en POST /chat (vence: antes del primer despliegue a Render)
 - `backend/app/api/routes/chat.py` expone `/chat` sin slowapi/rate-limit.
