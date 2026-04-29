@@ -5,12 +5,13 @@ import * as XLSX from 'xlsx'
 import { useAppStore } from '../store/appStore'
 import { useOrgStore } from '../store/orgStore'
 import { getDemoData, DEMO_EMPRESA } from '../lib/demoData'
-import { parseSalesFileInWorker, parseMetasFileInWorker, parseInventoryFileInWorker } from '../lib/fileParser'
+import { parseSalesFileInWorker, parseMetasFileInWorker, parseInventoryFileInWorker, isAmbiguousMetaHeader } from '../lib/fileParser'
 import { getUiHeaders, getTemplateExampleRow, getTemplateHeaderRow, getPreviewExampleRow, getUserUploadTables, getInitialWizardSteps, getStepIdToTableIdMap } from '../lib/registry-ui'
 import { uploadOrgFile, getOrgStorageFiles, deleteOrgFiles } from '../lib/orgService'
 import { saveDatasets, clearDatasets } from '../lib/dataCache'
 import { useUnsavedGuard } from '../lib/useUnsavedGuard'
 import UnsavedDraftModal from '../components/upload/UnsavedDraftModal'
+import MetaUnitPromptModal from '../components/upload/MetaUnitPromptModal'
 import { findMetaDimsMissingFromSales, selectSalesForMetasValidation, evaluateAllRulesForTable, type CrossTableValidationIssue } from '../lib/uploadValidation'
 import LoadingOverlay from '../components/ui/LoadingOverlay'
 import StepIndicator from '../components/upload/StepIndicator'
@@ -18,7 +19,7 @@ import FileDropzone from '../components/upload/FileDropzone'
 import DataPreview from '../components/upload/DataPreview'
 import { cn } from '../lib/utils'
 import { Trash2, ChevronRight, ChevronLeft, ShieldOff, Check, AlertTriangle, Info, Lock } from 'lucide-react'
-import type { UploadStep, ParseResult, ParseError, DiscardedRow } from '../types'
+import type { UploadStep, ParseResult, ParseError, DiscardedRow, MetaRecord } from '../types'
 import { useUserRole } from '../lib/useUserRole'
 
 /** Type guard: estrecha ParseResult<T> al branch de error */
@@ -107,6 +108,22 @@ function TablaEjemplo({ headers, rows }: { headers: { col: string; req: boolean 
   )
 }
 
+// [1.6.2] Re-mapea records de metas para reflejar la unidad elegida por el
+// usuario tras el modal de desambiguación. El parser auto-detecta una unidad
+// por header pero el usuario puede sobreescribir; este helper rebalancea
+// meta_uds/meta_usd/tipo_meta sin re-parsear el archivo.
+function applyMetaUnitOverride(records: MetaRecord[], unit: 'unidades' | 'venta_neta'): MetaRecord[] {
+  return records.map((r) => {
+    const value = r.meta ?? r.meta_uds ?? r.meta_usd ?? 0
+    return {
+      ...r,
+      tipo_meta: unit,
+      meta_uds: unit === 'unidades' ? value : undefined,
+      meta_usd: unit === 'venta_neta' ? value : undefined,
+    }
+  })
+}
+
 export default function UploadPage() {
   const { setSales, setMetas, setInventory, setIsProcessed, setSelectedPeriod, setDataSource, resetAll, configuracion, setConfiguracion, dataSource, metas: existingMetas, sales: existingSales, inventory: existingInventory, wizardDraft, setWizardDraft, clearWizardDraft, hydrateWizardDraftFromCache } = useAppStore()
   const { org } = useOrgStore()
@@ -132,6 +149,18 @@ export default function UploadPage() {
   const [showDiscarded, setShowDiscarded] = useState(false)
   const [showSuccess, setShowSuccess] = useState(false)
   const [showMetasConfirm, setShowMetasConfirm] = useState(false)
+  // [1.6.2] Override de unidad de metas elegido por el usuario tras modal
+  // de desambiguación. Persiste en wizardDraft.metaUnitOverride.
+  const [metaUnitOverride, setMetaUnitOverride] = useState<'unidades' | 'venta_neta' | undefined>(undefined)
+  // [1.6.2] Estado del prompt bloqueante de unidad de meta. Cuando es
+  // distinto de null, MetaUnitPromptModal está abierto y el step de metas
+  // queda en limbo (no marca loaded hasta confirmar/cancelar).
+  const [metaPrompt, setMetaPrompt] = useState<{
+    detectedHeader: string
+    pendingResult: { data: MetaRecord[]; mapping?: Record<string, string>; columns: string[]; warnings?: Array<{ code: string; message: string; field?: string }>; discardedRows?: DiscardedRow[]; ignoredColumns?: string[] }
+    crossTableWarnings: Array<{ code: string; message: string; field?: string }>
+    idx: number
+  } | null>(null)
   // [primera-impresion] Confirmación al limpiar para no descartar trabajo por error.
   // [A1] El modal cubre 2 intents: "Limpiar" (botón corner) y "Reemplazar datos"
   // (banner re-entrada). Copy diferente según intent — el botón "Reemplazar" no
@@ -210,6 +239,9 @@ export default function UploadPage() {
       if (wizardDraft.warnings)       setWarningsMap(wizardDraft.warnings)
       if (wizardDraft.mapping)        setMappingMap(wizardDraft.mapping)
       if (typeof wizardDraft.currentStep === 'number') setCurrentStep(wizardDraft.currentStep)
+      // [1.6.2] Restaurar override de unidad de meta si fue elegido antes
+      // de la recarga. Evita re-preguntar al usuario.
+      if (wizardDraft.metaUnitOverride) setMetaUnitOverride(wizardDraft.metaUnitOverride)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [existingSales.length, existingMetas.length, existingInventory.length, wizardDraft])
@@ -246,9 +278,10 @@ export default function UploadPage() {
       files: Object.fromEntries(steps.filter((s) => s.file).map((s) => [s.id, s.file as File])),
       stepStatus: Object.fromEntries(steps.map((s) => [s.id, s.status])),
       currentStep,
+      metaUnitOverride, // [1.6.2] persiste la elección del modal
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [steps, currentStep, detectedCols, ignoredColumnsMap, discardedRowsMap, dateAmbiguityMap, warningsMap, mappingMap, existingSales.length])
+  }, [steps, currentStep, detectedCols, ignoredColumnsMap, discardedRowsMap, dateAmbiguityMap, warningsMap, mappingMap, existingSales.length, metaUnitOverride])
 
   type StorageFiles = {
     ventas:     { exists: boolean; name: string | null; updated_at: string | null }
@@ -393,6 +426,39 @@ export default function UploadPage() {
           updateStep(idx, { status: 'error', parseError: cv.blockingError })
           return
         }
+
+        // [1.6.2] Si el header es ambiguo y no hay override previo,
+        // pausar antes de marcar loaded — abrir modal de desambiguación.
+        // El header crudo viene del trace de mapping (canonical → raw).
+        const metaRawHeader = (r.mapping as Record<string, string> | undefined)?.['meta']
+        const ambigCheck = metaRawHeader
+          ? isAmbiguousMetaHeader([metaRawHeader])
+          : { ambiguous: false, matchedHeader: null }
+        if (ambigCheck.ambiguous && !metaUnitOverride) {
+          // Limbo: el modal decide. NO marcar loaded; NO commit a steps.
+          setMetaPrompt({
+            detectedHeader: ambigCheck.matchedHeader ?? metaRawHeader ?? '(sin nombre)',
+            pendingResult: {
+              data: r.data as MetaRecord[],
+              mapping: r.mapping as Record<string, string> | undefined,
+              columns: r.columns ?? [],
+              warnings: r.warnings,
+              discardedRows: r.discardedRows,
+              ignoredColumns: r.ignoredColumns,
+            },
+            crossTableWarnings: cv.warnings,
+            idx,
+          })
+          return
+        }
+
+        // Si hay override (caso reanudación de wizard), aplicarlo a los
+        // records ahora — el parser auto-detectó otra cosa. Re-mapea
+        // meta_uds/meta_usd y tipo_meta para que coincidan con la elección.
+        const finalData = metaUnitOverride
+          ? applyMetaUnitOverride(r.data as MetaRecord[], metaUnitOverride)
+          : (r.data as MetaRecord[])
+
         setDetectedCols(prev => ({ ...prev, [stepId]: r.columns }))
         if (r.discardedRows?.length) setDiscardedRowsMap(prev => ({ ...prev, [stepId]: r.discardedRows! }))
         if (r.ignoredColumns?.length) setIgnoredColumnsMap(prev => ({ ...prev, [stepId]: r.ignoredColumns! }))
@@ -400,7 +466,7 @@ export default function UploadPage() {
         // Cross-table warnings (no bloqueantes) se acumulan junto a warnings del parser
         const allWarnings = [...(r.warnings ?? []), ...cv.warnings]
         if (allWarnings.length) setWarningsMap(prev => ({ ...prev, [stepId]: allWarnings }))
-        updateStep(idx, { parsedData: r.data, status: 'loaded', parseError: undefined })
+        updateStep(idx, { parsedData: finalData, status: 'loaded', parseError: undefined })
       } else if (stepId === 'inventario') {
         const r = await parseInventoryFileInWorker(file, onProgress)
         if (parseErr(r)) { updateStep(idx, { status: 'error', parseError: r.error }); return }
@@ -1655,6 +1721,37 @@ export default function UploadPage() {
         onConfirmLeave={unsavedGuard.confirmLeave}
         onCancelLeave={unsavedGuard.cancelLeave}
       />
+
+      {metaPrompt && (
+        <MetaUnitPromptModal
+          detectedHeader={metaPrompt.detectedHeader}
+          onConfirm={(unit) => {
+            // Aplicar el override a los records pendientes y commitear el step.
+            const finalData = applyMetaUnitOverride(metaPrompt.pendingResult.data, unit)
+            const stepId = 'metas'
+            setMetaUnitOverride(unit)
+            setDetectedCols(prev => ({ ...prev, [stepId]: metaPrompt.pendingResult.columns }))
+            if (metaPrompt.pendingResult.discardedRows?.length) {
+              setDiscardedRowsMap(prev => ({ ...prev, [stepId]: metaPrompt.pendingResult.discardedRows! }))
+            }
+            if (metaPrompt.pendingResult.ignoredColumns?.length) {
+              setIgnoredColumnsMap(prev => ({ ...prev, [stepId]: metaPrompt.pendingResult.ignoredColumns! }))
+            }
+            if (metaPrompt.pendingResult.mapping) {
+              setMappingMap(prev => ({ ...prev, [stepId]: metaPrompt.pendingResult.mapping as Record<string, string> }))
+            }
+            const allWarnings = [...(metaPrompt.pendingResult.warnings ?? []), ...metaPrompt.crossTableWarnings]
+            if (allWarnings.length) setWarningsMap(prev => ({ ...prev, [stepId]: allWarnings }))
+            updateStep(metaPrompt.idx, { parsedData: finalData, status: 'loaded', parseError: undefined })
+            setMetaPrompt(null)
+          }}
+          onCancel={() => {
+            // Descartar: el archivo subido vuelve al estado pre-carga.
+            updateStep(metaPrompt.idx, { parsedData: undefined, status: 'pending', parseError: undefined, file: undefined })
+            setMetaPrompt(null)
+          }}
+        />
+      )}
     </div>
   )
 }

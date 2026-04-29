@@ -135,6 +135,9 @@ interface AppState {
     files?: Record<string, File>
     currentStep?: number
     stepStatus?: Record<string, 'pending' | 'loaded' | 'skipped' | 'error'>
+    // [1.6.2] Override del usuario tras modal de desambiguación de metas.
+    // Persiste en wizardCache para sobrevivir reload sin re-preguntar.
+    metaUnitOverride?: 'unidades' | 'venta_neta'
   }
 
   // Configuración
