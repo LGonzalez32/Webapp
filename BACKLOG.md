@@ -37,10 +37,12 @@ Sin deuda.
 ### tests/e2e/smoke.spec.ts — 2 tests en `fixme`
 - **`demo rotacion loads`** (Sprint 1.1): RotacionPage crashea por hooks
   llamados condicionalmente. Reactivar tras fix.
-- **`demo clientes has at least 3 tabs`** (Sprint 1.2): los tabs en
-  `src/pages/ClientesPage.tsx` (~L575) son `<button>` planos sin
-  `role="tab"`. Deuda de accesibilidad. Cuando se migre el tab strip a
-  un componente con `role="tablist"`/`role="tab"`, reactivar el test.
+- ~~**`demo clientes has at least 3 tabs`** (Sprint 1.2)~~ ✓ RESUELTO
+  en sprint-1.2: `src/pages/ClientesPage.tsx` ahora usa `role="tablist"`,
+  `role="tab"` con `aria-selected`/`aria-controls`, panel con
+  `role="tabpanel"`/`aria-labelledby` y navegación por teclado
+  ArrowLeft/Right/Home/End. El mismo componente sirve `/demo/clientes`
+  y `/clientes` (no se necesitó ticket 1.2.b).
 
 ## Sprint 0.5 — diagnóstico (sin fix)
 

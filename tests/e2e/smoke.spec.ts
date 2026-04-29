@@ -26,8 +26,7 @@ test.describe('smoke', () => {
     await expect(page.locator('h1, h2').first()).toBeVisible();
   });
 
-  test.fixme('demo clientes has at least 3 tabs', async ({ page }) => {
-    // Sprint 1.2: tabs en ClientesPage carecen de role="tab" (a11y deuda)
+  test('demo clientes has at least 3 tabs', async ({ page }) => {
     await page.goto('/demo/clientes');
     const tabs = page.getByRole('tab');
     await expect.poll(async () => await tabs.count(), { timeout: 8_000 }).toBeGreaterThanOrEqual(3);

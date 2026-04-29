@@ -4,6 +4,7 @@ import { useDemoPath } from '../lib/useDemoPath'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
 import { Users, ChevronUp, ChevronDown } from 'lucide-react'
+import { toast } from 'sonner'
 import type { ClienteDormido } from '../types'
 // callAI removed — analysis is now computed locally
 import AnalysisDrawer from '../components/ui/AnalysisDrawer'
@@ -11,13 +12,10 @@ import ClientePanel from '../components/cliente/ClientePanel'
 import { SFSelect } from '../components/ui/SFSelect'
 import { SFSearch } from '../components/ui/SFSearch'
 import {
-  DIAS_DORMIDO_DEFAULT,
   DIAS_DORMIDO_MIN,
   DIAS_DORMIDO_MAX,
-  LOCAL_STORAGE_KEY_DIAS_DORMIDO,
-  getDiasDormidoUsuario,
-  // R103: estas son constantes de configuración UI y una utilidad localStorage —
-  // no cálculos derivados de ventas. Importación directa de insightStandard es conforme a R103.
+  // R103: estas son constantes de configuración UI.
+  // Importación directa de insightStandard es conforme a R103.
 } from '../lib/insightStandard'
 import {
   getParetoClientes,
@@ -63,6 +61,7 @@ export default function ClientesPage() {
     selectedPeriod,
     dataAvailability,
     configuracion,
+    setConfiguracion,
     isProcessed,
     insights,
     categoriasInventario,
@@ -94,28 +93,30 @@ export default function ClientesPage() {
   const [paretoAnalysisMap, setParetoAnalysisMap] = useState<Record<string, { loading: boolean; text: string | null; content?: React.ReactNode }>>({})
   const [panelCliente, setPanelCliente] = useState<string | null>(null)
 
-  // ── Fase 5B: umbral días-dormido configurable por usuario ─────────────────────
-  const initialDormidoCfg = getDiasDormidoUsuario()
-  const [diasDormidoInput, setDiasDormidoInput] = useState<number>(initialDormidoCfg.valor)
-  const [diasDormidoCustom, setDiasDormidoCustom] = useState<boolean>(!initialDormidoCfg.esDefault)
+  // ── Umbral días-dormido: exploración temporal (fix-1.3) ──────────────────────
+  // Fuente de verdad global = configuracion.dias_dormido_threshold (store).
+  // Este input es exploración local; "Guardar como predeterminado" propaga al store.
+  const [diasDormidoInput, setDiasDormidoInput] = useState<number>(
+    configuracion.dias_dormido_threshold
+  )
+  // Sincronizar input cuando Configuración cambia externamente (ej. desde /configuracion)
+  useEffect(() => {
+    setDiasDormidoInput(configuracion.dias_dormido_threshold)
+  }, [configuracion.dias_dormido_threshold])
 
-  const persistDiasDormido = useCallback((valor: number) => {
-    const clamped = Math.max(DIAS_DORMIDO_MIN, Math.min(DIAS_DORMIDO_MAX, Math.round(valor)))
-    if (clamped === DIAS_DORMIDO_DEFAULT) {
-      localStorage.removeItem(LOCAL_STORAGE_KEY_DIAS_DORMIDO)
-      setDiasDormidoCustom(false)
-    } else {
-      localStorage.setItem(LOCAL_STORAGE_KEY_DIAS_DORMIDO, String(clamped))
-      setDiasDormidoCustom(true)
-    }
+  // true cuando el valor local difiere del global → muestra botón "Guardar"
+  const diasDormidoCustom = diasDormidoInput !== configuracion.dias_dormido_threshold
+
+  const clampDiasDormido = useCallback((valor: number) => {
+    return Math.max(DIAS_DORMIDO_MIN, Math.min(DIAS_DORMIDO_MAX, Math.round(valor)))
+  }, [])
+
+  const saveAsDefault = useCallback(() => {
+    const clamped = clampDiasDormido(diasDormidoInput)
+    setConfiguracion({ dias_dormido_threshold: clamped })
+    toast.success(`Umbral actualizado a ${clamped} días`)
     setDiasDormidoInput(clamped)
-  }, [])
-
-  const resetDiasDormido = useCallback(() => {
-    localStorage.removeItem(LOCAL_STORAGE_KEY_DIAS_DORMIDO)
-    setDiasDormidoInput(DIAS_DORMIDO_DEFAULT)
-    setDiasDormidoCustom(false)
-  }, [])
+  }, [diasDormidoInput, clampDiasDormido, setConfiguracion])
 
   // Hash-based scroll/focus: navegación desde cintillo de Estado Comercial.
   useEffect(() => {
@@ -336,11 +337,12 @@ export default function ClientesPage() {
   // R103: filtro UI — depende de estado local filterVendedor y searchQ
   const filtered = useMemo(() => {
     return clientesDormidos.filter(c => {
+      if ((c.dias_sin_actividad ?? 0) < diasDormidoInput) return false
       if (filterVendedor !== 'all' && c.vendedor !== filterVendedor) return false
       if (searchQ && !c.cliente.toLowerCase().includes(searchQ)) return false
       return true
     })
-  }, [clientesDormidos, filterVendedor, searchQ])
+  }, [clientesDormidos, diasDormidoInput, filterVendedor, searchQ])
 
   // R103: orden UI — sort por criterio seleccionado por usuario
   const sortedFull = useMemo(() => {
@@ -416,24 +418,36 @@ export default function ClientesPage() {
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-[var(--sf-t1)]">Clientes</h1>
-          <p style={{ fontSize: '12px', color: 'var(--sf-t5)', margin: '3px 0 0' }}>Clientes inactivos, pareto y señales tempranas de riesgo</p>
+          <p style={{ fontSize: '12px', color: 'var(--sf-t5)', margin: '3px 0 0' }}>Clientes inactivos, concentración de ventas y señales tempranas de riesgo</p>
         </div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          <span style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'rgba(226,75,74,0.15)', color: '#E24B4A', border: '1px solid rgba(226,75,74,0.25)' }}>
+          <span
+            style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'rgba(226,75,74,0.15)', color: '#E24B4A', border: '1px solid rgba(226,75,74,0.25)', cursor: 'help' }}
+            title={`Clientes sin comprar desde hace al menos ${configuracion.dias_dormido_threshold} días (umbral configurable).`}
+          >
             {clientesDormidos.length} inactivos
           </span>
-          <span style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'rgba(239,159,39,0.15)', color: '#EF9F27', border: '1px solid rgba(239,159,39,0.25)' }}>
+          <span
+            style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'rgba(239,159,39,0.15)', color: '#EF9F27', border: '1px solid rgba(239,159,39,0.25)', cursor: 'help' }}
+            title="Total de venta del año pasado en el mismo período aportada por clientes inactivos. Aproximación de lo que se pierde si no se recuperan."
+          >
             {moneda}{totalValorEnRiesgo >= 1000 ? `${(totalValorEnRiesgo / 1000).toFixed(1)}k` : totalValorEnRiesgo.toLocaleString(undefined, { maximumFractionDigits: 0 })} en riesgo
           </span>
-          <span style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'rgba(239,159,39,0.15)', color: '#EF9F27', border: '1px solid rgba(239,159,39,0.25)' }}>
+          <span
+            style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'rgba(239,159,39,0.15)', color: '#EF9F27', border: '1px solid rgba(239,159,39,0.25)', cursor: 'help' }}
+            title="Clientes activos cuya última compra excede su frecuencia habitual (más de 1.5× su frecuencia promedio): posibles dormidos próximos."
+          >
             {riesgoTemprano.length} riesgo temprano
           </span>
           {paretoClientes.length > 0 && (() => {
             const topPeso = paretoClientes[0].peso
             const isAlta = topPeso > 15
             return (
-              <span style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: isAlta ? 'rgba(226,75,74,0.15)' : 'rgba(239,159,39,0.15)', color: isAlta ? '#E24B4A' : '#EF9F27', border: `1px solid ${isAlta ? 'rgba(226,75,74,0.25)' : 'rgba(239,159,39,0.25)'}` }}>
-                {topPeso.toFixed(1)}% top cliente
+              <span
+                style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: isAlta ? 'rgba(226,75,74,0.15)' : 'rgba(239,159,39,0.15)', color: isAlta ? '#E24B4A' : '#EF9F27', border: `1px solid ${isAlta ? 'rgba(226,75,74,0.25)' : 'rgba(239,159,39,0.25)'}`, cursor: 'help' }}
+                title="Porcentaje del total de ventas que aporta el cliente más grande (peso del top 1 sobre el universo de clientes)."
+              >
+                {topPeso.toFixed(1)}% concentración cliente principal
               </span>
             )
           })()}
@@ -462,9 +476,13 @@ export default function ClientesPage() {
         )}
       </div>
 
-      {/* Fase 5B — Umbral días-dormido configurable (P6) */}
+      {/* Umbral días-dormido — exploración temporal (fix-1.3) */}
       <div className="flex flex-wrap items-center gap-2 mb-3 text-[13px]" style={{ color: 'var(--sf-t4)' }}>
-        <label htmlFor="dias-dormido-input" style={{ fontWeight: 500, color: 'var(--sf-t3)' }}>
+        <label
+          htmlFor="dias-dormido-input"
+          title="Cambio temporal solo para esta vista. Para cambiar permanente, usá Configuración."
+          style={{ fontWeight: 500, color: 'var(--sf-t3)', cursor: 'help', borderBottom: '1px dotted var(--sf-border)' }}
+        >
           Considerar dormido después de
         </label>
         <input
@@ -480,12 +498,9 @@ export default function ClientesPage() {
           }}
           onBlur={e => {
             const n = parseInt(e.target.value, 10)
-            if (Number.isNaN(n)) {
-              setDiasDormidoInput(DIAS_DORMIDO_DEFAULT)
-              persistDiasDormido(DIAS_DORMIDO_DEFAULT)
-            } else {
-              persistDiasDormido(n)
-            }
+            setDiasDormidoInput(Number.isNaN(n)
+              ? configuracion.dias_dormido_threshold
+              : clampDiasDormido(n))
           }}
           onKeyDown={e => {
             if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur()
@@ -494,7 +509,7 @@ export default function ClientesPage() {
             width: 68,
             padding: '4px 8px',
             borderRadius: 6,
-            border: '1px solid var(--sf-border)',
+            border: `1px solid ${diasDormidoCustom ? 'var(--sf-amber, #f59e0b)' : 'var(--sf-border)'}`,
             background: 'var(--sf-card)',
             color: 'var(--sf-t1)',
             fontSize: 13,
@@ -506,56 +521,109 @@ export default function ClientesPage() {
           · {clientesDormidos.filter(d => (d.dias_sin_actividad ?? 0) >= diasDormidoInput).length} clientes clasificados con este umbral
         </span>
         {diasDormidoCustom && (
-          <button
-            type="button"
-            onClick={resetDiasDormido}
-            style={{
-              marginLeft: 8,
-              padding: '3px 10px',
-              borderRadius: 6,
-              border: '1px solid var(--sf-border)',
-              background: 'transparent',
-              color: 'var(--sf-t4)',
-              fontSize: 12,
-              cursor: 'pointer',
-            }}
-          >
-            Restablecer ({DIAS_DORMIDO_DEFAULT} días)
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={saveAsDefault}
+              style={{
+                marginLeft: 4,
+                padding: '3px 10px',
+                borderRadius: 6,
+                border: '1px solid rgba(245,158,11,0.4)',
+                background: 'rgba(245,158,11,0.08)',
+                color: '#f59e0b',
+                fontSize: 12,
+                cursor: 'pointer',
+                fontWeight: 500,
+              }}
+            >
+              Guardar como predeterminado
+            </button>
+            <button
+              type="button"
+              onClick={() => setDiasDormidoInput(configuracion.dias_dormido_threshold)}
+              style={{
+                padding: '3px 8px',
+                borderRadius: 6,
+                border: '1px solid var(--sf-border)',
+                background: 'transparent',
+                color: 'var(--sf-t4)',
+                fontSize: 12,
+                cursor: 'pointer',
+              }}
+            >
+              ↩ restablecer
+            </button>
+          </>
         )}
       </div>
 
       {/* Tabs */}
       <div className="flex flex-wrap items-center gap-3">
-        <div style={{ display: 'inline-flex', background: 'var(--sf-inset)', borderRadius: '8px', padding: '3px', gap: '2px' }}>
+        <div
+          role="tablist"
+          aria-label="Vistas de clientes"
+          onKeyDown={(e) => {
+            const order = ['dormidos', 'pareto', 'riesgo'] as const
+            const idx = order.indexOf(tab)
+            let next: typeof order[number] | null = null
+            if (e.key === 'ArrowRight') next = order[(idx + 1) % order.length]
+            else if (e.key === 'ArrowLeft') next = order[(idx - 1 + order.length) % order.length]
+            else if (e.key === 'Home') next = order[0]
+            else if (e.key === 'End') next = order[order.length - 1]
+            if (next) {
+              e.preventDefault()
+              setTab(next)
+              ;(e.currentTarget.querySelector(`#tab-${next}`) as HTMLElement | null)?.focus()
+            }
+          }}
+          style={{ display: 'inline-flex', background: 'var(--sf-inset)', borderRadius: '8px', padding: '3px', gap: '2px' }}
+        >
           {([
-            { key: 'dormidos', label: `Inactivos (${clientesDormidos.length})` },
-            { key: 'pareto',   label: 'Top Clientes' },
-            { key: 'riesgo',   label: 'Riesgo Temprano' },
-          ] as const).map(({ key: t, label }) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              style={{
-                padding: '5px 14px',
-                borderRadius: '6px',
-                fontSize: '12px',
-                fontWeight: 500,
-                background: tab === t ? 'rgba(29,158,117,0.15)' : 'transparent',
-                color: tab === t ? '#1D9E75' : 'var(--sf-t3)',
-                border: tab === t ? '1px solid rgba(29,158,117,0.25)' : '1px solid transparent',
-                cursor: 'pointer',
-                transition: 'all 150ms',
-              }}
-            >
-              {label}
-            </button>
-          ))}
+            { key: 'dormidos', label: `Inactivos (${filtered.length})`, tip: `Clientes sin comprar desde hace al menos ${configuracion.dias_dormido_threshold} días (umbral configurable).` },
+            { key: 'pareto',   label: 'Mejores clientes', tip: 'Listado de clientes ordenados por venta acumulada — Pareto / concentración del negocio.' },
+            { key: 'riesgo',   label: 'Riesgo Temprano', tip: 'Clientes activos cuya última compra excede su frecuencia habitual (>1.5× su frecuencia promedio): posibles dormidos próximos.' },
+          ] as const).map(({ key: t, label, tip }) => {
+            const selected = tab === t
+            return (
+              <button
+                key={t}
+                id={`tab-${t}`}
+                role="tab"
+                type="button"
+                aria-selected={selected}
+                aria-controls={`panel-${t}`}
+                tabIndex={selected ? 0 : -1}
+                onClick={() => setTab(t)}
+                title={tip}
+                style={{
+                  padding: '5px 14px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  background: selected ? 'rgba(29,158,117,0.15)' : 'transparent',
+                  color: selected ? '#1D9E75' : 'var(--sf-t3)',
+                  border: selected ? '1px solid rgba(29,158,117,0.25)' : '1px solid transparent',
+                  cursor: 'pointer',
+                  transition: 'all 150ms',
+                }}
+              >
+                {label}
+              </button>
+            )
+          })}
         </div>
       </div>
 
       {/* Tab content — keyed div triggers fade-in on tab switch */}
-      <div key={tab} className="animate-in fade-in duration-150">
+      <div
+        key={tab}
+        id={`panel-${tab}`}
+        role="tabpanel"
+        aria-labelledby={`tab-${tab}`}
+        tabIndex={0}
+        className="animate-in fade-in duration-150"
+      >
 
       {/* Clientes dormidos table */}
       {tab === 'dormidos' && (
@@ -853,15 +921,27 @@ export default function ClientesPage() {
           {/* Legend */}
           {paretoClientes.length > 0 && (
             <div className="flex items-center gap-4 flex-wrap px-4 py-2 mb-1" style={{ fontSize: 10, color: 'var(--sf-t5)' }}>
-              <span className="flex items-center gap-1.5">
+              <span
+                className="flex items-center gap-1.5"
+                style={{ cursor: 'help' }}
+                title="Cliente posicionado dentro del primer 50% del volumen acumulado del negocio. Concentración baja en este tramo."
+              >
                 <span style={{ width: 8, height: 2, background: 'rgba(29,158,117,0.6)', display: 'inline-block', borderRadius: 1 }} />
                 ≤50% bajo riesgo
               </span>
-              <span className="flex items-center gap-1.5">
+              <span
+                className="flex items-center gap-1.5"
+                style={{ cursor: 'help' }}
+                title="Cliente posicionado entre el 50% y el 80% del volumen acumulado. Tramo intermedio de concentración."
+              >
                 <span style={{ width: 8, height: 2, background: 'rgba(239,159,39,0.6)', display: 'inline-block', borderRadius: 1 }} />
                 50-80% concentración media
               </span>
-              <span className="flex items-center gap-1.5">
+              <span
+                className="flex items-center gap-1.5"
+                style={{ cursor: 'help' }}
+                title="Cliente posicionado más allá del 80% del volumen acumulado: cola larga del Pareto."
+              >
                 <span style={{ width: 8, height: 2, background: 'rgba(226,75,74,0.6)', display: 'inline-block', borderRadius: 1 }} />
                 &gt;80% alta concentración
               </span>
@@ -879,14 +959,14 @@ export default function ClientesPage() {
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--sf-border)', background: 'var(--sf-inset)' }}>
                     {([
-                      ['Cliente', 'left'],
-                      ['Vendedor', 'left'],
-                      ['Unidades', 'right'],
-                      ['Venta Neta', 'right'],
-                      ['VAR% YoY', 'right'],
-                      ['Peso acum.', 'right'],
-                    ] as [string, string][]).map(([h, align], i) => (
-                      <th key={h} style={{
+                      ['Cliente', 'left', undefined],
+                      ['Vendedor', 'left', undefined],
+                      ['Unidades', 'right', undefined],
+                      ['Venta Neta', 'right', undefined],
+                      ['Variación', 'right', 'Variación de venta del cliente vs el mismo período del año anterior.'],
+                      ['Peso acum.', 'right', 'Porcentaje acumulado de ventas que representan los clientes hasta esta fila (orden descendente por venta).'],
+                    ] as [string, string, string | undefined][]).map(([h, align, tip], i) => (
+                      <th key={h} title={tip} style={{
                         padding: '10px 12px',
                         fontSize: '11px',
                         textTransform: 'uppercase',
@@ -896,6 +976,7 @@ export default function ClientesPage() {
                         textAlign: align as 'left' | 'right',
                         borderLeft: i === 0 ? '3px solid #1D9E75' : undefined,
                         paddingLeft: i === 0 ? '16px' : undefined,
+                        cursor: tip ? 'help' : undefined,
                       }}>{h}</th>
                     ))}
                     <th style={{ padding: '8px 16px', width: '120px', minWidth: '120px', textAlign: 'right' }} />
@@ -913,7 +994,11 @@ export default function ClientesPage() {
                         rows.push(
                           <tr key="div50">
                             <td colSpan={7} style={{ padding: '4px 12px', borderTop: '2px dashed rgba(29,158,117,0.35)' }}>
-                              <div className="flex items-center gap-2">
+                              <div
+                                className="flex items-center gap-2"
+                                style={{ cursor: 'help' }}
+                                title="Hasta esta fila, los clientes acumulan el 50% del volumen total del negocio. Marca el punto de Pareto."
+                              >
                                 <span style={{ fontSize: '10px', color: '#1D9E75', fontWeight: 600 }}>▲ 50% del volumen</span>
                                 <span style={{ fontSize: '9px', color: 'var(--sf-t5)' }}>— {idx + 1} clientes concentran la mitad</span>
                               </div>
@@ -926,7 +1011,11 @@ export default function ClientesPage() {
                         rows.push(
                           <tr key="div80">
                             <td colSpan={7} style={{ padding: '4px 12px', borderTop: '2px dashed rgba(239,159,39,0.35)' }}>
-                              <div className="flex items-center gap-2">
+                              <div
+                                className="flex items-center gap-2"
+                                style={{ cursor: 'help' }}
+                                title="Hasta esta fila, los clientes acumulan el 80% del volumen total. Aproximación de la regla 80/20."
+                              >
                                 <span style={{ fontSize: '10px', color: '#EF9F27', fontWeight: 600 }}>▲ 80% del volumen</span>
                                 <span style={{ fontSize: '9px', color: 'var(--sf-t5)' }}>— {idx + 1} de {paretoClientes.length} clientes</span>
                               </div>
