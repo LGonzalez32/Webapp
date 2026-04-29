@@ -3,6 +3,48 @@
 Items pendientes que **no se arreglan en el ticket que los descubre**.
 Se atacan en sprints futuros con tickets propios.
 
+## Sprint 3 — Features visibles
+
+### Rendimiento Anual — rediseño de filtros y toggle YTD/Mensual
+
+Decisiones de producto (congeladas en Sprint 2, pendientes de implementación):
+
+**Estado actual (post-Sprint 2):**
+- Página tiene dropdown propio de año (SFSelect en RendimientoPage:588).
+- Estado local `selectedYear` sincronizado con `selectedPeriod.year` del store (commit a58e4b06).
+- No tiene dropdowns de mes inicio/fin propios.
+- No tiene toggle YTD/Mensual.
+- Sigue el filtro mensual global de TopBar (Desde/Hasta) como cualquier otra página.
+
+**Estado objetivo (Sprint 3):**
+
+1. Página única que NO sigue el filtro mensual global. Rendimiento Anual ignora los dropdowns Desde/Hasta de TopBar y tiene su propio control.
+
+2. Control propio: dos dropdowns "Mes inicio" + "Mes fin" + toggle YTD/Mensual, todo dentro de la página (no en TopBar).
+
+3. Toggle YTD (default):
+   - Comportamiento como hoy + filtro mensual.
+   - Columnas con comparación YoY (mismo rango año anterior).
+   - Chart con dos líneas (actual + año anterior).
+   - Si rango incluye mes en curso: truncar al mismo día (regla CONTEXT.md).
+
+4. Toggle Mensual:
+   - Desde primer mes con datos hasta fechaRef (mes truncado a día de fechaRef).
+   - Columnas mensuales sin comparación YoY (solo venta del mes).
+   - Chart con UNA sola línea (actual, sin año anterior).
+   - Los dropdowns "Mes inicio" + "Mes fin" siguen activos pero ahora se interpretan como rango contiguo del año seleccionado.
+
+5. Estimación: 3-4 commits.
+   - Commit 3.1: lógica del toggle YTD/Mensual + estado en store o local (decidir al inicio del sprint).
+   - Commit 3.2: UI del toggle + dropdowns Mes inicio/Mes fin propios.
+   - Commit 3.3: lógica del chart de una línea en modo Mensual + columnas sin YoY.
+   - Commit 3.4: E2E del toggle y persistencia.
+
+**Decisiones pendientes para inicio de Sprint 3:**
+- ¿El estado del toggle vive en `appStore` (global, persistido) o local en RendimientoPage (no persistido)?
+- ¿El rango "Mes inicio + Mes fin" de Rendimiento Anual reusa el shape `selectedPeriod` con un override local, o tiene su propio slice del store?
+- ¿`formatPeriodLabel` necesita variant para "anual completo" (ej. "2025 completo") en modo Mensual sin rango?
+
 ## 🔒 Seguridad — Bloqueantes con fecha de vencimiento
 
 Ítems vivos detectados al cerrar bucket G del triage 1.4.5. NO son
