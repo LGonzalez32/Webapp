@@ -5,6 +5,7 @@ import {
   buildMonthlyRange,
   buildComparisonRangeYoY,
   truncateRangeToData,
+  formatPeriodLabel,
   type Range,
 } from '../../src/lib/periods'
 
@@ -271,5 +272,37 @@ describe('truncateRangeToData', () => {
     expect(r.start.getTime()).toBe(range.start.getTime())
     // end > fechaRef → trunca a endOfDay(fechaRef)
     expect(r.end.getTime()).toBe(new Date(2026, 3, 20, 23, 59, 59, 999).getTime())
+  })
+})
+
+// ─── Grupo 6: formatPeriodLabel ───────────────────────────────────
+
+describe('formatPeriodLabel', () => {
+  it('mes único formato largo: "Junio 2026"', () => {
+    expect(formatPeriodLabel(2026, 5, 5)).toBe('Junio 2026')
+  })
+
+  it('rango formato largo: "Mar–Jun 2026"', () => {
+    expect(formatPeriodLabel(2026, 2, 5)).toBe('Mar–Jun 2026')
+  })
+
+  it('rango formato short: "Mar–Jun \'26"', () => {
+    expect(formatPeriodLabel(2026, 2, 5, { short: true })).toBe("Mar–Jun '26")
+  })
+
+  it('inicio igual a fin equivale a mes único (ignora opts.short)', () => {
+    expect(formatPeriodLabel(2026, 3, 3)).toBe('Abril 2026')
+    expect(formatPeriodLabel(2026, 3, 3, { short: true })).toBe('Abril 2026')
+  })
+
+  it('monthStart > monthEnd lanza error', () => {
+    expect(() => formatPeriodLabel(2026, 5, 2)).toThrow(/monthEnd.*monthStart/)
+  })
+
+  it('mes inválido (-1, 12, NaN) lanza error', () => {
+    expect(() => formatPeriodLabel(2026, -1, 5)).toThrow(/monthStart fuera de rango/)
+    expect(() => formatPeriodLabel(2026, 0, 12)).toThrow(/monthEnd fuera de rango/)
+    expect(() => formatPeriodLabel(2026, NaN, 5)).toThrow(/monthStart fuera de rango/)
+    expect(() => formatPeriodLabel(2026, 0, NaN)).toThrow(/monthEnd fuera de rango/)
   })
 })

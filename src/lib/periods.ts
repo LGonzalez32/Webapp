@@ -198,6 +198,44 @@ export function buildComparisonRangeYoY(range: Range): Range {
  * Caso de uso: usuario pide rango que se extiende más allá de los datos disponibles.
  * Ej: usuario elige ene-may 2026 con fechaRef=20-abr-2026 → trunca a ene 1 - abr 20.
  */
+// ─── Primitiva 6: label legible de un rango mensual ───────────────
+
+const MESES_LARGO = [
+  'Enero','Febrero','Marzo','Abril','Mayo','Junio',
+  'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre',
+]
+const MESES_CORTO = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic']
+
+/**
+ * Formatea un rango mensual como label legible.
+ * - Mes único: "Junio 2026"
+ * - Rango: "Mar–Jun 2026" (guion corto U+2013)
+ * - opts.short=true en rango: "Mar–Jun '26"
+ *
+ * @throws Error si meses fuera de [0,11] o monthEnd < monthStart.
+ */
+export function formatPeriodLabel(
+  year: number,
+  monthStart: number,
+  monthEnd: number,
+  opts?: { short?: boolean },
+): string {
+  if (!isValidMonthIndex(monthStart)) {
+    throw new Error(`monthStart fuera de rango [0,11]: ${monthStart}`)
+  }
+  if (!isValidMonthIndex(monthEnd)) {
+    throw new Error(`monthEnd fuera de rango [0,11]: ${monthEnd}`)
+  }
+  if (monthEnd < monthStart) {
+    throw new Error(`monthEnd (${monthEnd}) < monthStart (${monthStart})`)
+  }
+  if (monthStart === monthEnd) {
+    return `${MESES_LARGO[monthStart]} ${year}`
+  }
+  const yearLabel = opts?.short ? `'${String(year).slice(-2)}` : String(year)
+  return `${MESES_CORTO[monthStart]}–${MESES_CORTO[monthEnd]} ${yearLabel}`
+}
+
 export function truncateRangeToData(range: Range, fechaRef: Date): Range {
   const endDay = startOfDay(range.end).getTime()
   const refDay = startOfDay(fechaRef).getTime()
