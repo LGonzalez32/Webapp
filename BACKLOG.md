@@ -55,7 +55,7 @@ Sin deuda.
   render donde la rama temprana se tome rompe React. Fix: mover el
   `useMemo` arriba del early-return.
 
-### B. Snapshots de insight-engine.golden.test.ts (Sprint 1.3)
+### ~~B. Snapshots de insight-engine.golden.test.ts (Sprint 1.3)~~ ✓ RESUELTO en sprint-1.3
 - **Archivos involucrados:**
   - Test: `src/lib/__tests__/insight-engine.golden.test.ts` (3 snapshots fallan)
   - Snapshots: `src/lib/__tests__/__snapshots__/insight-engine.golden.test.ts.snap`
