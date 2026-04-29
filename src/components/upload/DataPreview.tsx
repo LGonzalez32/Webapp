@@ -1,10 +1,17 @@
+import { getAllDateFieldKeys } from '../../lib/registry-ui'
+
 interface DataPreviewProps {
   data: any[];
   maxRows?: number;
 }
 
+// [Sprint C] Set de keys que llevan rol 'date' en cualquier tabla del registry.
+// Computado una vez en module load. Si agregás una columna fecha al registry
+// (ej. fecha_vencimiento en farmacéutica), DataPreview la formatea automáticamente.
+const DATE_FIELD_KEYS = new Set(getAllDateFieldKeys())
+
 function formatPreviewValue(key: string, value: any): string {
-  if (key === 'fecha' || key === 'date' || key === 'mes_periodo') {
+  if (DATE_FIELD_KEYS.has(key) || key === 'date' /* compat alias raw */) {
     // [B2] Bug fix: `new Date('2026-04-14')` parsea como UTC midnight y luego
     // toLocaleDateString aplica el offset local, mostrando el día anterior en
     // timezones negativos (ej. UTC-6 → 13/04/2026). Cuando el valor ya es Date

@@ -59,6 +59,10 @@ export default function FileDropzone({ step, onFileSelect, onSkip, isProcessing,
         return 'No pudimos interpretar las fechas';
       case 'ENCODING_ISSUE':
         return 'Problema de codificación de texto';
+      case 'META_DIM_NOT_IN_SALES':
+        return `Metas tiene dim que ventas no: ${pe.missingFromSales.join(', ')}`;
+      case 'SALES_NOT_LOADED':
+        return 'Subí primero el archivo de ventas';
       default:
         return 'No pudimos leer este archivo';
     }

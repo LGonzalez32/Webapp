@@ -6,8 +6,10 @@ import { useAppStore } from '../store/appStore'
 import { useOrgStore } from '../store/orgStore'
 import { getDemoData, DEMO_EMPRESA } from '../lib/demoData'
 import { parseSalesFileInWorker, parseMetasFileInWorker, parseInventoryFileInWorker } from '../lib/fileParser'
+import { getUiHeaders, getTemplateExampleRow, getTemplateHeaderRow, getPreviewExampleRow, getUserUploadTables, getInitialWizardSteps, getStepIdToTableIdMap } from '../lib/registry-ui'
 import { uploadOrgFile, getOrgStorageFiles, deleteOrgFiles } from '../lib/orgService'
 import { saveDatasets, clearDatasets } from '../lib/dataCache'
+import { findMetaDimsMissingFromSales, selectSalesForMetasValidation, evaluateAllRulesForTable, type CrossTableValidationIssue } from '../lib/uploadValidation'
 import LoadingOverlay from '../components/ui/LoadingOverlay'
 import StepIndicator from '../components/upload/StepIndicator'
 import FileDropzone from '../components/upload/FileDropzone'
@@ -22,96 +24,38 @@ function parseErr<T>(r: ParseResult<T>): r is { success: false; error: ParseErro
   return r.success === false
 }
 
-const INITIAL_STEPS: UploadStep[] = [
-  {
-    id: 'ventas',
-    label: 'Datos de Ventas',
-    description: 'Sube tu historial de ventas. Solo necesito tres cosas: la fecha, cuánto vendiste (en unidades ó en dólares) y algo para agrupar (vendedor, cliente, producto…).',
-    required: true,
-    status: 'pending',
-  },
-  {
-    id: 'metas',
-    label: 'Metas de Ventas',
-    description: 'Opcional. Sube tus metas por vendedor, cliente, producto o categoría. Con metas activas se habilita el semáforo de cumplimiento y proyecciones vs. objetivo.',
-    required: false,
-    status: 'pending',
-  },
-  {
-    id: 'inventario',
-    label: 'Inventario Actual',
-    description: 'Opcional. Conecta tu stock actual con tus ventas para detectar riesgos de ruptura antes de que ocurran.',
-    required: false,
-    status: 'pending',
-  },
-]
+// [Sprint D] INITIAL_STEPS deriva del registry. Cuando agregues una tabla
+// con isUserUpload=true, su paso aparece automáticamente acá. Sin cast: el
+// shape de getInitialWizardSteps() ya es UploadStep-compatible (id:string,
+// label, description, required, status:'pending').
+const INITIAL_STEPS: UploadStep[] = getInitialWizardSteps()
 
 // ── Datos de ejemplo por tipo de archivo ──────────────────────────────────────
+// [Sprint C] Headers y filas de ejemplo derivan del registry.
+// Cuando agregues una columna a TABLE_REGISTRY[id].fields, aparece automáticamente
+// acá y en la plantilla XLSX. Los step.id del wizard usan español ('ventas',
+// 'metas', 'inventario'); el registry usa inglés ('sales', 'metas', 'inventory').
+// Sprint D unificará los nombres.
 
-const VENTAS_HEADERS = [
-  { col: 'fecha',            req: true  },
-  { col: 'unidades',         req: false },
-  { col: 'venta_neta',       req: false },
-  { col: 'vendedor',         req: false },
-  { col: 'cliente',          req: false },
-  { col: 'producto',         req: false },
-  { col: 'categoria',        req: false },
-  { col: 'subcategoria',     req: false },
-  { col: 'canal',            req: false },
-  { col: 'departamento',     req: false },
-  { col: 'supervisor',       req: false },
-  { col: 'proveedor',        req: false },
-  { col: 'codigo_producto',  req: false },
-  { col: 'codigo_cliente',   req: false },
-  { col: 'costo_unitario',   req: false },
-]
-const VENTAS_ROWS = [
-  ['2026-03-01','24','142.80','ANA MARIA LOPEZ','SUPER SELECTOS S.A.','ACEITE CORONA 1L','ALIMENTOS','ACEITES','RUTEO','CENTRAL','CARLOS HERNANDEZ','SIGMA','ACE-001','CLI-0234','4.25'],
-  ['2026-03-01','15','89.25','CARLOS MENDOZA','COMERCIAL NORTE','DETERGENTE ARIEL 2KG','LIMPIEZA','DETERGENTES','MAYOREO','NORTE','MARIA SANTOS','P&G','DET-002','CLI-0891','3.80'],
-  ['2026-03-02','8','47.60','ANA MARIA LOPEZ','TIENDA LA UNION','ACEITE CORONA 1L','ALIMENTOS','ACEITES','RUTEO','CENTRAL','CARLOS HERNANDEZ','SIGMA','ACE-001','CLI-0156','4.25'],
-  ['2026-03-03','31','198.40','ROBERTO CHAVEZ','SUPER SELECTOS S.A.','SHAMPOO PANTENE 400ML','CUIDADO PERSONAL','SHAMPOO','MODERNO','SUR','PEDRO MOLINA','P&G','SHA-003','CLI-0234','5.20'],
-  ['2026-03-04','19','113.05','MARIA GONZALEZ','MERCADO CENTRAL','DETERGENTE ARIEL 2KG','LIMPIEZA','DETERGENTES','RUTEO','CENTRAL','CARLOS HERNANDEZ','P&G','DET-002','CLI-0445','3.80'],
-  ['2026-03-05','42','249.90','CARLOS MENDOZA','COMERCIAL NORTE','ACEITE CORONA 1L','ALIMENTOS','ACEITES','MAYOREO','NORTE','MARIA SANTOS','SIGMA','ACE-001','CLI-0891','4.25'],
-  ['2026-03-06','7','44.80','ROBERTO CHAVEZ','TIENDA EL SOL','SHAMPOO PANTENE 400ML','CUIDADO PERSONAL','SHAMPOO','RUTEO','SUR','PEDRO MOLINA','P&G','SHA-003','CLI-0778','5.20'],
-]
+// [Sprint D] STEP_TO_TABLE_ID deriva del registry. El tipo es Record<string, TableId>
+// para que agregar una tabla nueva con wizardStepId='precios' no requiera
+// tocar este archivo. Las llamadas downstream que esperan 'sales'|'metas'|'inventory'
+// reciben el TableId real.
+const STEP_TO_TABLE_ID = getStepIdToTableIdMap()
 
-const METAS_HEADERS = [
-  { col: 'mes_periodo',  req: true  },
-  { col: 'meta',         req: true  },
-  { col: 'vendedor',     req: false },
-  { col: 'cliente',      req: false },
-  { col: 'producto',     req: false },
-  { col: 'categoria',    req: false },
-  { col: 'subcategoria', req: false },
-  { col: 'canal',        req: false },
-  { col: 'departamento', req: false },
-  { col: 'supervisor',   req: false },
-]
-const METAS_ROWS = [
-  ['2026-03','ANA MARIA LOPEZ','800','RUTEO'],
-  ['2026-03','CARLOS MENDOZA','1200','MAYOREO'],
-  ['2026-03','ROBERTO CHAVEZ','950','MODERNO'],
-  ['2026-03','MARIA GONZALEZ','750','RUTEO'],
-  ['2026-04','ANA MARIA LOPEZ','850','RUTEO'],
-  ['2026-04','CARLOS MENDOZA','1250','MAYOREO'],
-]
+function headersForStep(stepId: string) {
+  const tableId = STEP_TO_TABLE_ID[stepId]
+  if (!tableId) return []
+  // Context 'preview': muestra alternativas (ej. mes/anio) además del canónico.
+  return getUiHeaders(tableId, 'preview').map(h => ({ col: h.col, req: h.req }))
+}
 
-const INVENTARIO_HEADERS = [
-  { col: 'producto',         req: true  },
-  { col: 'unidades',         req: true  },
-  { col: 'categoria',        req: false },
-  { col: 'subcategoria',     req: false },
-  { col: 'proveedor',        req: false },
-  { col: 'codigo_producto',  req: false },
-]
-const INVENTARIO_ROWS = [
-  ['ACEITE CORONA 1L','145','ALIMENTOS','SIGMA'],
-  ['DETERGENTE ARIEL 2KG','89','LIMPIEZA','P&G'],
-  ['SHAMPOO PANTENE 400ML','234','CUIDADO PERSONAL','P&G'],
-  ['JABON PALMOLIVE 3PK','67','CUIDADO PERSONAL','COLGATE'],
-  ['ACEITE MAZOLA 900ML','43','ALIMENTOS','CJ'],
-  ['SUAVITEL 850ML','156','LIMPIEZA','COLGATE'],
-]
+function exampleRowsForStep(stepId: string): string[][] {
+  const tableId = STEP_TO_TABLE_ID[stepId]
+  if (!tableId) return []
+  // 1 fila de ejemplo desde fields[].example, alineada con headersForStep.
+  return [getPreviewExampleRow(tableId).map(v => v == null ? '' : String(v))]
+}
 
 // ── Tabla de ejemplo (usada dentro del DataGuide colapsable) ─────────────────
 function TablaEjemplo({ headers, rows }: { headers: { col: string; req: boolean }[]; rows: string[][] }) {
@@ -337,6 +281,71 @@ export default function UploadPage() {
       setParseDetail(detail)
     }
 
+    // Helper: corre las cross-table rules declaradas en TABLE_REGISTRY[tableId].relations.
+    // Lee snapshot desde wizard draft (con prioridad) y store como fallback.
+    // Errores → parseError bloqueante. Warnings → se acumulan para mostrar.
+    const runCrossTableRules = (tableId: 'sales' | 'metas' | 'inventory', parsedData: unknown[]): {
+      blockingError: ParseError | null
+      warnings: Array<{ code: string; message: string }>
+    } => {
+      const findStepData = (stepName: string): unknown[] => {
+        const s = steps.find(x => x.id === stepName)
+        return (s?.parsedData as unknown[] | undefined) ?? []
+      }
+      // Wizard draft tiene prioridad; store solo si wizard vacío.
+      const salesWizard = stepId === 'sales' ? parsedData : findStepData('ventas')
+      const metasWizard = stepId === 'metas' ? parsedData : findStepData('metas')
+      const inventoryWizard = stepId === 'inventory' ? parsedData : findStepData('inventario')
+      const dataByTable = {
+        sales:     selectSalesForMetasValidation(
+          salesWizard as Array<Record<string, unknown>>,
+          existingSales as unknown as Array<Record<string, unknown>>,
+        ),
+        metas:     metasWizard.length > 0 ? metasWizard : (existingMetas as unknown as Array<Record<string, unknown>>),
+        inventory: inventoryWizard.length > 0 ? inventoryWizard : (existingInventory as unknown as Array<Record<string, unknown>>),
+      } as Parameters<typeof evaluateAllRulesForTable>[1]
+
+      const issues = evaluateAllRulesForTable(tableId, dataByTable)
+      const errors = issues.filter((i: CrossTableValidationIssue) => i.severity === 'error')
+      const warnings = issues
+        .filter((i: CrossTableValidationIssue) => i.severity === 'warning')
+        .map((i: CrossTableValidationIssue) => ({ code: i.code, message: i.message }))
+
+      // Solo el primer error se reporta como parseError bloqueante (UI no acumula).
+      // Para metas mantenemos compat con códigos legacy específicos.
+      if (errors.length > 0) {
+        const first = errors[0]
+        // Custom rules no tienen sourceTable/targetTable; solo dispatch built-ins.
+        if (first.rule.type !== 'custom') {
+          if (first.code === 'CROSS_TABLE_TARGET_NOT_LOADED' && first.rule.targetTable === 'sales') {
+            return {
+              blockingError: {
+                code: 'SALES_NOT_LOADED',
+                message: 'Subí primero el archivo de ventas — esta tabla se valida contra las dimensiones presentes en ventas.',
+              },
+              warnings,
+            }
+          }
+          if (first.code === 'CROSS_TABLE_DIM_MISSING' && first.rule.type === 'dim_consistency' && first.rule.sourceTable === 'metas') {
+            const missing = (first.details?.missingFromTarget as string[] | undefined) ?? []
+            return {
+              blockingError: {
+                code: 'META_DIM_NOT_IN_SALES',
+                missingFromSales: missing,
+                message: first.message,
+              },
+              warnings,
+            }
+          }
+        }
+        return {
+          blockingError: { code: 'UNKNOWN', message: first.message },
+          warnings,
+        }
+      }
+      return { blockingError: null, warnings }
+    }
+
     try {
       if (stepId === 'ventas') {
         const r = await parseSalesFileInWorker(file, onProgress)
@@ -351,19 +360,51 @@ export default function UploadPage() {
       } else if (stepId === 'metas') {
         const r = await parseMetasFileInWorker(file, onProgress)
         if (parseErr(r)) { updateStep(idx, { status: 'error', parseError: r.error }); return }
+        // [Issue #2 fix] Cross-table validation vía dispatcher genérico.
+        // Activa la regla declarada en TABLE_REGISTRY.metas.relations
+        // (dim_consistency vs sales con requireTargetLoaded).
+        const cv = runCrossTableRules('metas', r.data as unknown[])
+        if (cv.blockingError) {
+          updateStep(idx, { status: 'error', parseError: cv.blockingError })
+          return
+        }
         setDetectedCols(prev => ({ ...prev, [stepId]: r.columns }))
         if (r.discardedRows?.length) setDiscardedRowsMap(prev => ({ ...prev, [stepId]: r.discardedRows! }))
         if (r.ignoredColumns?.length) setIgnoredColumnsMap(prev => ({ ...prev, [stepId]: r.ignoredColumns! }))
         if (r.mapping) setMappingMap(prev => ({ ...prev, [stepId]: r.mapping as Record<string, string> }))
+        // Cross-table warnings (no bloqueantes) se acumulan junto a warnings del parser
+        const allWarnings = [...(r.warnings ?? []), ...cv.warnings]
+        if (allWarnings.length) setWarningsMap(prev => ({ ...prev, [stepId]: allWarnings }))
         updateStep(idx, { parsedData: r.data, status: 'loaded', parseError: undefined })
-      } else {
+      } else if (stepId === 'inventario') {
         const r = await parseInventoryFileInWorker(file, onProgress)
         if (parseErr(r)) { updateStep(idx, { status: 'error', parseError: r.error }); return }
+        // [Issue #2 fix] Cross-table validation activa la regla declarada en
+        // TABLE_REGISTRY.inventory.relations (membership inv.producto ⊆ sales.producto).
+        // Productos huérfanos se reportan como warnings.
+        const cv = runCrossTableRules('inventory', r.data as unknown[])
+        if (cv.blockingError) {
+          updateStep(idx, { status: 'error', parseError: cv.blockingError })
+          return
+        }
         setDetectedCols(prev => ({ ...prev, [stepId]: r.columns }))
         if (r.discardedRows?.length) setDiscardedRowsMap(prev => ({ ...prev, [stepId]: r.discardedRows! }))
         if (r.ignoredColumns?.length) setIgnoredColumnsMap(prev => ({ ...prev, [stepId]: r.ignoredColumns! }))
         if (r.mapping) setMappingMap(prev => ({ ...prev, [stepId]: r.mapping as Record<string, string> }))
+        const allWarnings = [...(r.warnings ?? []), ...cv.warnings]
+        if (allWarnings.length) setWarningsMap(prev => ({ ...prev, [stepId]: allWarnings }))
         updateStep(idx, { parsedData: r.data, status: 'loaded', parseError: undefined })
+      } else {
+        // Step desconocido — fallar explícito en lugar de fallback silencioso.
+        // Si en el futuro se agrega una tabla nueva al registry, agregar branch.
+        updateStep(idx, {
+          status: 'error',
+          parseError: {
+            code: 'UNKNOWN',
+            message: `Tipo de paso no soportado: '${stepId}'. Solo ventas, metas e inventario.`,
+          },
+        })
+        return
       }
       // [GAP-MAPEO-MANUAL] Mapeo manual de columnas no reconocidas: nice-to-have
       // separado. Hoy `ignoredColumns` es read-only.
@@ -461,18 +502,15 @@ export default function UploadPage() {
     const salesData = steps[0].parsedData as any[] | undefined
     if (!invData?.length || !salesData?.length) return null
 
+    // [schema-cleanup] codigo_producto eliminado del schema; solo cruzamos por nombre.
     const productosVentas = new Set(salesData.map((s) => s.producto).filter(Boolean))
-    const codigosVentas   = new Set(salesData.map((s) => s.codigo_producto).filter(Boolean))
 
     const productosOrfanos = new Set<string>()
-    const codigosOrfanos   = new Set<string>()
     for (const it of invData) {
       if (it.producto && !productosVentas.has(it.producto)) productosOrfanos.add(it.producto)
-      if (it.codigo_producto && !codigosVentas.has(it.codigo_producto)) codigosOrfanos.add(it.codigo_producto)
     }
     const result: Array<{ dimension: string; count: number; examples: string[] }> = []
     if (productosOrfanos.size > 0) result.push({ dimension: 'producto', count: productosOrfanos.size, examples: Array.from(productosOrfanos).slice(0, 3) })
-    if (codigosOrfanos.size > 0)   result.push({ dimension: 'codigo_producto', count: codigosOrfanos.size, examples: Array.from(codigosOrfanos).slice(0, 3) })
     return result.length > 0 ? result : null
   }, [steps[0].parsedData, steps[2].parsedData])
 
@@ -637,58 +675,20 @@ export default function UploadPage() {
   }
 
   const downloadTemplate = () => {
+    // [Sprint C] Plantilla XLSX deriva del registry: cada tabla user-upload
+    // produce su sheet con headers + 1 fila de ejemplo desde fields[].example.
+    // Agregar una columna nueva al registry → aparece automáticamente acá.
     const wb = XLSX.utils.book_new()
-
-    XLSX.utils.book_append_sheet(
-      wb,
-      XLSX.utils.aoa_to_sheet([
-        ['fecha', 'vendedor', 'unidades', 'cliente', 'producto', 'venta_neta', 'canal', 'categoria', 'departamento', 'supervisor'],
-        ['2025-01-15', 'María Castillo',   120, 'Supermercado López',      'Agua Pura 500ml',       180.00, 'Mayoreo',         'Refrescos',        'San Salvador',  'Patricia Ruiz'],
-        ['2025-01-15', 'María Castillo',    85, 'Tienda La Esperanza',     'Detergente 1kg',        255.00, 'Mostrador',       'Limpieza',         'La Libertad',   'Patricia Ruiz'],
-        ['2025-01-16', 'Carlos Ramírez',   200, 'Abarrotería El Sol',      'Aceite 750ml',          500.00, 'Mayoreo',         'Abarrotes',        'Sonsonate',     'Roberto Méndez'],
-        ['2025-01-16', 'Carlos Ramírez',    45, 'Mini Super Doña Ana',     'Jabón Protex 3pk',      135.00, 'Visita directa',  'Higiene',          'Sonsonate',     'Roberto Méndez'],
-        ['2025-01-17', 'Laura Hernández',  150, 'Despensa Familiar',       'Arroz 2kg',             225.00, 'Mayoreo',         'Abarrotes',        'Santa Ana',     'Patricia Ruiz'],
-        ['2025-01-17', 'Laura Hernández',   60, 'Tienda Don Pedro',        'Agua Pura 500ml',        90.00, 'Mostrador',       'Refrescos',        'Santa Ana',     'Patricia Ruiz'],
-        ['2025-01-18', 'Jorge Martínez',    90, 'Supermercado López',      'Detergente 1kg',        270.00, 'Mayoreo',         'Limpieza',         'San Salvador',  'Roberto Méndez'],
-        ['2025-01-18', 'Jorge Martínez',    35, 'Farmacia San Martín',     'Shampoo Familiar 1L',   175.00, 'Visita directa',  'Higiene',          'San Miguel',    'Roberto Méndez'],
-        ['2025-01-19', 'Ana Morales',       75, 'Tiendas Económicas',      'Aceite 750ml',          187.50, 'Teléfono',        'Abarrotes',        'La Libertad',   'Patricia Ruiz'],
-        ['2025-01-19', 'Ana Morales',      110, 'Despensa Familiar',       'Arroz 2kg',             165.00, 'Mayoreo',         'Abarrotes',        'Santa Ana',     'Patricia Ruiz'],
-        ['2025-01-20', 'María Castillo',    95, 'Comercial Central',   'Jabón Protex 3pk',      285.00, 'Mayoreo',         'Higiene',          'San Salvador',  'Patricia Ruiz'],
-        ['2025-01-20', 'Carlos Ramírez',    55, 'Tienda La Esperanza',     'Shampoo Familiar 1L',   275.00, 'Mostrador',       'Higiene',          'La Libertad',   'Roberto Méndez'],
-        ['2025-01-21', 'Laura Hernández',  180, 'Abarrotería El Sol',      'Agua Pura 500ml',       270.00, 'Mayoreo',         'Refrescos',        'Sonsonate',     'Patricia Ruiz'],
-        ['2025-01-21', 'Jorge Martínez',    40, 'Mini Super Doña Ana',     'Arroz 2kg',              60.00, 'Visita directa',  'Abarrotes',        'Sonsonate',     'Roberto Méndez'],
-        ['2025-01-22', 'Ana Morales',       65, 'Farmacia San Martín',     'Detergente 1kg',        195.00, 'Visita directa',  'Limpieza',         'San Miguel',    'Patricia Ruiz'],
-      ]),
-      'Ventas'
-    )
-
-    XLSX.utils.book_append_sheet(
-      wb,
-      XLSX.utils.aoa_to_sheet([
-        ['mes_periodo', 'vendedor', 'meta', 'canal'],
-        ['2025-01', 'María Castillo',   800, 'Mayoreo'],
-        ['2025-01', 'Carlos Ramírez',  1200, 'Mayoreo'],
-        ['2025-01', 'Laura Hernández',  950, 'Mayoreo'],
-        ['2025-01', 'Jorge Martínez',   750, 'Mayoreo'],
-        ['2025-01', 'Ana Morales',      700, 'Teléfono'],
-      ]),
-      'Metas'
-    )
-
-    XLSX.utils.book_append_sheet(
-      wb,
-      XLSX.utils.aoa_to_sheet([
-        ['producto', 'unidades', 'categoria', 'proveedor'],
-        ['Agua Pura 500ml',       320, 'Refrescos',  'La Constancia'],
-        ['Detergente 1kg',        145, 'Limpieza',   'Henkel'],
-        ['Aceite 750ml',          210, 'Abarrotes',  'Unilever'],
-        ['Arroz 2kg',             180, 'Abarrotes',  'Arrocera San Francisco'],
-        ['Jabón Protex 3pk',       95, 'Higiene',    'Colgate-Palmolive'],
-        ['Shampoo Familiar 1L',   120, 'Higiene',    'P&G'],
-      ]),
-      'Inventario'
-    )
-
+    const userTables = getUserUploadTables()
+    for (const { id, def } of userTables) {
+      const headers = getTemplateHeaderRow(id)
+      const exampleRow = getTemplateExampleRow(id)
+      XLSX.utils.book_append_sheet(
+        wb,
+        XLSX.utils.aoa_to_sheet([headers, exampleRow]),
+        def.templateSheetName,
+      )
+    }
     XLSX.writeFile(wb, 'plantilla-salesflow.xlsx')
   }
 
@@ -1016,8 +1016,6 @@ export default function UploadPage() {
                   'departamento',
                   'supervisor',
                   'proveedor',
-                  'codigo_producto',
-                  'codigo_cliente',
                   'costo_unitario',
                 ],
               },
@@ -1044,19 +1042,27 @@ export default function UploadPage() {
                 title: 'Dimensiones',
                 tag: 'Al menos una',
                 copy: 'Define si la meta aplica a vendedor, cliente, producto o categoría.',
-                chips: ['vendedor', 'cliente', 'producto', 'categoria', 'subcategoria', 'canal', 'departamento', 'supervisor'],
+                chips: ['vendedor', 'cliente', 'producto', 'categoria', 'subcategoria', 'canal', 'departamento', 'supervisor', 'proveedor'],
               },
             ] : [
               {
                 number: 1,
                 tone: 'amber',
-                title: 'Producto',
+                title: 'Fecha de corte',
                 tag: 'Requerido',
-                copy: 'El producto o código que conecta inventario con ventas.',
-                chips: ['producto'],
+                copy: 'El dia del snapshot de inventario.',
+                chips: ['fecha'],
               },
               {
                 number: 2,
+                tone: 'amber',
+                title: 'Producto',
+                tag: 'Requerido',
+                copy: 'El producto que conecta inventario con ventas.',
+                chips: ['producto'],
+              },
+              {
+                number: 3,
                 tone: 'amber',
                 title: 'Unidades en stock',
                 tag: 'Requerido',
@@ -1064,12 +1070,12 @@ export default function UploadPage() {
                 chips: ['unidades'],
               },
               {
-                number: 3,
+                number: 4,
                 tone: 'neutral',
-                title: 'Clasificación',
-                tag: 'Opcional',
-                copy: 'Categoría, proveedor o código ayudan a segmentar el riesgo.',
-                chips: ['categoria', 'subcategoria', 'proveedor', 'codigo_producto'],
+                title: 'Clasificacion',
+                tag: 'Al menos una',
+                copy: 'Categoria, subcategoria o proveedor ayudan a segmentar el riesgo.',
+                chips: ['categoria', 'subcategoria', 'proveedor'],
               },
             ]).map((item, index, arr) => (
               <div key={item.title} className="relative grid grid-cols-[2rem_minmax(0,1fr)] gap-4">
@@ -1126,8 +1132,8 @@ export default function UploadPage() {
             </button>
           </div>
           <TablaEjemplo
-            headers={step.id === 'ventas' ? VENTAS_HEADERS : step.id === 'metas' ? METAS_HEADERS : INVENTARIO_HEADERS}
-            rows={step.id === 'ventas' ? VENTAS_ROWS : step.id === 'metas' ? METAS_ROWS : INVENTARIO_ROWS}
+            headers={headersForStep(step.id)}
+            rows={exampleRowsForStep(step.id)}
           />
         </section>
 
@@ -1406,7 +1412,7 @@ export default function UploadPage() {
             <div className="space-y-1">
               {inventarioOrfano.map((o) => (
                 <p key={o.dimension} className="text-xs text-[var(--sf-t3)] leading-relaxed">
-                  <span className="font-medium text-[var(--sf-t2)]">{o.count} {o.dimension === 'codigo_producto' ? 'código' : 'producto'}{o.count === 1 ? '' : 's'}</span>
+                  <span className="font-medium text-[var(--sf-t2)]">{o.count} producto{o.count === 1 ? '' : 's'}</span>
                   {' '}sin ventas: <span className="font-mono text-[var(--sf-t3)]">{o.examples.join(', ')}{o.count > o.examples.length ? '…' : ''}</span>
                 </p>
               ))}
