@@ -154,12 +154,19 @@ function CategoriasContent({ categorias, moneda }: { categorias: Array<{ nombre:
 }
 
 function InventarioContent({ data }: { data: PulsoPanelData }) {
-  const { sales, clientesDormidos, categoriaAnalysis, categoriasInventario } = useAppStore()
+  const { sales, clientesDormidos, categoriaAnalysis, categoriasInventario, fechaRefISO } = useAppStore()
+  const fechaRef = useMemo(
+    () => fechaRefISO ? new Date(fechaRefISO) : new Date(),
+    [fechaRefISO]
+  )
   const stock = data.stock ?? 0
   const dias = data.diasInventario ?? 0
   const promedio = data.promedioMensual ?? 0
 
-  const quiebreDate = new Date(); quiebreDate.setDate(quiebreDate.getDate() + dias)
+  // BUG-FIX (Ticket 2.0.1): proyección anclada a fechaRef del store, no al browser.
+  // Si datos llegan al 20-abr y browser está en 29-abr, la proyección de quiebre
+  // debe partir del 20-abr (último dato real), no del 29-abr.
+  const quiebreDate = new Date(fechaRef.getTime()); quiebreDate.setDate(quiebreDate.getDate() + dias)
   const meses = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre']
   const barPct = Math.min(dias / 30 * 100, 100)
 
@@ -489,7 +496,11 @@ function ZonaSupervisorContent({ data }: { data: PulsoPanelData }) {
 }
 
 function OportunidadContent({ data }: { data: PulsoPanelData }) {
-  const { sales, clientesDormidos, categoriaAnalysis, categoriasInventario, vendorAnalysis } = useAppStore()
+  const { sales, clientesDormidos, categoriaAnalysis, categoriasInventario, vendorAnalysis, fechaRefISO } = useAppStore()
+  const fechaRef = useMemo(
+    () => fechaRefISO ? new Date(fechaRefISO) : new Date(),
+    [fechaRefISO]
+  )
 
   const cross = useMemo(() => {
     if (!data.cliente || !data.producto) return null
@@ -502,7 +513,10 @@ function OportunidadContent({ data }: { data: PulsoPanelData }) {
     const ultimaCompra = comprasProducto.length > 0
       ? comprasProducto.sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime())[0]
       : null
-    const diasDesdeUltimaCompra = ultimaCompra ? Math.floor((Date.now() - new Date(ultimaCompra.fecha).getTime()) / 86400000) : null
+    // BUG-FIX (Ticket 2.0.1): "días sin comprar" anclado a fechaRef del store, no al browser.
+    // Evita inflar la heurística "cliente dormido" cuando datos < hoy del browser.
+    // Math.max(0, ...) defensivo por si ultimaCompra > fechaRef (no debería pasar).
+    const diasDesdeUltimaCompra = ultimaCompra ? Math.max(0, Math.floor((fechaRef.getTime() - new Date(ultimaCompra.fecha).getTime()) / 86400000)) : null
 
     const invItem = categoriasInventario.find(i => i.producto === data.producto)
     const categoria = invItem?.categoria
@@ -522,7 +536,7 @@ function OportunidadContent({ data }: { data: PulsoPanelData }) {
     const pctProducto = totalHistCliente > 0 ? Math.round((totalUdsHist / totalHistCliente) * 100) : 0
 
     return { promedioMensual, mesesActivos: mesesSet.size, diasDesdeUltimaCompra, categoria, clasificacion, catInfo, vendInfo, metaPct, gapMeta, dormidoInfo, otrosDormidos, pctProducto }
-  }, [sales, clientesDormidos, categoriaAnalysis, categoriasInventario, vendorAnalysis, data.cliente, data.producto])
+  }, [sales, clientesDormidos, categoriaAnalysis, categoriasInventario, vendorAnalysis, data.cliente, data.producto, fechaRef])
 
   const señales: string[] = []
   if (cross) {
