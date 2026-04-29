@@ -567,9 +567,14 @@ function computeClientesDormidos(
   selectedPeriod: { year: number; month: number },
   byClient?: Map<string, SaleRecord[]>,
 ): ClienteDormido[] {
-  const today = sales.length > 0
-    ? sales.reduce((max, s) => { const d = s.fecha; return d > max ? d : max }, new Date(0))
-    : new Date()
+  // BUG-FIX (Ticket 2.2-A): si no hay sales, retornar lista vacía en vez de
+  // inventar "hoy" desde el browser. La función no tiene base para calcular
+  // "días sin comprar" sin datos.
+  if (sales.length === 0) return []
+  const today = sales.reduce(
+    (max, s) => { const d = s.fecha; return d > max ? d : max },
+    new Date(0),
+  )
 
   const clientMap = byClient ?? (() => {
     const m = new Map<string, SaleRecord[]>()
@@ -750,7 +755,29 @@ export function computeCommercialAnalysis(
   const { year, month } = selectedPeriod
 
   const idx = index ?? buildSaleIndex(sales)
-  const fechaReferencia = idx.fechaReferencia.getTime() > 0 ? idx.fechaReferencia : new Date()
+
+  // BUG-FIX (Ticket 2.2-A): si idx.fechaReferencia es epoch sentinel (sales vacío),
+  // retornar resultado vacío en vez de calcular contra "hoy" del browser.
+  if (idx.fechaReferencia.getTime() === 0) {
+    return {
+      vendorAnalysis: [],
+      teamStats: {
+        total_ventas: 0,
+        total_unidades: 0,
+        variacion_pct: null,
+        mejor_vendedor: '',
+        clientes_dormidos_count: 0,
+        productos_sin_movimiento_count: 0,
+        riesgos_concentracion_count: 0,
+        dias_transcurridos: 0,
+        dias_totales: 0,
+        dias_restantes: 0,
+      },
+      clientesDormidos: [],
+      concentracionRiesgo: [],
+    }
+  }
+  const fechaReferencia = idx.fechaReferencia
 
   // Determinar si el período seleccionado es el mes con la última fecha de datos
   const isCurrentMonth =
@@ -1545,6 +1572,9 @@ export function buildAggregatedSummaries(
   for (const s of sales) {
     if (s.fecha > fechaRef) fechaRef = s.fecha
   }
+  // NOTA (Ticket 2.2-A): este fallback queda intencionalmente para pantallas
+  // que esperan SIEMPRE un fechaRef. Las funciones internas (computeClientesDormidos,
+  // computeCommercialAnalysis) ya no inventan "hoy"; retornan vacío.
   if (fechaRef.getTime() === 0) fechaRef = new Date()
   const refMonth = fechaRef.getMonth()
   const refDay = fechaRef.getDate()
