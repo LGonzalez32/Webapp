@@ -41,3 +41,34 @@ Sin deuda.
   `src/pages/ClientesPage.tsx` (~L575) son `<button>` planos sin
   `role="tab"`. Deuda de accesibilidad. Cuando se migre el tab strip a
   un componente con `role="tablist"`/`role="tab"`, reactivar el test.
+
+## Sprint 0.5 — diagnóstico (sin fix)
+
+### A. Bug de hooks en /rotacion (Sprint 1.1)
+- **Archivo:** `src/pages/RotacionPage.tsx:462`
+- **Regla:** `react-hooks/rules-of-hooks` (error)
+- **Diagnóstico:** `useMemo(buildEstadoTooltips, [...])` en L462 se llama
+  después de un early-return (`if (!hasInventario) return <EmptyState/>`)
+  dentro del componente, violando el orden estable de hooks. Cualquier
+  render donde la rama temprana se tome rompe React. Fix: mover el
+  `useMemo` arriba del early-return.
+
+### B. Snapshots de insight-engine.golden.test.ts (Sprint 1.3)
+- **Archivos involucrados:**
+  - Test: `src/lib/__tests__/insight-engine.golden.test.ts` (3 snapshots fallan)
+  - Snapshots: `src/lib/__tests__/__snapshots__/insight-engine.golden.test.ts.snap`
+  - Implementación tocada: `src/lib/insight-engine.ts`, `src/lib/insightStandard.ts`,
+    `src/lib/cross-context.ts`, `src/lib/decision-engine.ts` (todos modificados,
+    sin commitear).
+- **Veredicto: snapshot stale.**
+- **Evidencia:**
+  1. Los commits recientes `Z.13.V-1..V-4` y `Z.12.M-2.1` (dedup cross-tipo,
+     severity degraded, narrative direction-aware) cambiaron intencionalmente
+     ranking/severidad/composición del pool — los goldens no se regeneraron.
+  2. El diff del snapshot muestra reordenamiento de ranks (un meta_gap de
+     Patricia Ruiz desaparece y ranks cercanos se desplazan), no un crash
+     ni nulls inesperados — patrón típico de output funcional reorganizado,
+     no de regresión rota.
+- **Acción Sprint 1.3:** auditar el diff completo, validar que cada cambio
+  estructural corresponde a un commit Z.12.M/Z.13.V documentado, y
+  regenerar con `vitest -u`.
