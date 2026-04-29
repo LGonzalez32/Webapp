@@ -31,6 +31,13 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   const currentRole = useOrgStore(s => s.currentRole)
   const allowedPages = useOrgStore(s => s.allowedPages)
 
+  // E2E test bypass: solo en builds DEV, requiere ?e2e_bypass=1 en la URL.
+  // Evita auth-mock complejo para tests que solo verifican flujos de UI no-auth.
+  // En builds de producción import.meta.env.DEV es false → branch muerto.
+  if (import.meta.env.DEV && new URLSearchParams(location.search).get('e2e_bypass') === '1') {
+    return <>{children}</>
+  }
+
   if (loading) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#09090b' }}>

@@ -212,7 +212,12 @@ export default function UploadPage() {
     if (yaAnalizado) return // no pisar; el store ya es la fuente de verdad
 
     if (!algoCargado) {
-      if (wizardDraft) clearWizardDraft()
+      if (wizardDraft) {
+        // fire-and-forget: el async de clearWizardDraft serializa
+        // flush → memory clear → IDB clear internamente. El effect no
+        // necesita esperar; el siguiente run ya verá wizardDraft=null.
+        void clearWizardDraft().catch(() => { /* graceful */ })
+      }
       return
     }
 
@@ -611,7 +616,9 @@ export default function UploadPage() {
     setLoading(null)
 
     // [B1] Datos ya en store; descartar el borrador para no duplicar memoria.
-    clearWizardDraft()
+    // Await: garantiza que IDB esté limpio antes de showSuccess y posibles
+    // navegaciones del usuario que re-monten UploadPage y disparen hydrate.
+    await clearWizardDraft()
 
     // Show success screen instead of navigating immediately
     setShowSuccess(true)

@@ -135,12 +135,10 @@ queda como follow-up opcional (no bloquea agregar tablas nuevas):
   (ej. uno por organización), refactorizar a clase `WizardCache` con
   instance state.
 
-### E2E de hidratación wizardCache requiere auth mock
-- `/cargar` está auth-protected. Sin auth, `UploadPage` no monta y
-  `hydrateWizardDraftFromCache` nunca se dispara.
-- Cobertura actual: 5 unit tests del wizardCache + typecheck post-wireup.
-- Para E2E real (seed IDB → reload → verificar restore visible en UI)
-  hace falta auth-mock setup. Ticket separado cuando se priorice.
+### ~~E2E de hidratación wizardCache requiere auth mock~~ ✓ RESUELTO
+- Bypass DEV-only via URL `?e2e_bypass=1` agregado a `RequireAuth`.
+- 3 tests E2E nuevos en `tests/e2e/wizard-cache.spec.ts` validan
+  hydrate (v1 persists, v999 cleared, TTL>7d cleared).
 
 ### `npx vitest run` vs `npm run test:unit` — diferencia de cwd
 - `npx vitest run <files>` falla con `TypeError: Cannot read properties of
