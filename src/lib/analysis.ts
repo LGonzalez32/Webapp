@@ -1131,8 +1131,18 @@ export function analyzeSupervisor(
   const startYTDActual  = new Date(ytdYear, 0, 1)
   const startYTDAnterior = new Date(ytdYear - 1, 0, 1)
   const endYTDAnterior  = new Date(ytdYear - 1, fr.getMonth(), fr.getDate(), 23, 59, 59, 999)
-  const prevYearStart   = new Date(year - 1, month, 1)
-  const prevYearEnd     = new Date(year - 1, month + 1, 0, 23, 59, 59, 999)
+
+  // BUG-FIX (Ticket 2.2-B): truncar período anterior al mismo día cuando
+  // selectedPeriod es el mes en curso. Replica patrón de computeCommercialAnalysis
+  // L766-770. Sin esto, MTD parcial vs mes anterior completo viola regla CONTEXT.md.
+  const isCurrentMonth = fr.getFullYear() === year && fr.getMonth() === month
+  const diasTotalesPrevYear = getDaysInMonth(year - 1, month)
+  const diasTranscurridosPrev = isCurrentMonth
+    ? Math.min(fr.getDate(), diasTotalesPrevYear)  // clamp para ej. 31-mar -> 28-feb cross-year
+    : diasTotalesPrevYear
+
+  const prevYearStart = new Date(year - 1, month, 1)
+  const prevYearEnd   = new Date(year - 1, month, diasTranscurridosPrev, 23, 59, 59, 999)
 
   // Predominant supervisor per vendor
   const supervisorByVendor: Record<string, string> = {}
