@@ -32,6 +32,27 @@ pero cada uno tiene un evento que los vuelve críticos.
 - Verificar que no haya otras tablas con RLS off "por descuido".
 - Media hora de trabajo, mejor antes que después.
 
+## Follow-ups del ticket 1.5
+
+### E2E coverage gap — post-analyze cleanup nivel UI
+El spec `upload-wizard-persist.spec.ts` cubre persistencia y restore
+end-to-end, pero los pasos f-g (click "Analizar" → reload → wizard
+limpio) se omitieron porque requieren simular skip de metas/inventario
+en el wizard, lo cual depende de la UX detallada del flow.
+
+Hoy esto está cubierto colateralmente por:
+- unit test `wizardCache.flushPendingSaves` (race condition).
+- E2E `wizard-cache` stale-version cleanup (clean por mismatch).
+
+Sigue sin cubrir el caso real: usuario completa wizard, click
+"Analizar", draft se borra, reload muestra wizard limpio. Si un
+cliente reporta "veo mi sesión vieja después de analizar", agregar
+los pasos f-g al spec siguiendo el flow UI completo (skip metas
+opcionales + skip inventario opcional + click Analizar + assertions
+post-reload).
+
+Costo estimado: 30 LOC + ~30 min de exploración del flow UI.
+
 ## Sprint 0.3 — sprint-check pipeline (descubierto)
 
 ### Lint (eslint . --max-warnings=0) — 238 errors, 28 warnings
