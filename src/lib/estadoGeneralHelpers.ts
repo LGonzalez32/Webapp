@@ -251,7 +251,7 @@ export function getParrafoClientesProductos(
     const d = toDate(r.fecha)
     const y = d.getFullYear()
     const m = d.getMonth()
-    const cli = (r.clientKey ?? r.codigo_cliente ?? r.cliente ?? '') as string
+    const cli = (r.clientKey ?? r.cliente ?? '') as string
     const prod = (r as unknown as { producto?: string }).producto ?? ''
     const val  = r.venta_neta ?? 0
     if (y === year && m === month) {

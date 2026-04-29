@@ -432,6 +432,8 @@ export const EP_W_SEV           = 0.4   // multiplicador por severidad
 
 const _EP_SCOPE_URGENCY: Record<string, number> = {
   mtd: 1.0, monthly: 0.8, ytd: 0.6, rolling: 0.5, unknown: 0.4,
+  // [fix-1.5] valores que timeScopeFamily() realmente produce:
+  current: 1.0, longitudinal: 0.6, seasonal: 0.5,
 }
 const _EP_SEV_RANK: Record<string, number> = { CRITICA: 4, ALTA: 3, MEDIA: 2, BAJA: 1 }
 
@@ -453,7 +455,7 @@ export interface ExecutiveProblem {
   entityCount:        number                        // miembros distintos afectados
   direction:          'up' | 'down' | 'neutral'
   dimensionId:        string
-  time_scope:         'mtd' | 'ytd' | 'rolling' | 'monthly' | 'unknown'
+  time_scope:         'mtd' | 'ytd' | 'rolling' | 'monthly' | 'unknown' | 'current' | 'longitudinal' | 'seasonal'
   primaryCause:       string | null                 // descripción del candidato raíz (observacional)
   secondaryCauses:    string[]                      // títulos de candidatos causa (máx 2)
   focusBlock:         {                             // entidad con mayor impacto_valor absoluto
@@ -502,6 +504,10 @@ const _SCOPE_LABEL: Record<string, string> = {
   rolling: 'últimos meses',
   monthly: 'mensual',
   unknown: '',
+  // [fix-1.5] valores que timeScopeFamily() produce actualmente:
+  current:      'mes actual',
+  longitudinal: 'tendencia histórica',
+  seasonal:     'patrón estacional',
 }
 
 function _buildHeadline(problemKey: string, entityCount: number): string {
@@ -603,7 +609,7 @@ export function buildExecutiveProblems(
     const [dirStr = 'neutral', dimStr = '', scopeStr = 'unknown'] = problemKey.split(':')
     const direction  = (['up', 'down', 'neutral'].includes(dirStr)
       ? dirStr : 'neutral') as ExecutiveProblem['direction']
-    const time_scope = (['mtd', 'ytd', 'rolling', 'monthly', 'unknown'].includes(scopeStr)
+    const time_scope = (['current', 'longitudinal', 'seasonal', 'mtd', 'ytd', 'rolling', 'monthly', 'unknown'].includes(scopeStr)
       ? scopeStr : 'unknown') as ExecutiveProblem['time_scope']
 
     // ── Campos enriquecidos (requieren candidatePool) ────────────────────────

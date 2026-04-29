@@ -203,6 +203,11 @@ function buildSystemPrompt(ctx: ChatContext): string {
     has_departamento: false,
     has_metas: false,
     has_inventario: false,
+    has_unidades: false,
+    has_precio_unitario: false,
+    has_subcategoria: false,
+    has_proveedor: false,
+    has_costo_unitario: false,
   }
   const dataAvailability = safeDataAvailability
   const sales = salesRaw ?? []

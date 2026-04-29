@@ -66,6 +66,11 @@ export interface SaleIndex {
   // [PR-M1] Flags para ingesta dual (unidades obligatoria, venta_neta opcional)
   has_unidades: boolean
   has_precio_unitario: boolean
+  // [schema-cleanup] flags de columnas opcionales agregadas: subcategoria/proveedor (dims),
+  // costo_unitario (habilita métricas margen_bruto / margen_pct).
+  has_subcategoria: boolean
+  has_proveedor: boolean
+  has_costo_unitario: boolean
 }
 
 function appendToMap<K>(map: Map<K, SaleRecord[]>, key: K, s: SaleRecord): void {
@@ -82,6 +87,7 @@ export function buildSaleIndex(sales: SaleRecord[]): SaleIndex {
   let fechaReferencia = new Date(0)
   let has_producto = false, has_cliente = false, has_venta_neta = false
   let has_categoria = false, has_canal = false, has_supervisor = false, has_departamento = false
+  let has_subcategoria = false, has_proveedor = false, has_costo_unitario = false
   // [PR-M1] has_unidades usa umbral ≥80% (métrica obligatoria); contamos aparte
   let _filasConUnidades = 0
 
@@ -89,15 +95,16 @@ export function buildSaleIndex(sales: SaleRecord[]): SaleIndex {
     if (s.fecha > fechaReferencia) fechaReferencia = s.fecha
     appendToMap(byPeriod, periodKey(s.fecha.getFullYear(), s.fecha.getMonth()), s)
     if (s.vendedor) appendToMap(byVendor, s.vendedor, s)
-    const productoKey = s.producto ?? s.codigo_producto
-    if (productoKey) { appendToMap(byProduct, productoKey, s); has_producto = true }
-    const clienteKey = s.cliente ?? s.codigo_cliente
-    if (clienteKey) { appendToMap(byClient, clienteKey, s); has_cliente = true }
+    if (s.producto) { appendToMap(byProduct, s.producto, s); has_producto = true }
+    if (s.cliente)  { appendToMap(byClient, s.cliente, s); has_cliente = true }
     if (!has_venta_neta && s.venta_neta != null && s.venta_neta > 0) has_venta_neta = true
     if (!has_categoria && s.categoria != null && s.categoria !== '') has_categoria = true
+    if (!has_subcategoria && s.subcategoria != null && s.subcategoria !== '') has_subcategoria = true
     if (!has_canal && s.canal != null && s.canal !== '') has_canal = true
     if (!has_supervisor && s.supervisor != null && s.supervisor !== '') has_supervisor = true
     if (!has_departamento && s.departamento != null && s.departamento !== '') has_departamento = true
+    if (!has_proveedor && s.proveedor != null && s.proveedor !== '') has_proveedor = true
+    if (!has_costo_unitario && s.costo_unitario != null && s.costo_unitario > 0) has_costo_unitario = true
     if (s.unidades > 0) _filasConUnidades++
   }
 
@@ -108,6 +115,7 @@ export function buildSaleIndex(sales: SaleRecord[]): SaleIndex {
     byPeriod, byVendor, byProduct, byClient, fechaReferencia,
     has_producto, has_cliente, has_venta_neta, has_categoria, has_canal, has_supervisor, has_departamento,
     has_unidades, has_precio_unitario,
+    has_subcategoria, has_proveedor, has_costo_unitario,
   }
 }
 
@@ -1279,7 +1287,7 @@ export function analyzeCategoria(
     // Top clientes
     const clienteVol: Record<string, number> = {}
     catSales.forEach((s) => {
-      const c = s.cliente ?? s.codigo_cliente
+      const c = s.cliente
       if (c) clienteVol[c] = (clienteVol[c] ?? 0) + s.unidades
     })
     const top_clientes = Object.entries(clienteVol).sort(([, a], [, b]) => b - a).slice(0, 3).map(([c]) => c)
@@ -1352,7 +1360,7 @@ export function analyzeCanal(
 
     const clienteVol: Record<string, number> = {}
     canalSales.forEach((s) => {
-      const c = s.cliente ?? s.codigo_cliente
+      const c = s.cliente
       if (c) clienteVol[c] = (clienteVol[c] ?? 0) + s.unidades
     })
     const top_cliente = Object.entries(clienteVol).sort(([, a], [, b]) => b - a)[0]?.[0] ?? null

@@ -191,8 +191,8 @@ export function buildCrossTables(
     const dy = fd.getDate()
 
     const vendedor = safeStr(s.vendedor) || '—'
-    const cliente = safeStr(s.cliente ?? s.codigo_cliente)
-    const producto = safeStr(s.producto ?? s.codigo_producto)
+    const cliente = safeStr(s.cliente)
+    const producto = safeStr(s.producto)
     const categoria = safeStr(s.categoria) || 'Sin categoría'
     const canal = safeStr(s.canal)
     const departamento = safeStr(s.departamento)

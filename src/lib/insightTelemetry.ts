@@ -140,6 +140,7 @@ export function buildPortfolioAudit(
   // "is non-monetary". Monetary types contribute 0 here; economicImpact carries them.
   const STRATEGIC_NM_SCORE: Record<string, number> = {
     change_point:      0.90, // structural regime shift → reallocate resources
+    cliente_perdido:   0.88, // close-or-fight decision, irreversibility looming
     meta_gap_temporal: 0.85, // direct management action, time-bound
     cliente_dormido:   0.80, // recovery window is closing
     migration:         0.80, // cannibalization → active portfolio decision

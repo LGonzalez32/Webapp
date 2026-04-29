@@ -13,16 +13,14 @@ export interface SaleRecord {
   canal?: string
   departamento?: string
   supervisor?: string
-  codigo_producto?: string
-  codigo_cliente?: string
   // [Z.P1.9.2] costo_unitario puede venir directo (unit_cost, precio_costo...)
   // o derivado por el parser si el header era un "total de línea" (Costo de
   // Ventas, COGS...). Se requiere columna producto para que el valor sea
   // conservado (ver warning COSTO_SIN_PRODUCTO).
   costo_unitario?: number
-  // [PR-M1] Clave canónica de cliente derivada por el parser:
-  //   codigo_cliente?.trim() || nombre_cliente?.trim().toUpperCase() || null
-  // Útil para agregaciones cuando conviven códigos y nombres entre filas.
+  // Clave canónica derivada del nombre de cliente (uppercase trimmed).
+  // Mantenida como campo interno para que los consumers de agregación que
+  // dedupean por cliente sigan funcionando sin tener que tocar 30+ archivos.
   clientKey?: string | null
 }
 
@@ -305,8 +303,6 @@ export type CanonicalField =
   | 'canal'
   | 'departamento'
   | 'supervisor'
-  | 'codigo_producto'
-  | 'codigo_cliente'
 
 /**
  * [Z.P1.10.b.1] Override del mapeo automático del parser.
