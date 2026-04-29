@@ -44,6 +44,24 @@ Sin deuda.
   ArrowLeft/Right/Home/End. El mismo componente sirve `/demo/clientes`
   y `/clientes` (no se necesitó ticket 1.2.b).
 
+## Follow-ups del refactor ingesta-registry (post-Sprint F.2)
+
+Roadmap principal cerrado en commits `bcf2b832` → `42ed86ed`. Lo que
+queda como follow-up opcional (no bloquea agregar tablas nuevas):
+
+- **Sprint G**: consumir `InferRecord<T>` en `src/types/index.ts` para
+  derivar `SaleRecord` / `MetaRecord` / `InventoryItem` desde el registry.
+  El helper ya existe en `src/lib/registry-types.ts:113`; falta convertir
+  los interfaces estáticas en re-exports + test de divergencia.
+- **Worker dispatch genérico**: `src/lib/fileParseWorker.ts` y
+  `src/workers/parseWorker.ts` aún tienen branches `type === 'sales' | 'metas'
+  | 'inventory'`. Refactor: usar lookup desde registry como hace
+  `parseFileForTable<T>`.
+- **`UploadPage::handleFileSelect` per-step**: branches per-tabla en el
+  handler. Refactor a un dispatcher genérico que use `TableId` del registry.
+- **`orgService` storage iteration**: hardcoded a 3 tablas. Iterar el
+  registry para storage keys.
+
 ## Deuda técnica
 
 ### `npx vitest run` vs `npm run test:unit` — diferencia de cwd
