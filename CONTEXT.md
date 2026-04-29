@@ -1,7 +1,7 @@
 # CONTEXT.md — SalesFlow
 
 ## Stack
-Next.js (App Router), TypeScript, Supabase (Postgres + Auth), Tailwind.
+Vite + React + TypeScript, Supabase (Postgres + Auth), Tailwind, React Router.
 
 ## Reglas de negocio
 - Año natural únicamente.
