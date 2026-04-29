@@ -11,3 +11,10 @@ backend/__pycache__/
 # Local editor / agent state — no versionar
 .claude/settings.local.json
 .obsidian/
+
+# MCP local config (contiene project_ref de Supabase, no compartir)
+.mcp.json
+
+# Playwright outputs
+test-results/
+playwright-report/
