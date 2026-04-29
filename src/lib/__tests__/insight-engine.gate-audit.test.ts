@@ -154,7 +154,6 @@ function auditGate(tipoMetaActivo: 'usd' | 'uds') {
     clientesDormidos:    commercial.clientesDormidos,
     categoriasInventario,
     selectedPeriod,
-    selectedMonths: null,
     tipoMetaActivo,
   })
 

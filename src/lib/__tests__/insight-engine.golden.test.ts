@@ -168,7 +168,6 @@ function runGoldenCase(tipoMetaActivo: 'usd' | 'uds') {
     clientesDormidos:    commercial.clientesDormidos,
     categoriasInventario,
     selectedPeriod,
-    selectedMonths: null,
     tipoMetaActivo,
   })
 
@@ -333,7 +332,6 @@ function runBaselineCase(mode: BaselineMode) {
     clientesDormidos:    commercial.clientesDormidos,
     categoriasInventario,
     selectedPeriod,
-    selectedMonths: null,
     tipoMetaActivo: 'usd',
   })
 

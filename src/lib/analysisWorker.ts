@@ -82,7 +82,6 @@ self.onmessage = (event: MessageEvent<WorkerInput | EnrichInput>) => {
       clientesDormidos:   _phase1.clientesDormidos,
       categoriasInventario: _phase1.categoriasInventario ?? [],
       selectedPeriod:     _phase1.selectedPeriod,
-      selectedMonths:     null,
       tipoMetaActivo:     (_phase1.configuracion as { tipoMetaActivo?: 'uds' | 'usd' }).tipoMetaActivo ?? 'usd',
     })
     const _agregadosP2 = getAgregadosParaFiltro(_phase1.sales, _phase1.selectedPeriod)
@@ -222,7 +221,6 @@ self.onmessage = (event: MessageEvent<WorkerInput | EnrichInput>) => {
     clientesDormidos,
     categoriasInventario: categoriasInventario ?? [],
     selectedPeriod,
-    selectedMonths:     null,
     tipoMetaActivo:     _tipoMetaWorker,
   })
   const _agregados = getAgregadosParaFiltro(sales, selectedPeriod)
@@ -285,9 +283,7 @@ self.onmessage = (event: MessageEvent<WorkerInput | EnrichInput>) => {
     canalAnalysis,
     insights,
     // [Z.11.4] Single source of truth: page-side consume estos candidates
-    // del store cuando selectedMonths===null (caso por defecto).
-    // Page-side mantiene fallback a runInsightEngine cuando selectedMonths
-    // es multi-mes (UI feature de comparación).
+    // del store directamente (post-Ticket 2.4.4 selectedMonths removido).
     filteredCandidates: _filtered,
     dataAvailability,
     clienteSummaries: aggregated.clienteSummaries,

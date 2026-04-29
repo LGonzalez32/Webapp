@@ -71,8 +71,8 @@ interface AppState {
   teamStats: TeamStats | null
   insights: Insight[]
   // [Z.11.4] Single source of truth: motor 2 candidates post Z.11+Z.12 emitidos
-  // por analysisWorker. Page-side los consume directamente cuando selectedMonths
-  // es null. NO se persisten (objetos grandes con _stats internos).
+  // por analysisWorker. Page-side los consume directamente. NO se persisten
+  // (objetos grandes con _stats internos).
   filteredCandidates: InsightCandidate[]
   clientesDormidos: ClienteDormido[]
   concentracionRiesgo: ConcentracionRiesgo[]
@@ -113,7 +113,6 @@ interface AppState {
   // del rango mensual; `month` queda como alias compat de monthStart hasta que
   // todos los consumers migren a [monthStart, monthEnd] en Ticket 2.4.
   selectedPeriod: { year: number; monthStart: number; monthEnd: number; month: number }
-  selectedMonths: { year: number; month: number }[] | null
   tipoMetaActivo: 'uds' | 'usd'
 
   // Comparativa de períodos
@@ -187,7 +186,6 @@ interface AppState {
   // Hasta<Desde) sin perder la intención: el lado que el usuario tocó manda,
   // el otro se ajusta. Sincroniza month = monthEnd.
   setSelectedPeriodRange: (monthStart: number, monthEnd: number, lastChanged: 'start' | 'end') => void
-  setSelectedMonths: (months: { year: number; month: number }[] | null) => void
   setTipoMetaActivo: (tipo: 'uds' | 'usd') => void
   setConfiguracion: (config: Partial<Configuracion>) => void
   setChatContextVendedor: (v: VendorAnalysis | null) => void
@@ -263,7 +261,6 @@ export const useAppStore = create<AppState>()(
         monthEnd: 0,
         month: 0, // alias compat = monthEnd (sincronizado en cada mutator)
       },
-      selectedMonths: null,
       configuracion: DEFAULT_CONFIG,
       tipoMetaActivo: 'uds',
 
@@ -291,10 +288,9 @@ export const useAppStore = create<AppState>()(
       setCanalesDisponibles:    (canalesDisponibles)    => set({ canalesDisponibles }),
       setMonthlyTotals:         (monthlyTotals)         => set({ monthlyTotals }),
       setMonthlyTotalsSameDay:  (monthlyTotalsSameDay)  => set({ monthlyTotalsSameDay }),
-      setFechaRefISO: (fechaRefISO) => set((state) => {
+      setFechaRefISO: (fechaRefISO) => set(() => {
         const updates: any = { fechaRefISO }
-        // Si selectedMonths es null, actualizar selectedPeriod a la nueva fecha de referencia
-        if (state.selectedMonths === null && fechaRefISO) {
+        if (fechaRefISO) {
           const fechaRef = new Date(fechaRefISO)
           // [Ticket 2.3.2] Default YTD desde fechaRef. `month` = monthEnd
           // (alias compat = mes activo = último del rango).
@@ -353,50 +349,6 @@ export const useAppStore = create<AppState>()(
           isProcessed: false,
         }
       }),
-      setSelectedMonths: (months) => {
-        if (months && months.length > 0) {
-          // [Ticket 2.3.2] Reportar rango contiguo equivalente: monthStart = min,
-          // monthEnd = max dentro del año más reciente. El chip permite selección
-          // no-contigua, pero selectedPeriod proyecta a un rango contiguo
-          // (transitorio hasta deprecación del chip en 2.4). `month` = monthEnd.
-          const latestYear = months.reduce((a, b) => (a.year > b.year ? a : b)).year
-          const monthsInLatestYear = months.filter(m => m.year === latestYear).map(m => m.month)
-          const monthStart = Math.min(...monthsInLatestYear)
-          const monthEnd = Math.max(...monthsInLatestYear)
-          set({
-            selectedMonths: months,
-            selectedPeriod: { year: latestYear, monthStart, monthEnd, month: monthEnd },
-          })
-        } else {
-          set((state) => {
-            // Cuando es null, mantener selectedPeriod en la fecha de referencia más reciente (fechaRefISO)
-            if (state.fechaRefISO) {
-              const fechaRef = new Date(state.fechaRefISO)
-              const monthEnd = fechaRef.getMonth()
-              return {
-                selectedMonths: null,
-                selectedPeriod: {
-                  year: fechaRef.getFullYear(),
-                  monthStart: 0,
-                  monthEnd,
-                  month: monthEnd,
-                },
-              }
-            }
-            // Fallback: mes más reciente de monthlyTotals
-            const keys = Object.keys(state.monthlyTotals)
-            if (keys.length > 0) {
-              const latestKey = keys.sort((a, b) => b.localeCompare(a))[0]
-              const [y, m] = latestKey.split('-').map(Number)
-              return {
-                selectedMonths: null,
-                selectedPeriod: { year: y, monthStart: m, monthEnd: m, month: m },
-              }
-            }
-            return { selectedMonths: null }
-          })
-        }
-      },
       setTipoMetaActivo: (tipoMetaActivo) => set({ tipoMetaActivo, isProcessed: false }),
       setConfiguracion: (config) =>
         set((state) => ({
@@ -504,7 +456,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'salesflow-storage',
-      version: 11,
+      version: 12,
       migrate: (persistedState: any) => {
         // v8: remove deepseek_api_key from persisted config (now handled by backend proxy)
         // v9: migrate moneda 'USD' → '$' for display consistency
@@ -512,6 +464,10 @@ export const useAppStore = create<AppState>()(
         //   {year, monthStart, monthEnd, month}.
         // v11 [Ticket 2.3.2]: alias .month re-sincronizado a monthEnd (era monthStart).
         //   Sesiones v10 con month=monthStart=0 se re-sincronizan vía migrate.
+        // v12 [Ticket 2.4.4]: selectedMonths removido del store (chip multi-mes
+        //   eliminado de EstadoComercialPage). El campo nunca se persistió
+        //   (no estaba en partialize), pero se bumpea versión para forzar
+        //   re-hidratación limpia tras la simplificación de firmas downstream.
         const { deepseek_api_key: _, ...cleanConfig } = persistedState?.configuracion ?? {}
         if (cleanConfig.moneda === 'USD') cleanConfig.moneda = '$'
         // [Ticket 2.3.2] Migración v9 → v10: shape legacy {year, month} se mapea

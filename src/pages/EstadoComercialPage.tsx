@@ -1,23 +1,22 @@
 import { useEffect, useState, useMemo, useCallback, useDeferredValue, useRef } from 'react'
-import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { ResponsiveContainer, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, LabelList } from 'recharts'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
 import type { Insight, InsightTipo, InsightPrioridad, VendorAnalysis } from '../types'
-import { salesInPeriod } from '../lib/analysis'
 import { callAI } from '../lib/chatService'
 import VendedorPanel from '../components/vendedor/VendedorPanel'
 import { useDemoPath } from '../lib/useDemoPath'
 import { useEmpresaName } from '../lib/useEmpresaName'
-import { runInsightEngine, candidatesToDiagnosticBlocks, filtrarConEstandar, buildRichBlocksFromInsights, recordInsightRuntimeAuditReport, type DiagnosticBlock } from '../lib/insight-engine'
+import { candidatesToDiagnosticBlocks, buildRichBlocksFromInsights, recordInsightRuntimeAuditReport, type DiagnosticBlock } from '../lib/insight-engine'
 import DiagnosticBlockView from '../components/diagnostic/DiagnosticBlock'
 import EstadoGeneralEmpresa from '../components/estado-general/EstadoGeneralEmpresa'
 import { enrichDiagnosticBlocks, type EnrichedDiagnosticBlock } from '../lib/diagnostic-actions'
-import { getTopProductosPorClienteAmbosRangos, getAgregadosParaFiltro } from '../lib/domain-aggregations'
+import { getTopProductosPorClienteAmbosRangos } from '../lib/domain-aggregations'
 import { buildInsightChains, buildExecutiveProblems, EXECUTIVE_COMPRESSION_ENABLED, type ExecutiveProblem, type MaterialityContext } from '../lib/decision-engine'
 import ExecutiveProblemCard from '../components/insights/ExecutiveProblemCard'
-import { Calendar, CheckCircle, RotateCcw, ChevronDown, Users, Building2, Star, TrendingUp, TrendingDown, Bell } from 'lucide-react'
+import { formatPeriodLabel } from '../lib/periods'
+import { Calendar, CheckCircle, RotateCcw, Users, Building2, Star, TrendingUp, TrendingDown, Bell } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAlertStatusStore } from '../store/alertStatusStore'
 import type { AlertStatus } from '../store/alertStatusStore'
@@ -256,11 +255,9 @@ export default function EstadoComercialPage() {
     configuracion, selectedPeriod, setSelectedPeriod, sales, metas, loadingMessage,
     clientesDormidos, concentracionRiesgo, categoriasInventario, supervisorAnalysis,
     canalAnalysis, categoriaAnalysis, dataSource, tipoMetaActivo,
-    selectedMonths, setSelectedMonths,
   } = useAppStore()
-  // [Z.11.4] Single source of truth: candidates filtrados (post-Z.11+Z.12) emitidos
-  // por analysisWorker. Cuando selectedMonths===null se consume directo;
-  // multi-mes cae al fallback page-side via runInsightEngine.
+  // [Z.11.4] Candidates filtrados (post-Z.11+Z.12) emitidos por analysisWorker.
+  // Single source of truth tras Ticket 2.4.4 (selectedMonths removido).
   const filteredCandidatesStore = useAppStore(s => s.filteredCandidates)
 
   const [vendedorPanel, setVendedorPanel] = useState<VendorAnalysis | null>(null)
@@ -273,10 +270,6 @@ export default function EstadoComercialPage() {
   const [noteDraft, setNoteDraft] = useState('')
   const dashMetrica = configuracion.metricaGlobal ?? 'usd'
   const dropdownRef = useRef<HTMLDivElement>(null)
-  const [monthDropOpen, setMonthDropOpen] = useState(false)
-  const monthDropRef = useRef<HTMLDivElement>(null)
-  const monthBtnRef = useRef<HTMLButtonElement>(null)
-  const [monthDropRect, setMonthDropRect] = useState<{ top: number; left: number; width: number } | null>(null)
 
   useEffect(() => {
     if (sales.length === 0 && dataSource === 'none') navigate(dp('/cargar'), { replace: true })
@@ -325,28 +318,7 @@ export default function EstadoComercialPage() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [openDropdownKey])
 
-  // Cerrar month dropdown al clic fuera (portal-safe: verifica btn + portal)
-  useEffect(() => {
-    if (!monthDropOpen) return
-    const handleClick = (e: MouseEvent) => {
-      const target = e.target as Node
-      // Clic dentro del botón trigger → lo maneja el onClick del botón
-      if (monthDropRef.current?.contains(target)) return
-      // Clic dentro del portal (dropdown renderizado en body) → no cerrar
-      // Los nodos del portal son hijos directos de body pero no del ref
-      // Usamos el data-attr para identificar el portal
-      const portalEl = document.getElementById('sf-month-portal')
-      if (portalEl?.contains(target)) return
-      setMonthDropOpen(false)
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [monthDropOpen])
-
-
-
-  // â"€â"€ Chips de mes â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-  // maxDate y meses disponibles derivados del Worker (off-thread)
+  // maxDate derivado del Worker (off-thread)
   const fechaRefISO = useAppStore(s => s.fechaRefISO)
   const monthlyTotals = useAppStore(s => s.monthlyTotals)
   const monthlyTotalsSameDay = useAppStore(s => s.monthlyTotalsSameDay)
@@ -356,47 +328,13 @@ export default function EstadoComercialPage() {
     () => fechaRefISO ? new Date(fechaRefISO) : new Date(0),
     [fechaRefISO],
   )
-  const maxChipMonth = maxDate.getFullYear() === selectedPeriod.year ? maxDate.getMonth() : selectedPeriod.month
-
-  // R103: derivación UI-local — meses disponibles para el chip selector; depende de monthlyTotals (pre-computado off-thread) y maxDate
-  const availableMonths = useMemo(() => {
-    const all = Object.keys(monthlyTotals)
-      .map(k => { const [y, m] = k.split('-').map(Number); return { year: y, month: m } })
-      .sort((a, b) => b.year - a.year || b.month - a.month)
-    const latestYear = all[0]?.year ?? new Date().getFullYear()
-    const monthsFromTotals = all.filter(am => am.year === latestYear)
-    // Incluir también meses desde 0 hasta maxDate.getMonth() para el año latestYear si maxDate está en ese año
-    if (maxDate.getFullYear() === latestYear) {
-      const maxMonth = maxDate.getMonth()
-      const existingMonths = new Set(monthsFromTotals.map(m => m.month))
-      for (let m = 0; m <= maxMonth; m++) {
-        if (!existingMonths.has(m)) {
-          monthsFromTotals.push({ year: latestYear, month: m })
-        }
-      }
-      monthsFromTotals.sort((a, b) => b.month - a.month)
-    }
-    return monthsFromTotals
-  }, [monthlyTotals, maxDate])
-
-  // R103: filtro UI — salesActual depende de selectedMonths (estado local UI multi-selección); no es una agregación pura
+  // R103: filtro UI — salesActual filtra por año del selectedPeriod del store.
   const salesActual = useMemo(() => {
-    if (selectedMonths === null) {
-      return sales.filter((s) => {
-        const fd = s.fecha instanceof Date ? s.fecha : new Date(s.fecha)
-        return fd.getFullYear() === selectedPeriod.year
-      })
-    }
-    if (selectedMonths.length === 1) {
-      return salesInPeriod(sales, selectedMonths[0].year, selectedMonths[0].month)
-    }
     return sales.filter((s) => {
       const fd = s.fecha instanceof Date ? s.fecha : new Date(s.fecha)
-      const y = fd.getFullYear()
-      const m = fd.getMonth()
-      return selectedMonths.some((sm) => sm.year === y && sm.month === m)
+      return fd.getFullYear() === selectedPeriod.year
     })
-  }, [sales, selectedMonths, selectedPeriod.year])
+  }, [sales, selectedPeriod.year])
 
   // â"€â"€ Datos diferidos para secciones secundarias (evita freeze UI) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const deferredSales            = useDeferredValue(sales)
@@ -1427,55 +1365,14 @@ export default function EstadoComercialPage() {
   }, [causasAtraso, vendorAnalysis, supervisorAnalysis, clientesDormidos, canalAnalysis, categoriaAnalysis, categoriasInventario, insights, teamStats, dataAvailability, configuracion, deferredSales, selectedPeriod])
 
   // ── Diagnóstico del mes — motor único Metric × Dimension + narrativa rica (Z.2) ─
-  // [Z.11.4] Single source of truth para candidates motor 2.
-  //
-  // Default path (selectedMonths===null): consume `filteredCandidatesStore` que
-  // ya viene filtrado post-Z.11+Z.12 desde analysisWorker. Cero duplicación de
-  // motor 2 en main thread.
-  //
-  // Multi-mes path (selectedMonths!==null): UI permite seleccionar múltiples
-  // meses para comparación; motor 2 corre page-side con esos meses específicos
-  // porque el worker solo conoce un selectedPeriod a la vez. Caso minoritario.
-
-  // [Z.4 — perf: cuello-2] Pre-computa mapas de sales en una sola pasada
-  const _agregadosFiltro = useMemo(() => {
-    if (!sales?.length) return null
-    return getAgregadosParaFiltro(sales, selectedPeriod)
-  }, [sales, selectedPeriod])
+  // [Z.11.4] Single source of truth para candidates motor 2: consume
+  // `filteredCandidatesStore` pre-computado post-Z.11+Z.12 por analysisWorker.
+  // Tras Ticket 2.4.4 (selectedMonths removido) ya no hay multi-mes fallback.
 
   const _filteredCandidates = useMemo(() => {
     if (!sales?.length) return []
-
-    // Default path: usar candidates pre-computados por el worker.
-    if (selectedMonths === null) {
-      return filteredCandidatesStore
-    }
-
-    // Multi-mes fallback: re-correr motor 2 con selectedMonths específicos.
-    if (!vendorAnalysis?.length) return []
-    const candidates = runInsightEngine({
-      sales, metas, vendorAnalysis, categoriaAnalysis, canalAnalysis,
-      supervisorAnalysis, concentracionRiesgo, clientesDormidos,
-      categoriasInventario, selectedPeriod, selectedMonths, tipoMetaActivo,
-    })
-    const diaDelMes = maxDate.getTime() > 0
-      ? maxDate.getDate()
-      : new Date(selectedPeriod.year, selectedPeriod.month + 1, 0).getDate()
-    const diasEnMes = new Date(selectedPeriod.year, selectedPeriod.month + 1, 0).getDate()
-    const ventaTotalNegocio = _agregadosFiltro?.ventaTotalNegocio ?? 0
-    return filtrarConEstandar(candidates, {
-      diaDelMes, diasEnMes, sales, metas,
-      inventory: categoriasInventario, clientesDormidos,
-      ventaTotalNegocio, tipoMetaActivo, selectedPeriod,
-      agregados: _agregadosFiltro ?? undefined,
-    })
-  }, [
-    selectedMonths, filteredCandidatesStore,
-    sales, metas, vendorAnalysis, categoriaAnalysis, canalAnalysis,
-    supervisorAnalysis, concentracionRiesgo, clientesDormidos,
-    categoriasInventario, selectedPeriod, tipoMetaActivo,
-    _agregadosFiltro, maxDate,
-  ])
+    return filteredCandidatesStore
+  }, [filteredCandidatesStore, sales])
 
   // [Z.9.5] Causal linking + compresión ejecutiva — gateado por EXECUTIVE_COMPRESSION_ENABLED
   const _insightChains = useMemo(() => {
@@ -1577,11 +1474,10 @@ export default function EstadoComercialPage() {
 
   useEffect(() => {
     if (!sales?.length || !vendorAnalysis?.length) return
-    // [Z.11.4] candidatesReturned ya no esta disponible page-side cuando
-    // selectedMonths===null (el worker hace gate y solo emite filteredCandidates).
-    // Reusamos _filteredCandidates en ambos slots; el gate stage del worker
-    // ya quedó capturado en analysis_worker stage report. discardedCount=0
-    // page-side es correcto: page-side no descarta cuando lee del store.
+    // [Z.11.4] candidatesReturned no está disponible page-side: el worker hace
+    // gate y solo emite filteredCandidates. Reusamos _filteredCandidates en
+    // ambos slots; gate stage capturado en analysis_worker stage report.
+    // discardedCount=0 page-side es correcto: no descarta al leer del store.
     recordInsightRuntimeAuditReport({
       candidatesReturned: _filteredCandidates,
       filteredCandidates: _filteredCandidates,
@@ -1613,35 +1509,24 @@ export default function EstadoComercialPage() {
   const diagCriticaCount = enrichedBlocks.filter(b => b.severity === 'critical').length
   const [mostrarAdicionales, setMostrarAdicionales] = useState(false)
 
-  // R103: derivación local — ytdChart usa monthlyTotals (pre-computado off-thread) + lógica de selectedMonths UI; migrar en Z.2 cuando RendimientoPage lo comparta
+  // R103: derivación local — ytdChart usa monthlyTotals (pre-computado off-thread).
+  // Tras Ticket 2.4.4 (chip removido) ya no hay filtrado UI multi-mes.
   const ytdChart = useMemo(() => {
-    // Cuando selectedMonths === null (Todos los meses), mostrar hasta la fecha de referencia más reciente (maxDate)
-    const currentYear = selectedMonths === null && maxDate.getTime() > 0
-      ? maxDate.getFullYear()
-      : selectedPeriod.year
+    const currentYear = maxDate.getTime() > 0 ? maxDate.getFullYear() : selectedPeriod.year
     const previousYear = currentYear - 1
-    const selectedMonth = selectedMonths === null && maxDate.getTime() > 0
-      ? maxDate.getMonth()
-      : selectedPeriod.month // 0-based
-    // El mes "en curso" real es el mes del dato más reciente (puede diferir del seleccionado)
+    const selectedMonth = maxDate.getTime() > 0 ? maxDate.getMonth() : selectedPeriod.month
     const latestMonth = maxDate.getFullYear() === currentYear ? maxDate.getMonth() : selectedMonth
-    const maxDay = maxDate.getDate() // día hasta el que hay datos en el mes en curso
+    const maxDay = maxDate.getDate()
 
     const data: { month: string; actual: number; anterior: number; isPartial: boolean; daysElapsed: number; daysTotal: number }[] = []
     let totalActual = 0
     let totalAnterior = 0
 
     for (let m = 0; m <= selectedMonth; m++) {
-      // Si hay meses específicos seleccionados, omitir los que no están en la lista
-      if (selectedMonths !== null && !selectedMonths.some((sm) => sm.month === m && sm.year === currentYear)) {
-        continue
-      }
-      // Mes realmente parcial = el mes donde están los últimos datos (mes en curso)
       const isPartialMonth = m === latestMonth
       const daysInMonth = new Date(currentYear, m + 1, 0).getDate()
 
       const ventasActual = monthlyTotals[`${currentYear}-${m}`]?.uds ?? 0
-      // Same-day-range solo para el mes en curso (parcial); cerrados se comparan completos
       const ventasAnterior = isPartialMonth
         ? (monthlyTotalsSameDay[`${previousYear}-${m}`]?.uds ?? 0)
         : (monthlyTotals[`${previousYear}-${m}`]?.uds ?? 0)
@@ -1659,29 +1544,19 @@ export default function EstadoComercialPage() {
       })
     }
     return { data, totalActual, totalAnterior, maxDay }
-  }, [monthlyTotals, monthlyTotalsSameDay, selectedPeriod.year, selectedPeriod.month, maxDate, selectedMonths])
+  }, [monthlyTotals, monthlyTotalsSameDay, selectedPeriod.year, selectedPeriod.month, maxDate])
 
-  // R103: derivación local — ytdChartUSD mismo patrón que ytdChart pero para venta_neta; migrar junto con ytdChart en Z.2
   const ytdChartUSD = useMemo(() => {
     if (!dataAvailability.has_venta_neta) return null
-    // Cuando selectedMonths === null (Todos los meses), mostrar hasta la fecha de referencia más reciente (maxDate)
-    const currentYear = selectedMonths === null && maxDate.getTime() > 0
-      ? maxDate.getFullYear()
-      : selectedPeriod.year
+    const currentYear = maxDate.getTime() > 0 ? maxDate.getFullYear() : selectedPeriod.year
     const previousYear = currentYear - 1
-    const selectedMonth = selectedMonths === null && maxDate.getTime() > 0
-      ? maxDate.getMonth()
-      : selectedPeriod.month
+    const selectedMonth = maxDate.getTime() > 0 ? maxDate.getMonth() : selectedPeriod.month
     const latestMonth = maxDate.getFullYear() === currentYear ? maxDate.getMonth() : selectedMonth
     const maxDay = maxDate.getDate()
     const data: { month: string; actual: number; anterior: number; isPartial: boolean; daysElapsed: number; daysTotal: number }[] = []
     let totalActual = 0
     let totalAnterior = 0
     for (let m = 0; m <= selectedMonth; m++) {
-      // Si hay meses específicos seleccionados, omitir los que no están en la lista
-      if (selectedMonths !== null && !selectedMonths.some((sm) => sm.month === m && sm.year === currentYear)) {
-        continue
-      }
       const isPartialMonth = m === latestMonth
       const daysInMonth = new Date(currentYear, m + 1, 0).getDate()
       const ventasActual = monthlyTotals[`${currentYear}-${m}`]?.neta ?? 0
@@ -1693,7 +1568,7 @@ export default function EstadoComercialPage() {
       data.push({ month: MESES_CORTO[m], actual: ventasActual, anterior: ventasAnterior, isPartial: isPartialMonth, daysElapsed: isPartialMonth ? maxDay : daysInMonth, daysTotal: daysInMonth })
     }
     return { data, totalActual, totalAnterior, maxDay }
-  }, [monthlyTotals, monthlyTotalsSameDay, selectedPeriod.year, selectedPeriod.month, maxDate, dataAvailability.has_venta_neta, selectedMonths])
+  }, [monthlyTotals, monthlyTotalsSameDay, selectedPeriod.year, selectedPeriod.month, maxDate, dataAvailability.has_venta_neta])
 
   // R103: derivación local — metasCerradas cruza monthlyTotals (pre-computado) + metas + deferredVendorAnalysis; no itera ventas crudas
   const metasCerradas = useMemo(() => {
@@ -1712,9 +1587,6 @@ export default function EstadoComercialPage() {
     const MESES_C = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
 
     for (let m = 0; m < currentMonth; m++) {
-      // Respetar el filtro: si hay meses específicos seleccionados y este no está, saltarlo
-      if (selectedMonths !== null && !selectedMonths.some((sm) => sm.month === m && sm.year === currentYear)) continue
-
       const metasMes = metas.filter(
         (mt: any) => mt.mes === m + 1 && mt.anio === currentYear && mt.vendedor && vendorNames.has(mt.vendedor) && !mt.supervisor && !mt.categoria
       )
@@ -1744,7 +1616,7 @@ export default function EstadoComercialPage() {
         : `${mesesCerrados[0]}–${mesesCerrados[mesesCerrados.length - 1]}`,
       mesesCount: mesesCerrados.length,
     }
-  }, [teamStats, metas, selectedPeriod, selectedMonths, deferredVendorAnalysis, tipoMetaActivo, dataAvailability, monthlyTotals])
+  }, [teamStats, metas, selectedPeriod, deferredVendorAnalysis, tipoMetaActivo, dataAvailability, monthlyTotals])
 
   if (!teamStats) {
     if (sales.length === 0) return null // el useEffect redirige a /cargar
@@ -1827,11 +1699,7 @@ export default function EstadoComercialPage() {
   const activeYtdUp = activeYtdDiff >= 0
   const activeYtdPct = activeYtdChart.totalAnterior > 0 ? ((activeYtdDiff / activeYtdChart.totalAnterior) * 100) : null
 
-  const mesLabel = selectedMonths === null
-    ? "Todos los meses"
-    : selectedMonths.length === 1
-      ? `${MESES_LARGO[selectedMonths[0].month].charAt(0).toUpperCase() + MESES_LARGO[selectedMonths[0].month].slice(1)} ${selectedMonths[0].year}`
-      : `${selectedMonths.length} meses`
+  const mesLabel = formatPeriodLabel(selectedPeriod.year, selectedPeriod.monthStart, selectedPeriod.monthEnd)
 
   // proyección de ingresos: misma lógica diaria que proyeccion_cierre en unidades
   const proyeccion_neta = dataAvailability.has_venta_neta && estadoMes.diasTranscurridos > 0
@@ -1923,122 +1791,21 @@ export default function EstadoComercialPage() {
             ✓ En orden
           </span>
         ) : null}
-        {/* Month selector */}
-        <div className="sf-no-print" ref={monthDropRef}>
-          <button
-            ref={monthBtnRef}
-            onClick={() => {
-              if (!monthDropOpen && monthBtnRef.current) {
-                const r = monthBtnRef.current.getBoundingClientRect()
-                setMonthDropRect({ top: r.bottom + 6, left: r.left, width: r.width })
-              }
-              setMonthDropOpen(v => !v)
-            }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors"
-            style={{ background: 'var(--sf-inset)', color: 'var(--sf-t2)', border: '1px solid var(--sf-border)' }}
-          >
-            <Calendar className="w-3.5 h-3.5" style={{ color: 'var(--sf-t4)' }} />
-            {mesLabel}
-            <ChevronDown className="w-3 h-3" style={{ color: 'var(--sf-t4)', transform: monthDropOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
-          </button>
-          {monthDropOpen && monthDropRect && createPortal(
-            <div
-              id="sf-month-portal"
-              style={{
-                position: 'fixed',
-                top: monthDropRect.top,
-                left: monthDropRect.left,
-                minWidth: Math.max(monthDropRect.width, 160),
-                maxHeight: 300,
-                overflowY: 'auto',
-                zIndex: 9999,
-                background: 'var(--sf-card)',
-                border: '1px solid var(--sf-border)',
-                borderRadius: 12,
-                boxShadow: '0 20px 40px rgba(0,0,0,0.35)',
-              }}
-            >
-              <div className="p-1.5 flex flex-col gap-0.5">
-                {/* Opción "Todos los meses" */}
-                <button
-                  onClick={() => {
-                    setSelectedMonths(null)
-                    setMonthDropOpen(false)
-                  }}
-                  className="w-full px-3 py-1.5 rounded-lg text-[12px] font-medium text-left flex items-center justify-between transition-colors cursor-pointer"
-                  style={{
-                    background: selectedMonths === null ? 'var(--sf-green-bg)' : 'transparent',
-                    color: selectedMonths === null ? 'var(--sf-green)' : 'var(--sf-t3)',
-                  }}
-                >
-                  Todos los meses
-                  {selectedMonths === null && <span style={{ color: 'var(--sf-green)', fontSize: 14, marginLeft: 4 }}>✓</span>}
-                </button>
-
-                {/* Separador */}
-                <div style={{ height: 1, background: 'var(--sf-border)', margin: '4px 0' }} />
-
-                {/* Meses individuales con checkboxes */}
-                {availableMonths.map(({ year, month }) => {
-                  const isChecked = selectedMonths === null
-                    ? true
-                    : selectedMonths.some((m) => m.year === year && m.month === month)
-                  const label = MESES_LARGO[month].charAt(0).toUpperCase() + MESES_LARGO[month].slice(1)
-                  return (
-                    <button
-                      key={`${year}-${month}`}
-                      onClick={() => {
-                        if (selectedMonths === null) {
-                          setSelectedMonths([{ year, month }])
-                        } else if (isChecked) {
-                          const next = selectedMonths.filter((m) => !(m.year === year && m.month === month))
-                          if (next.length === 0) {
-                            setSelectedMonths(null)
-                          } else {
-                            setSelectedMonths(next)
-                          }
-                        } else {
-                          const next = [...selectedMonths, { year, month }].sort((a, b) => b.year - a.year || b.month - a.month)
-                          if (next.length === availableMonths.length) {
-                            setSelectedMonths(null)
-                          } else {
-                            setSelectedMonths(next)
-                          }
-                        }
-                      }}
-                      className="w-full px-3 py-1.5 rounded-lg text-[12px] font-medium text-left flex items-center gap-2 transition-colors cursor-pointer"
-                      style={{
-                        background: isChecked && selectedMonths !== null ? 'var(--sf-green-bg)' : 'transparent',
-                        color: isChecked ? 'var(--sf-green)' : 'var(--sf-t3)',
-                      }}
-                    >
-                      <span style={{
-                        width: 16, height: 16, borderRadius: 4,
-                        border: `2px solid ${isChecked ? 'var(--sf-green)' : 'var(--sf-border)'}`,
-                        background: isChecked ? 'var(--sf-green)' : 'transparent',
-                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 10, color: 'white', flexShrink: 0,
-                      }}>
-                        {isChecked && '✓'}
-                      </span>
-                      {label}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>,
-            document.body
-          )}
-        </div>
-        {(selectedMonths === null || selectedMonths.length === 1) && (
-          <span
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px]"
-            style={{ background: 'var(--sf-inset)', color: 'var(--sf-t4)' }}
-          >
-            <Calendar className="w-3 h-3" />
-            Día {teamStats.dias_transcurridos} de {teamStats.dias_totales}
-          </span>
-        )}
+        {/* Período activo (legible). El selector vive en TopBar (Ticket 2.3.4). */}
+        <span
+          className="sf-no-print flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
+          style={{ background: 'var(--sf-inset)', color: 'var(--sf-t2)', border: '1px solid var(--sf-border)' }}
+        >
+          <Calendar className="w-3.5 h-3.5" style={{ color: 'var(--sf-t4)' }} />
+          {mesLabel}
+        </span>
+        <span
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px]"
+          style={{ background: 'var(--sf-inset)', color: 'var(--sf-t4)' }}
+        >
+          <Calendar className="w-3 h-3" />
+          Día {teamStats.dias_transcurridos} de {teamStats.dias_totales}
+        </span>
       </div>
 
       {/* ── KPI CARDS ──────────────────────────────────────────────────────── */}

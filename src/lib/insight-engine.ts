@@ -427,7 +427,6 @@ export interface EngineParams {
   clientesDormidos: ClienteDormido[]
   categoriasInventario: CategoriaInventario[]
   selectedPeriod: { year: number; month: number }
-  selectedMonths: { year: number; month: number }[] | null
   tipoMetaActivo: 'uds' | 'usd'
 }
 
