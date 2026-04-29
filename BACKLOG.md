@@ -44,6 +44,15 @@ Sin deuda.
   ArrowLeft/Right/Home/End. El mismo componente sirve `/demo/clientes`
   y `/clientes` (no se necesitó ticket 1.2.b).
 
+## Deuda técnica
+
+### `npx vitest run` vs `npm run test:unit` — diferencia de cwd
+- `npx vitest run <files>` falla con `TypeError: Cannot read properties of
+  undefined (reading 'config')` al evaluar `describe(...)`.
+- `npm run test:unit -- <files>` (mismo binario, mismo target) corre limpio.
+- Hipótesis: `npx` resuelve cwd o config root distinto cuando se invoca con
+  paths absolutos en Windows. Investigar y unificar invocación.
+
 ## Sprint 1.4 — fuera de scope, anotado
 
 ### Centralizar entrada/salida de modo demo
