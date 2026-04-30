@@ -128,6 +128,25 @@ Todos los `ytd_*` se calculan con `buildDefaultYtdRange(fechaReferencia)` = **[1
 **Acción propuesta:** Renombrar a `"Año completo 2026"` o `"Total {año} a la fecha"`. Copy puro, scope reducido (~4 líneas en ClientePanel.tsx).
 **Sin decisión técnica pendiente:** founder define el copy final.
 
+### 3.E.4 — Consistency tree pivot monthly (Sprint 4, prioridad media)
+
+**Origen:** Validación visual de 3.E.2.
+
+Detectado en validación visual post-tree-pivot monthly:
+
+- **Indent monthly = 24px vs YTD = 28px**. Unificar a 28px para alineación visual exacta entre ambas vistas.
+- **`expandAll` / `collapseAll`** del header en vista monthly solo recolectan IDs de `pivotData` (YTD). Cuando `tableView === 'monthly'`, deberían recolectar de `monthlyPivotData` (state ya disponible en RendimientoPage). Caso límite cuando dim chains no coinciden entre vistas.
+
+Diff esperado: ~10–15 líneas. Riesgo bajo. NO blocker.
+
+### 3.E.5 — Refactor extracción `<TreeRow>` compartido (Sprint 4, prioridad baja)
+
+**Origen:** Cierre Sprint 3 — análisis post-bundle 3.E.
+
+Bundle 3.E generó duplicación de UI tree entre vista YTD y monthly. Cada vista tiene su propio render inline de chevron + indent + badge + cell + handlers (~100 líneas duplicadas con shape divergente solo en las cells).
+
+**Acción propuesta:** Extraer `<TreeRow>` con prop polimórfica para renderizar cells distintas por vista. Reducción estimada: ~80–120 líneas. Diff total del refactor: ~150–200 (extracción + 2 call sites). Riesgo medio (refactor visible, requiere validación visual exhaustiva). NO blocker.
+
 ## Sprint 3 — Features visibles
 
 ### Rendimiento Anual — rediseño de filtros y toggle YTD/Mensual
