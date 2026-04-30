@@ -1,13 +1,10 @@
 import { useMemo } from 'react'
 import { TrendingUp, X } from 'lucide-react'
 import { useAppStore } from '../../store/appStore'
+import { salesInPeriod } from '../../lib/analysis'
 import type { SaleRecord, Insight } from '../../types'
 
 const MESES_CORTO = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic']
-
-function salesInRange(sales: SaleRecord[], year: number, month: number): SaleRecord[] {
-  return sales.filter(s => s.fecha.getFullYear() === year && s.fecha.getMonth() === month)
-}
 
 interface Props {
   sales: SaleRecord[]
@@ -20,8 +17,8 @@ export default function ComparisonSummary({ sales, insights, compPeriod }: Props
   const toggleComparison = useAppStore(s => s.toggleComparison)
 
   const summary = useMemo(() => {
-    const currentSales = salesInRange(sales, selectedPeriod.year, selectedPeriod.month)
-    const compSales = salesInRange(sales, compPeriod.year, compPeriod.month)
+    const currentSales = salesInPeriod(sales, selectedPeriod.year, selectedPeriod.month)
+    const compSales = salesInPeriod(sales, compPeriod.year, compPeriod.month)
 
     const currentUnits = currentSales.reduce((s, r) => s + r.unidades, 0)
     const compUnits = compSales.reduce((s, r) => s + r.unidades, 0)
