@@ -843,6 +843,19 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
           chart. Estilo pill paritario al toggle Claro/Oscuro del TopBar.
           Persistencia: configuracion.tableView (store, v13). */}
       <div className="flex justify-center mt-2 mb-2">
+        {/* [Ticket 3.F.4] Wrapper card para contraste en light mode. var(--sf-card)
+            actúa como marco visual sobre el page background; en dark mode el efecto
+            es neutral. Replicate del patrón de cards de la página (border + radius). */}
+        <div
+          className="inline-flex items-center"
+          style={{
+            background: 'var(--sf-card)',
+            border: '1px solid var(--sf-border)',
+            borderRadius: '12px',
+            padding: '8px 12px',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+          }}
+        >
         <div
           className="relative flex items-center rounded-full p-0.5"
           style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)' }}
@@ -875,6 +888,7 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
             <Calendar className="w-3.5 h-3.5" style={{ color: tableView === 'monthly' ? '#a78bfa' : 'inherit' }} />
             <span className="hidden sm:inline">Venta mensual histórica</span>
           </button>
+        </div>
         </div>
       </div>
 
