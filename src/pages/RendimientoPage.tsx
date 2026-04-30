@@ -131,7 +131,7 @@ export default function RendimientoPage() {
   useAnalysis()
   const navigate = useNavigate()
   const dp = useDemoPath()
-  const { sales, metas, dataAvailability, selectedPeriod, configuracion, forecastData, forecastChartLoading, setForecastData, setForecastChartLoading, dataSource, vendorAnalysis } = useAppStore()
+  const { sales, metas, dataAvailability, selectedPeriod, configuracion, forecastData, forecastChartLoading, setForecastData, setForecastChartLoading, dataSource, vendorAnalysis, fechaRefISO } = useAppStore()
   const metric: 'unidades' | 'venta_neta' = (configuracion.metricaGlobal ?? 'usd') === 'usd' ? 'venta_neta' : 'unidades'
   const [showBudget, setShowBudget] = useState(true)
   const [selectedVendor, setSelectedVendor] = useState<string>('todos')
@@ -455,21 +455,45 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
     return { ytdCurr, ytdPrev, variacion, bestMonth, bestVal, projected }
   }, [filteredForChart, selectedYear, currentMonth, useVentaNeta, isCurrentYear, forecastData])
 
-  // [Ticket 3.E.2] Columnas derivadas (años × 12 meses) para vista monthly.
-  // El tree de filas se computa en pivotWorker.ts vía buildMonthlyPivotTree.
+  // [Ticket 3.E.3] Columnas mes truncadas: desde el primer mes con venta en el
+  // dataset COMPLETO (no filtrado) hasta fechaRef.month inclusive. Oculta meses
+  // futuros y pre-dataset. Si no hay sales o fechaRef indefinido → [].
   const monthlyColumns = useMemo(() => {
     const MESES_LARGO_LOC = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
-    if (filteredSalesAllYears.length === 0) return [] as { key: string; year: number; month: number; label: string }[]
-    const yearsSet = new Set<number>()
-    for (const s of filteredSalesAllYears) yearsSet.add(new Date(s.fecha).getFullYear())
-    const years = Array.from(yearsSet).sort((a, b) => a - b)
-    return years.flatMap(y => MESES_LARGO_LOC.map((m, i) => ({
-      key: `${y}-${String(i + 1).padStart(2, '0')}`,
-      year: y,
-      month: i,
-      label: `${m} ${y}`,
-    })))
-  }, [filteredSalesAllYears])
+    type Col = { key: string; year: number; month: number; label: string }
+    if (sales.length === 0 || !fechaRefISO) return [] as Col[]
+    // Cota inferior: min(sales.fecha) sobre TODAS las sales (no filtradas) —
+    // la cota es del dataset, no del filtro activo.
+    let minTime = Infinity
+    for (const s of sales) {
+      const t = (s.fecha instanceof Date ? s.fecha : new Date(s.fecha)).getTime()
+      if (t < minTime) minTime = t
+    }
+    if (!isFinite(minTime)) return []
+    const minDate = new Date(minTime)
+    const firstYear = minDate.getFullYear()
+    const firstMonth = minDate.getMonth()
+    // Cota superior: fechaRef (max sale date), inclusive.
+    const ref = new Date(fechaRefISO)
+    const lastYear = ref.getFullYear()
+    const lastMonth = ref.getMonth()
+    // Caso patológico: cota inferior > superior → vacío
+    if (firstYear > lastYear || (firstYear === lastYear && firstMonth > lastMonth)) return []
+    const out: Col[] = []
+    let y = firstYear
+    let m = firstMonth
+    while (y < lastYear || (y === lastYear && m <= lastMonth)) {
+      out.push({
+        key: `${y}-${String(m + 1).padStart(2, '0')}`,
+        year: y,
+        month: m,
+        label: `${MESES_LARGO_LOC[m]} ${y}`,
+      })
+      m++
+      if (m > 11) { m = 0; y++ }
+    }
+    return out
+  }, [sales, fechaRefISO])
 
   // ── Pivot computation via Web Worker ──────────────────────────────────────
   // Mark dims as changed so the worker's onmessage auto-expands on structural change
