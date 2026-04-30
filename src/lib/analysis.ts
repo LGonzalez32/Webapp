@@ -17,7 +17,6 @@ import type {
 } from '../types'
 import {
   getFechaReferencia,
-  buildDefaultYtdRange,
   buildMonthlyRange,
   buildComparisonRangeYoY,
 } from './periods'
@@ -1258,21 +1257,16 @@ export function analyzeSupervisor(
   const fr = index.fechaReferencia
 
   // Ticket 2.2-C: rangos centralizados en lib/periods.ts.
-  // YTD: año en curso vs año anterior (truncado al día por buildDefaultYtdRange).
-  const ytdActualRange = buildDefaultYtdRange(fr)
-  const ytdAnteriorRange = buildComparisonRangeYoY(ytdActualRange)
   // MTD: mes seleccionado vs mismo mes año anterior. buildMonthlyRange trunca
   // si el mes contiene fr; buildComparisonRangeYoY clampea 29-feb cross-year.
   // El Math.min defensivo del Commit 2.2-B queda implícito en la primitiva.
+  // YTD: delegado a computeRangeYoY por supervisor (Ticket 3.A.1).
   const periodRange = buildMonthlyRange(
     { year, monthStart: month, monthEnd: month },
     fr,
   )
   const prevYearRange = buildComparisonRangeYoY(periodRange)
 
-  const startYTDActual = ytdActualRange.start
-  const startYTDAnterior = ytdAnteriorRange.start
-  const endYTDAnterior = ytdAnteriorRange.end
   const prevYearStart = prevYearRange.start
   const prevYearEnd = prevYearRange.end
 
@@ -1305,8 +1299,12 @@ export function analyzeSupervisor(
 
     const supervisorSales = vendores.flatMap((v) => index.byVendor.get(v) ?? [])
 
-    const ytd_actual_uds  = supervisorSales.filter((s) => s.fecha >= startYTDActual && s.fecha <= fr).reduce((a, s) => a + s.unidades, 0)
-    const ytd_anterior_uds = supervisorSales.filter((s) => s.fecha >= startYTDAnterior && s.fecha <= endYTDAnterior).reduce((a, s) => a + s.unidades, 0)
+    // [Ticket 3.A.1] YTD por supervisor delegado a computeRangeYoY.
+    // Equivalente bit-exact al cálculo inline pre-3.A.1: rangeActual.end =
+    // endOfDay(fr) vs inline `<= fr` da el mismo resultado porque fr =
+    // max(sales.fecha) y no hay ventas posteriores. Solo se consume UDS;
+    // los campos USD del retorno se ignoran.
+    const { ytd_actual_uds, ytd_anterior_uds } = computeRangeYoY(supervisorSales, fr, 0, fr.getMonth())
 
     const ventas_prev = supervisorSales.filter((s) => s.fecha >= prevYearStart && s.fecha <= prevYearEnd).reduce((a, s) => a + s.unidades, 0)
     const variacion_pct = safePct(ventas_periodo, ventas_prev)
