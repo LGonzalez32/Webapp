@@ -87,7 +87,7 @@ export default function TopBar() {
               style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', color: 'var(--sf-t1)' }}
             >
               {MESES_CORTOS.map((m, i) => (
-                <option key={i} value={i}>{m}</option>
+                <option key={i} value={i} disabled={isCurrentYear && i > fechaRefMonth}>{m}</option>
               ))}
             </select>
             <label className="text-[11px] font-semibold" style={{ color: 'var(--sf-t5)' }}>Hasta</label>

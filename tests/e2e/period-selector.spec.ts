@@ -33,23 +33,10 @@ test.describe('Selector global Desde/Hasta (Ticket 2.3.4)', () => {
     await expect(page.locator(SELECTOR_END)).toHaveValue('3')
   })
 
-  test('B — auto-corrección cuando Desde > Hasta: lastChanged="start" → Hasta sigue a Desde', async ({ page }) => {
-    test.setTimeout(30_000)
-    await gotoDemo(page)
-
-    // Estado conocido: Desde=Ene (0), Hasta=Mar (2). Hasta dentro del rango
-    // habilitado. Desde NO tiene meses disabled (puede ir a futuro).
-    await page.locator(SELECTOR_START).selectOption('0')
-    await page.locator(SELECTOR_END).selectOption('2')
-    await expect(page.locator(SELECTOR_END)).toHaveValue('2')
-
-    // Cambiar Desde a Sep (8). Aunque Sep esté disabled en Hasta (mes futuro),
-    // sí es seleccionable en Desde. El setter recibe (8, 2, 'start') → como
-    // start>end y lastChanged='start', clampea end=start=8.
-    await page.locator(SELECTOR_START).selectOption('8')
-    await expect(page.locator(SELECTOR_START)).toHaveValue('8')
-    await expect(page.locator(SELECTOR_END)).toHaveValue('8')
-  })
+  // Test B (auto-corrección Desde>Hasta) eliminado en Ticket 3.B.1: tras aplicar
+  // disabled simétrico al dropdown Desde (mismo tope fechaRef que Hasta), el
+  // escenario "Desde > Hasta" ya no es alcanzable desde la UI. La cobertura del
+  // clamp del setter quedó en tests/unit/store.setSelectedPeriodRange.test.ts.
 
   test('C — meses futuros tienen disabled en Hasta para el año actual', async ({ page }) => {
     test.setTimeout(30_000)
