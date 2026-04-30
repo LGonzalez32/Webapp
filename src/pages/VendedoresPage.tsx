@@ -31,8 +31,8 @@ const ESTADO_VENDEDOR_TOOLTIPS: Record<'critico' | 'riesgo' | 'ok' | 'superando'
   ok:        'Cumplimiento proyectado entre 90% y 105% de la meta (o, sin meta, variación anual entre -10% y +10%).',
   superando: 'Cumplimiento proyectado mayor al 105% de la meta (o, sin meta, crecimiento anual mayor al 10%).',
 }
-const TT_VEND_EN_RIESGO   = 'Vendedores en estado CRÍTICO o RIESGO.'
-const TT_VEND_SUPERANDO   = 'Vendedores con cumplimiento proyectado mayor al 105% de la meta.'
+const TT_VEND_EN_RIESGO   = 'Vendedores en estado CRÍTICO o RIESGO según proyección anual o desempeño YTD. No depende del rango seleccionado.'
+const TT_VEND_SUPERANDO   = 'Vendedores con proyección anual >105% de la meta o crecimiento YTD significativo. No depende del rango seleccionado.'
 const TT_CUMPL_PROM       = 'Promedio simple del cumplimiento de meta de los vendedores con meta asignada.'
 const TT_ACUMULADO_PROM   = 'Promedio simple de la variación del año a la fecha del equipo vs mismo período del año anterior.'
 const TT_PULSO_EQUIPO     = 'Porcentaje del equipo en buen estado: (OK + SUPERANDO) / total de vendedores.'

@@ -439,20 +439,6 @@ function resolveYTDRange(
   return { monthStart: selectedPeriod.monthStart, monthEnd: selectedPeriod.monthEnd }
 }
 
-/**
- * [Ticket 3.A] Wrapper legacy: rango YTD = (0, mes de fechaRef).
- * Preservado para compat de los 2 call sites internos (analyzeVendor, analyze
- * team). Migrar a computeRangeYoY con rango del store en Ticket 3.B.
- *
- * Bit-exact equivalente a la implementación pre-3.A:
- * buildMonthlyRange({year, 0, fechaRef.getMonth()}, fechaRef) cuando fechaRef
- * cae dentro del rango calendario produce el mismo {start: 1-ene, end: endOfDay(fechaRef)}
- * que buildDefaultYtdRange(fechaRef) — verificado analíticamente.
- */
-function computeYTD(sales: SaleRecord[], fechaReferencia: Date) {
-  return computeRangeYoY(sales, fechaReferencia, 0, fechaReferencia.getMonth())
-}
-
 // Accepts pre-grouped vendor sales (only this vendor's records)
 function analyzeVendor(
   vendedor: string,

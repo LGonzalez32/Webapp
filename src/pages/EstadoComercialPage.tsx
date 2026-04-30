@@ -252,7 +252,7 @@ export default function EstadoComercialPage() {
   useAnalysis()
   const {
     insights, vendorAnalysis, teamStats, dataAvailability,
-    configuracion, selectedPeriod, setSelectedPeriod, sales, metas, loadingMessage,
+    configuracion, selectedPeriod, sales, metas, loadingMessage,
     clientesDormidos, concentracionRiesgo, categoriasInventario, supervisorAnalysis,
     canalAnalysis, categoriaAnalysis, dataSource, tipoMetaActivo,
   } = useAppStore()

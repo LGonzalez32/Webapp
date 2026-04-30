@@ -106,6 +106,28 @@ Todos los `ytd_*` se calculan con `buildDefaultYtdRange(fechaReferencia)` = **[1
 
 **Resumen**: 5 sitios P0 + 7 sitios P1 + 2 sitios P2 + 2 excepciones P3. 4 tickets Sprint 3 + 6 tickets Sprint 4. Dependencia única: Sprint 3.A es prerequisito de 3.B y 3.C.
 
+## Sprint 4 candidates — deudas conscientes del bundle 3.B
+
+### cumplimiento_pct rango-aware
+
+**Origen:** Investigación 3.B.3.5 (Sprint 3).
+**Decisión pendiente:** Cuando el usuario elige rango Ene–Feb, ¿"Cumpl. prom" debe reflejar (a) cumplimiento de Feb solamente — comportamiento actual, anclado a `monthEnd` — o (b) cumplimiento agregado Ene+Feb vs meta Ene+Feb?
+**Consumers afectados si migra:** EstadoComercialPage card PROYECCIÓN (~L1866), insightEngine (varios candidates basados en `cumplimiento_pct` y `proyeccion_cierre`), chatService:299 (context al LLM), exportUtils:108 (KPIs export), VendorPanel:488 (KPI principal "vs mes anterior").
+**Recomendación técnica:** Si se elige (b), agregar campos paralelos `cumplimiento_rango` / `ventas_rango` en `VendorAnalysis` (mismo patrón que `ytd_*` post-3.B.½), no reemplazar — para no romper card PROYECCIÓN ni el motor.
+
+### Default 'ok' para vendedores sin baseline YoY
+
+**Origen:** Investigación 3.B.3.5 (Sprint 3).
+**Bug menor pre-existente:** En [analysis.ts:556-571](src/lib/analysis.ts#L556), el branch sin meta usa `< -20%` / `< -10%` / `> +10%` para clasificar `riesgo`. Vendedores con `variacion_vs_anio === null` (sin baseline año anterior) caen en default `'ok'`, lo cual puede ser engañoso para vendedores nuevos sin historia.
+**Decisión pendiente:** ¿Deberían clasificarse como `'sin_baseline'` o `'nuevo'` con visualización distinta (ej. badge gris en tabla, no contar en stats top)? Implica extender el tipo `RiesgoVendedor` y todos los consumers que matchean por valor.
+
+### UX labels "YTD" en drawer ClientesPage
+
+**Origen:** Validación visual post-3.B.4 (Sprint 3, Ticket 3.B.9 propuesto).
+**Mejora cosmética:** Cards "YTD 2026", "YTD 2025", "NETO YTD 2026" en el drawer del cliente (ClientePanel) usan jerga "YTD" que puede confundir a usuarios no técnicos.
+**Acción propuesta:** Renombrar a `"Año completo 2026"` o `"Total {año} a la fecha"`. Copy puro, scope reducido (~4 líneas en ClientePanel.tsx).
+**Sin decisión técnica pendiente:** founder define el copy final.
+
 ## Sprint 3 — Features visibles
 
 ### Rendimiento Anual — rediseño de filtros y toggle YTD/Mensual
