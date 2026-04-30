@@ -131,16 +131,121 @@ export function buildPivotTree(
   })
 }
 
-export function flattenPivot(
-  nodes: PivotNode[],
+// Genérico sobre el shape del nodo. Reusable por buildPivotTree (YTD) y
+// buildMonthlyPivotTree (monthly histórica).
+export function flattenPivot<T extends { id: string; children: T[] }>(
+  nodes: T[],
   expanded: Set<string>,
-  out: (PivotNode & { hasChildren: boolean })[],
-) {
+  out: (T & { hasChildren: boolean })[],
+): void {
   for (const n of nodes) {
     const hasChildren = n.children.length > 0
-    out.push({ ...n, hasChildren })
+    out.push({ ...n, hasChildren } as T & { hasChildren: boolean })
     if (hasChildren && expanded.has(n.id)) {
       flattenPivot(n.children, expanded, out)
     }
   }
+}
+
+// ─── MONTHLY HISTORICAL PIVOT (Ticket 3.E.2) ──────────────────────────────────
+
+export interface MonthlyPivotNode {
+  id: string
+  label: string
+  depth: number
+  dim: DimKey | 'total'
+  dimVal: string
+  valuesByCol: number[]
+  total: number
+  children: MonthlyPivotNode[]
+}
+
+/**
+ * Construye tree pivot para vista monthly histórica. Estructura paralela a
+ * buildPivotTree pero con cells = matriz por (year, month) en lugar de YTD vs prev.
+ *
+ * IDs idénticos al patrón de buildPivotTree (`${parentId}::${val}`) para que
+ * el Set<string> expandedKeys sea compartible entre ambas vistas cuando los
+ * dim chains coinciden.
+ */
+export function buildMonthlyPivotTree(
+  sales: SaleRecord[],
+  dims: DimKey[],
+  monthColumns: string[],
+  metric: 'unidades' | 'venta_neta',
+  parentId: string,
+  depth: number,
+): MonthlyPivotNode[] {
+  const colIndex = new Map<string, number>()
+  monthColumns.forEach((k, i) => colIndex.set(k, i))
+  const colCount = monthColumns.length
+
+  const valueOf = (s: SaleRecord): number =>
+    metric === 'venta_neta' ? (s.venta_neta ?? 0) : s.unidades
+
+  // Edge case: dims vacío → fila única "Total" agregando todo
+  if (dims.length === 0) {
+    if (sales.length === 0) return []
+    const valuesByCol = new Array(colCount).fill(0)
+    for (const s of sales) {
+      const d = new Date(s.fecha)
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+      const ci = colIndex.get(key)
+      if (ci !== undefined) valuesByCol[ci] += valueOf(s)
+    }
+    const total = valuesByCol.reduce((a, v) => a + v, 0)
+    return [{
+      id: `${parentId}::__total__`,
+      label: 'Total',
+      depth,
+      dim: 'total',
+      dimVal: '__total__',
+      valuesByCol,
+      total,
+      children: [],
+    }]
+  }
+
+  if (sales.length === 0) return []
+  const [dim, ...restDims] = dims
+
+  const groupMap = new Map<string, SaleRecord[]>()
+  for (const s of sales) {
+    const v = getSalesVal(s, dim)
+    let arr = groupMap.get(v)
+    if (!arr) { arr = []; groupMap.set(v, arr) }
+    arr.push(s)
+  }
+
+  const sorted = [...groupMap.keys()].sort((a, b) => {
+    const ta = (groupMap.get(a) ?? []).reduce((acc, s) => acc + valueOf(s), 0)
+    const tb = (groupMap.get(b) ?? []).reduce((acc, s) => acc + valueOf(s), 0)
+    return tb - ta
+  })
+
+  return sorted.map((val) => {
+    const cs = groupMap.get(val) ?? []
+    const valuesByCol = new Array(colCount).fill(0)
+    for (const s of cs) {
+      const d = new Date(s.fecha)
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+      const ci = colIndex.get(key)
+      if (ci !== undefined) valuesByCol[ci] += valueOf(s)
+    }
+    const total = valuesByCol.reduce((a, v) => a + v, 0)
+    const id = `${parentId}::${val}`
+    const children = restDims.length > 0
+      ? buildMonthlyPivotTree(cs, restDims, monthColumns, metric, id, depth + 1)
+      : []
+    return {
+      id,
+      label: dimDisplayLabel(val, dim),
+      depth,
+      dim,
+      dimVal: val,
+      valuesByCol,
+      total,
+      children,
+    }
+  })
 }

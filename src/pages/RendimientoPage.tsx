@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect, useRef, useCallback, type CSSProperties, type Key } from 'react'
 import { buildPivotTree, flattenPivot } from '../utils/pivotUtils'
-import type { DimKey, PivotNode } from '../utils/pivotUtils'
+import type { DimKey, PivotNode, MonthlyPivotNode } from '../utils/pivotUtils'
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
   type DragEndEvent,
@@ -267,6 +267,9 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
   // [Ticket 3.E.1] Toggle "Venta YTD" (default) / "Venta mensual histórica".
   // Estado local, no persiste en store.
   const [tableView, setTableView] = useState<'ytd' | 'monthly'>('ytd')
+  // [Ticket 3.E.2] Tree pivot monthly histórica (paralelo a pivotData YTD).
+  const [monthlyPivotData, setMonthlyPivotData] = useState<MonthlyPivotNode[]>([])
+  const [monthlySortDir, setMonthlySortDir] = useState<'asc' | 'desc'>('desc')
 
   const dismissMicrocopy = () => {
     setShowMicrocopy(false)
@@ -452,6 +455,22 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
     return { ytdCurr, ytdPrev, variacion, bestMonth, bestVal, projected }
   }, [filteredForChart, selectedYear, currentMonth, useVentaNeta, isCurrentYear, forecastData])
 
+  // [Ticket 3.E.2] Columnas derivadas (años × 12 meses) para vista monthly.
+  // El tree de filas se computa en pivotWorker.ts vía buildMonthlyPivotTree.
+  const monthlyColumns = useMemo(() => {
+    const MESES_LARGO_LOC = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
+    if (filteredSalesAllYears.length === 0) return [] as { key: string; year: number; month: number; label: string }[]
+    const yearsSet = new Set<number>()
+    for (const s of filteredSalesAllYears) yearsSet.add(new Date(s.fecha).getFullYear())
+    const years = Array.from(yearsSet).sort((a, b) => a - b)
+    return years.flatMap(y => MESES_LARGO_LOC.map((m, i) => ({
+      key: `${y}-${String(i + 1).padStart(2, '0')}`,
+      year: y,
+      month: i,
+      label: `${m} ${y}`,
+    })))
+  }, [filteredSalesAllYears])
+
   // ── Pivot computation via Web Worker ──────────────────────────────────────
   // Mark dims as changed so the worker's onmessage auto-expands on structural change
   useEffect(() => { dimsChangedRef.current = true }, [pivotDims])
@@ -463,36 +482,74 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
       { type: 'module' }
     )
     setPivotLoading(true)
-    workerRef.current.onmessage = (e: MessageEvent<PivotNode[]>) => {
-      const data = e.data
-      setPivotData(data)
-      // When dims change, merge: respect user's explicit expand/collapse choices, default for the rest
-      if (dimsChangedRef.current) {
-        dimsChangedRef.current = false
-        const toggled = userToggledKeys.current
-        const merged = new Set<string>()
-        const collectAndMerge = (nodes: PivotNode[]) => {
-          for (const n of nodes) {
-            if (n.children.length > 0) {
-              if (toggled.has(n.id)) {
-                // User explicitly set this key — respect their choice
-                if (toggled.get(n.id)) merged.add(n.id)
-              } else {
-                // No user choice — apply default (expand depth 0 and 1)
-                if (n.depth <= 1) merged.add(n.id)
+    workerRef.current.onmessage = (
+      e: MessageEvent<{ mode: 'ytd'; tree: PivotNode[] } | { mode: 'monthly'; tree: MonthlyPivotNode[] }>
+    ) => {
+      const out = e.data
+      if (out.mode === 'ytd') {
+        const data = out.tree
+        setPivotData(data)
+        if (dimsChangedRef.current) {
+          dimsChangedRef.current = false
+          const toggled = userToggledKeys.current
+          const merged = new Set<string>()
+          const collectAndMerge = (nodes: PivotNode[]) => {
+            for (const n of nodes) {
+              if (n.children.length > 0) {
+                if (toggled.has(n.id)) {
+                  if (toggled.get(n.id)) merged.add(n.id)
+                } else {
+                  if (n.depth <= 1) merged.add(n.id)
+                }
+                collectAndMerge(n.children)
               }
-              collectAndMerge(n.children)
             }
           }
+          collectAndMerge(data)
+          setExpandedKeys(merged)
         }
-        collectAndMerge(data)
-        setExpandedKeys(merged)
+      } else {
+        const data = out.tree
+        setMonthlyPivotData(data)
+        if (dimsChangedRef.current) {
+          dimsChangedRef.current = false
+          const toggled = userToggledKeys.current
+          const merged = new Set<string>()
+          const collectAndMerge = (nodes: MonthlyPivotNode[]) => {
+            for (const n of nodes) {
+              if (n.children.length > 0) {
+                if (toggled.has(n.id)) {
+                  if (toggled.get(n.id)) merged.add(n.id)
+                } else {
+                  if (n.depth <= 1) merged.add(n.id)
+                }
+                collectAndMerge(n.children)
+              }
+            }
+          }
+          collectAndMerge(data)
+          setExpandedKeys(merged)
+        }
       }
       setPivotLoading(false)
     }
-    workerRef.current.postMessage({ filteredSales, metas, pivotDims, selectedYear })
+    if (tableView === 'monthly') {
+      const dimsForRows = pivotDims.filter(d => d !== 'mes')
+      const monthCols = monthlyColumns.map(c => c.key)
+      const metric: 'unidades' | 'venta_neta' = useVentaNeta ? 'venta_neta' : 'unidades'
+      workerRef.current.postMessage({
+        filteredSales: filteredSalesAllYears,
+        metas, pivotDims, selectedYear,
+        mode: 'monthly',
+        dimsForRows,
+        monthColumns: monthCols,
+        metric,
+      })
+    } else {
+      workerRef.current.postMessage({ filteredSales, metas, pivotDims, selectedYear, mode: 'ytd' })
+    }
     return () => workerRef.current?.terminate()
-  }, [filteredSales, metas, pivotDims, selectedYear])
+  }, [filteredSales, metas, pivotDims, selectedYear, tableView, filteredSalesAllYears, monthlyColumns, useVentaNeta])
 
   const grandTotal = useMemo(() =>
     pivotData.reduce((a, n) => ({ u: a.u + n.unidades, v: a.v + n.ventaNeta, pu: a.pu + n.prevUnidades, pv: a.pv + n.prevVentaNeta }), { u: 0, v: 0, pu: 0, pv: 0 }),
@@ -506,47 +563,6 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
       return sortDir === 'desc' ? bv - av : av - bv
     })
   }, [pivotData, sortCol, sortDir])
-
-  // [Ticket 3.E.1] Datos para tabla "Venta mensual histórica".
-  // Filas: combinación de pivotDims presentes en filteredSalesAllYears.
-  // Columnas: (año, mes) calendar — todos los años del dataset, 12 meses cada uno.
-  // Celdas: suma calendar-month sin truncamiento same-day, sin TopBar range.
-  const monthlyHistoricalData = useMemo(() => {
-    const MESES_LARGO_LOC = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
-    if (filteredSalesAllYears.length === 0 || pivotDims.length === 0) {
-      return { columns: [] as { year: number; month: number; label: string }[], rows: [] as { label: string; values: number[]; total: number }[], colTotals: [] as number[], grandTotal: 0 }
-    }
-    const yearsSet = new Set<number>()
-    for (const s of filteredSalesAllYears) yearsSet.add(new Date(s.fecha).getFullYear())
-    const years = Array.from(yearsSet).sort((a, b) => a - b)
-    const columns = years.flatMap(y => MESES_LARGO_LOC.map((m, i) => ({ year: y, month: i, label: `${m} ${y}` })))
-    const colCount = columns.length
-    const colIndexFor = (year: number, month: number) => {
-      const yIdx = years.indexOf(year)
-      return yIdx < 0 ? -1 : yIdx * 12 + month
-    }
-    const rowMap = new Map<string, number[]>()
-    for (const s of filteredSalesAllYears) {
-      const key = pivotDims
-        .map(dim => (s as Record<string, unknown>)[dim] as string | undefined ?? '—')
-        .join(' / ')
-      const d = new Date(s.fecha)
-      const ci = colIndexFor(d.getFullYear(), d.getMonth())
-      if (ci < 0) continue
-      let arr = rowMap.get(key)
-      if (!arr) { arr = new Array(colCount).fill(0); rowMap.set(key, arr) }
-      arr[ci] += useVentaNeta ? (s.venta_neta ?? 0) : s.unidades
-    }
-    const rows = Array.from(rowMap.entries())
-      .map(([label, values]) => ({ label, values, total: values.reduce((a, v) => a + v, 0) }))
-      .sort((a, b) => b.total - a.total)
-    const colTotals = new Array(colCount).fill(0)
-    let grandTotal = 0
-    for (const row of rows) {
-      for (let i = 0; i < colCount; i++) { colTotals[i] += row.values[i]; grandTotal += row.values[i] }
-    }
-    return { columns, rows, colTotals, grandTotal }
-  }, [filteredSalesAllYears, pivotDims, useVentaNeta])
 
   const flatRows = useMemo(() => {
     const out: (PivotNode & { hasChildren: boolean })[] = []
@@ -922,10 +938,16 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
             .filter(t => !t.requiresDim || dataAvailability[t.requiresDim] === true)
             .map(toggle => {
               const isActive = pivotDims.includes(toggle.key)
+              // [Ticket 3.E.2] Chip "Mes" deshabilitado en vista monthly:
+              // los meses ya están en columnas, agregarlo como dim no aporta.
+              const isMesDisabled = toggle.key === 'mes' && tableView === 'monthly'
               return (
                 <button
                   key={toggle.key}
-                  onClick={() => {
+                  disabled={isMesDisabled}
+                  aria-disabled={isMesDisabled}
+                  title={isMesDisabled ? 'Mes ya está en las columnas en esta vista' : undefined}
+                  onClick={isMesDisabled ? undefined : () => {
                     if (isActive) {
                       if (pivotDims.length > 1) setPivotDims(prev => prev.filter(d => d !== toggle.key))
                     } else {
@@ -938,7 +960,8 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
                     background: isActive ? 'rgba(0,214,143,0.08)' : 'transparent',
                     color: isActive ? 'var(--sf-green)' : 'var(--sf-t4)',
                     fontWeight: isActive ? 500 : 400,
-                    cursor: 'pointer',
+                    cursor: isMesDisabled ? 'not-allowed' : 'pointer',
+                    opacity: isMesDisabled ? 0.4 : 1,
                   }}
                 >
                   <span>{toggle.icon}</span>
@@ -1167,56 +1190,108 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
           )
         })()}
 
-        {/* [Ticket 3.E.1] Tabla "Venta mensual histórica" — alternativa al modo YTD */}
+        {/* [Ticket 3.E.2] Tabla "Venta mensual histórica" — tree pivot con paridad UI YTD */}
         {tableView === 'monthly' && (() => {
-          const { columns, rows, colTotals, grandTotal: gtMonthly } = monthlyHistoricalData
           const fmtCell = (n: number) => n === 0 ? '—' : (useVentaNeta ? formatCurrency(n, configuracion.moneda) : formatUnits(n))
-          const cellStyle: CSSProperties = { padding: '8px 12px', fontSize: 12, fontFamily: "'DM Mono', monospace", textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid var(--sf-border)' }
-          const dimColWidth = 200
-          const cellColWidth = 110
-          const totalColWidth = 120
-          if (rows.length === 0) {
+          // Sort root por TOTAL desc/asc (P1)
+          const sortedRoot = [...monthlyPivotData].sort((a, b) =>
+            monthlySortDir === 'desc' ? b.total - a.total : a.total - b.total
+          )
+          const flat: (MonthlyPivotNode & { hasChildren: boolean })[] = []
+          flattenPivot(sortedRoot, expandedKeys, flat)
+          const colTotals = new Array(monthlyColumns.length).fill(0)
+          let grandTotal = 0
+          for (const root of monthlyPivotData) {
+            for (let i = 0; i < monthlyColumns.length; i++) colTotals[i] += root.valuesByCol[i]
+            grandTotal += root.total
+          }
+          if (monthlyPivotData.length === 0) {
             return (
               <div className="px-6 py-12 text-center text-sm" style={{ color: 'var(--sf-t5)' }}>
-                Sin datos para los filtros activos.
+                {pivotLoading ? 'Calculando…' : 'Sin datos para los filtros activos.'}
               </div>
             )
           }
+          const cellStyle: CSSProperties = { padding: '8px 12px', fontSize: 12, fontFamily: "'DM Mono', monospace", textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid var(--sf-border)' }
+          const dimColWidth = 240
+          const cellColWidth = 110
+          const totalColWidth = 120
           return (
             <div className="overflow-x-auto" style={{ maxHeight: '70vh' }}>
               <table style={{ borderCollapse: 'separate', borderSpacing: 0, width: 'max-content', minWidth: '100%' }}>
                 <thead>
                   <tr>
                     <th style={{ position: 'sticky', top: 0, left: 0, zIndex: 3, background: 'var(--sf-elevated)', borderBottom: '2px solid var(--sf-border)', borderRight: '1px solid var(--sf-border)', padding: '12px 16px', textAlign: 'left', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--sf-t2)', minWidth: dimColWidth }}>
-                      Dimensión
+                      <span className="flex items-center gap-2">
+                        Dimensión
+                        <span className="flex items-center gap-0.5 ml-auto">
+                          <button onClick={expandAll} className="p-1 rounded transition-colors cursor-pointer" style={{ color: 'var(--sf-t5)' }} title="Expandir todo">
+                            <ChevronsDown className="w-3.5 h-3.5" />
+                          </button>
+                          <button onClick={collapseAll} className="p-1 rounded transition-colors cursor-pointer" style={{ color: 'var(--sf-t5)' }} title="Colapsar todo">
+                            <ChevronsUp className="w-3.5 h-3.5" />
+                          </button>
+                        </span>
+                      </span>
                     </th>
-                    {columns.map(col => (
-                      <th key={`${col.year}-${col.month}`} style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--sf-elevated)', borderBottom: '2px solid var(--sf-border)', padding: '12px 12px', textAlign: 'right', fontSize: 11, fontWeight: 600, textTransform: 'none', color: 'var(--sf-t2)', whiteSpace: 'nowrap', minWidth: cellColWidth }}>
+                    {monthlyColumns.map(col => (
+                      <th key={col.key} style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--sf-elevated)', borderBottom: '2px solid var(--sf-border)', padding: '12px 12px', textAlign: 'right', fontSize: 11, fontWeight: 600, color: 'var(--sf-t2)', whiteSpace: 'nowrap', minWidth: cellColWidth }}>
                         {col.label}
                       </th>
                     ))}
-                    <th style={{ position: 'sticky', top: 0, right: 0, zIndex: 3, background: 'var(--sf-elevated)', borderBottom: '2px solid var(--sf-border)', borderLeft: '1px solid var(--sf-border)', padding: '12px 16px', textAlign: 'right', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--sf-t1)', minWidth: totalColWidth }}>
-                      Total
+                    <th
+                      onClick={() => setMonthlySortDir(d => d === 'desc' ? 'asc' : 'desc')}
+                      style={{ position: 'sticky', top: 0, right: 0, zIndex: 3, background: 'var(--sf-elevated)', borderBottom: '2px solid var(--sf-border)', borderLeft: '1px solid var(--sf-border)', padding: '12px 16px', textAlign: 'right', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--sf-t1)', minWidth: totalColWidth, cursor: 'pointer' }}
+                      title="Ordenar por total"
+                    >
+                      Total {monthlySortDir === 'desc' ? '↓' : '↑'}
                     </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map(row => (
-                    <tr key={row.label}>
-                      <td style={{ position: 'sticky', left: 0, zIndex: 1, background: 'var(--sf-card)', borderRight: '1px solid var(--sf-border)', borderBottom: '1px solid var(--sf-border)', padding: '8px 16px', fontSize: 12, color: 'var(--sf-t1)', fontWeight: 500, whiteSpace: 'nowrap' }}>
-                        {row.label}
-                      </td>
-                      {row.values.map((v, i) => (
-                        <td key={i} style={{ ...cellStyle, color: v === 0 ? 'var(--sf-t5)' : 'var(--sf-t2)' }}>
-                          {fmtCell(v)}
+                  {flat.map(row => {
+                    const isRoot = row.depth === 0
+                    const indent = 16 + row.depth * 24
+                    const canExpand = row.hasChildren
+                    const isExpanded = expandedKeys.has(row.id)
+                    const dimMeta = row.dim !== 'total' ? DIM_META[row.dim] : null
+                    return (
+                      <tr key={row.id}>
+                        <td style={{ position: 'sticky', left: 0, zIndex: 1, background: 'var(--sf-card)', borderRight: '1px solid var(--sf-border)', borderBottom: '1px solid var(--sf-border)', padding: '8px 16px 8px 0', whiteSpace: 'nowrap' }}>
+                          <div className="flex items-center" style={{ paddingLeft: indent }}>
+                            {canExpand ? (
+                              <span
+                                onClick={() => toggleExpand(row.id)}
+                                style={{ width: 18, height: 18, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginRight: 8, cursor: 'pointer' }}
+                                className="hover:bg-[var(--sf-inset)]"
+                              >
+                                <ChevronRight style={{ width: 12, height: 12, color: 'var(--sf-t3)', transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 200ms ease' }} />
+                              </span>
+                            ) : (
+                              <span style={{ display: 'inline-block', width: 18, marginRight: 8, flexShrink: 0 }} />
+                            )}
+                            <span style={{ fontSize: isRoot ? 13 : 12, fontWeight: isRoot ? 600 : 400, color: isRoot ? 'var(--sf-t1)' : 'var(--sf-t2)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                              {row.label}
+                              {row.depth > 0 && dimMeta && (
+                                <span className={cn('shrink-0 px-1 py-0.5 rounded text-[9px] font-bold border leading-none', dimMeta.color)}>
+                                  {dimMeta.badge}
+                                </span>
+                              )}
+                            </span>
+                          </div>
                         </td>
-                      ))}
-                      <td style={{ position: 'sticky', right: 0, zIndex: 1, background: 'var(--sf-card)', borderLeft: '1px solid var(--sf-border)', borderBottom: '1px solid var(--sf-border)', padding: '8px 16px', fontSize: 12, fontFamily: "'DM Mono', monospace", textAlign: 'right', color: 'var(--sf-t1)', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                        {row.valuesByCol.map((v, i) => (
+                          <td key={i} style={{ ...cellStyle, color: v === 0 ? 'var(--sf-t5)' : 'var(--sf-t2)' }}>
+                            {fmtCell(v)}
+                          </td>
+                        ))}
+                        <td style={{ position: 'sticky', right: 0, zIndex: 1, background: 'var(--sf-card)', borderLeft: '1px solid var(--sf-border)', borderBottom: '1px solid var(--sf-border)', padding: '8px 16px', fontSize: 12, fontFamily: "'DM Mono', monospace", textAlign: 'right', color: 'var(--sf-t1)', fontWeight: 600, whiteSpace: 'nowrap' }}>
                           {fmtCell(row.total)}
-                      </td>
-                    </tr>
-                  ))}
-                  {/* Totals row */}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                  {/* Grand total row */}
                   <tr>
                     <td style={{ position: 'sticky', left: 0, zIndex: 2, background: 'var(--sf-elevated)', borderRight: '1px solid var(--sf-border)', borderTop: '2px solid var(--sf-border)', padding: '10px 16px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--sf-t1)' }}>
                       Total
@@ -1227,7 +1302,7 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
                       </td>
                     ))}
                     <td style={{ position: 'sticky', right: 0, zIndex: 2, background: 'var(--sf-elevated)', borderLeft: '1px solid var(--sf-border)', borderTop: '2px solid var(--sf-border)', padding: '10px 16px', fontSize: 12, fontFamily: "'DM Mono', monospace", textAlign: 'right', color: 'var(--sf-green)', fontWeight: 700, whiteSpace: 'nowrap' }}>
-                      {fmtCell(gtMonthly)}
+                      {fmtCell(grandTotal)}
                     </td>
                   </tr>
                 </tbody>
