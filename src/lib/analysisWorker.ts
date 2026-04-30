@@ -22,7 +22,7 @@ interface WorkerInput {
   sales: SaleRecord[]
   metas: MetaRecord[]
   inventory: InventoryItem[]
-  selectedPeriod: { year: number; month: number }
+  selectedPeriod: { year: number; month: number; monthStart?: number; monthEnd?: number }
   configuracion: Configuracion
   tipoMetaActivo?: 'uds' | 'usd'
 }
@@ -46,7 +46,7 @@ interface Phase1State {
   metas: MetaRecord[]
   dataAvailability: DataAvailability
   configuracion: Configuracion
-  selectedPeriod: { year: number; month: number }
+  selectedPeriod: { year: number; month: number; monthStart?: number; monthEnd?: number }
 }
 
 let _phase1: Phase1State | null = null

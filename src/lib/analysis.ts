@@ -403,6 +403,42 @@ export function computeRangeYoY(
 }
 
 /**
+ * [Ticket 3.B.½] Resuelve el rango efectivo a usar en computeRangeYoY.
+ *
+ * - Si selectedPeriod trae monthStart y monthEnd definidos: los usa.
+ * - Si no: cae al default legacy YTD = (0, fechaRef.getMonth()).
+ *
+ * Cuando se exercita el path range-aware (monthStart/monthEnd presentes),
+ * valida que selectedPeriod.year coincida con fechaRef.getFullYear().
+ * Soportar año pasado en el path range-aware queda fuera de scope (Sprint 3.E
+ * o posterior). Throws con mensaje claro si hay mismatch.
+ */
+function resolveYTDRange(
+  selectedPeriod: { year: number; monthStart?: number; monthEnd?: number; month?: number } | undefined,
+  fechaReferencia: Date,
+): { monthStart: number; monthEnd: number } {
+  const fechaRefYear = fechaReferencia.getFullYear()
+  // Path range-aware solo cuando: (a) hay selectedPeriod con monthStart/monthEnd
+  // definidos, (b) year > 0 (no neutral state), (c) year coincide con fechaRef.
+  // Cualquier otro caso → legacy YTD default (preserva goldens y tolera neutral).
+  if (
+    !selectedPeriod ||
+    selectedPeriod.monthStart === undefined ||
+    selectedPeriod.monthEnd === undefined ||
+    selectedPeriod.year === 0
+  ) {
+    return { monthStart: 0, monthEnd: fechaReferencia.getMonth() }
+  }
+  if (selectedPeriod.year !== fechaRefYear) {
+    throw new Error(
+      `[3.B.½] selectedPeriod.year (${selectedPeriod.year}) ≠ fechaRef.year (${fechaRefYear}); ` +
+      `range-aware YTD path solo soporta el año actual. Año pasado pendiente de Sprint posterior.`,
+    )
+  }
+  return { monthStart: selectedPeriod.monthStart, monthEnd: selectedPeriod.monthEnd }
+}
+
+/**
  * [Ticket 3.A] Wrapper legacy: rango YTD = (0, mes de fechaRef).
  * Preservado para compat de los 2 call sites internos (analyzeVendor, analyze
  * team). Migrar a computeRangeYoY con rango del store en Ticket 3.B.
@@ -421,7 +457,7 @@ function analyzeVendor(
   vendedor: string,
   vendorSales: SaleRecord[],
   metas: MetaRecord[],
-  selectedPeriod: { year: number; month: number },
+  selectedPeriod: { year: number; month: number; monthStart?: number; monthEnd?: number },
   diasTranscurridos: number,
   diasTotales: number,
   diasRestantes: number,
@@ -509,8 +545,11 @@ function analyzeVendor(
     month
   )
 
-  // YTD (necesario para clasificación de riesgo sin meta)
-  const ytd = computeYTD(vendorSales, fechaReferencia)
+  // YTD (necesario para clasificación de riesgo sin meta).
+  // [Ticket 3.B.½] Range-aware: usa monthStart/monthEnd del store si están
+  // presentes; cae a YTD legacy (0, fechaRef.getMonth()) si no.
+  const _ytdRange = resolveYTDRange(selectedPeriod, fechaReferencia)
+  const ytd = computeRangeYoY(vendorSales, fechaReferencia, _ytdRange.monthStart, _ytdRange.monthEnd)
 
   // Clasificación de riesgo
   let riesgo: RiesgoVendedor = 'ok'
@@ -842,7 +881,7 @@ export function computeCommercialAnalysis(
   sales: SaleRecord[],
   metas: MetaRecord[],
   inventory: InventoryItem[],
-  selectedPeriod: { year: number; month: number },
+  selectedPeriod: { year: number; month: number; monthStart?: number; monthEnd?: number },
   config: Configuracion,
   index?: SaleIndex,
   tipoMetaActivo?: 'uds' | 'usd',
@@ -1070,7 +1109,10 @@ export function computeCommercialAnalysis(
     dias_totales: diasTotales,
     dias_restantes: diasRestantes,
     ...(() => {
-      const { ytd_actual_uds, ytd_anterior_uds, variacion_ytd_uds_pct } = computeYTD(sales, fechaReferencia)
+      // [Ticket 3.B.½] Range-aware igual que analyzeVendor.
+      const _teamRange = resolveYTDRange(selectedPeriod, fechaReferencia)
+      const { ytd_actual_uds, ytd_anterior_uds, variacion_ytd_uds_pct } =
+        computeRangeYoY(sales, fechaReferencia, _teamRange.monthStart, _teamRange.monthEnd)
       return {
         ytd_actual_equipo_uds: ytd_actual_uds,
         ytd_anterior_equipo_uds: ytd_anterior_uds,
@@ -1250,7 +1292,7 @@ export function computeCategoriasInventario(
 export function analyzeSupervisor(
   vendorAnalysis: VendorAnalysis[],
   metas: MetaRecord[],
-  selectedPeriod: { year: number; month: number },
+  selectedPeriod: { year: number; month: number; monthStart?: number; monthEnd?: number },
   index: SaleIndex,
 ): SupervisorAnalysis[] {
   const { year, month } = selectedPeriod
@@ -1300,11 +1342,10 @@ export function analyzeSupervisor(
     const supervisorSales = vendores.flatMap((v) => index.byVendor.get(v) ?? [])
 
     // [Ticket 3.A.1] YTD por supervisor delegado a computeRangeYoY.
-    // Equivalente bit-exact al cálculo inline pre-3.A.1: rangeActual.end =
-    // endOfDay(fr) vs inline `<= fr` da el mismo resultado porque fr =
-    // max(sales.fecha) y no hay ventas posteriores. Solo se consume UDS;
-    // los campos USD del retorno se ignoran.
-    const { ytd_actual_uds, ytd_anterior_uds } = computeRangeYoY(supervisorSales, fr, 0, fr.getMonth())
+    // [Ticket 3.B.½] Range-aware: usa monthStart/monthEnd del store si están
+    // presentes; cae a YTD legacy (0, fr.getMonth()) si no.
+    const _supRange = resolveYTDRange(selectedPeriod, fr)
+    const { ytd_actual_uds, ytd_anterior_uds } = computeRangeYoY(supervisorSales, fr, _supRange.monthStart, _supRange.monthEnd)
 
     const ventas_prev = supervisorSales.filter((s) => s.fecha >= prevYearStart && s.fecha <= prevYearEnd).reduce((a, s) => a + s.unidades, 0)
     const variacion_pct = safePct(ventas_periodo, ventas_prev)
