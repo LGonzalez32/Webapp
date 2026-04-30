@@ -425,6 +425,7 @@ function resolveYTDRange(
     !selectedPeriod ||
     selectedPeriod.monthStart === undefined ||
     selectedPeriod.monthEnd === undefined ||
+    // year === 0 sentinel: pre-hydration store state, fallback to legacy YTD range.
     selectedPeriod.year === 0
   ) {
     return { monthStart: 0, monthEnd: fechaReferencia.getMonth() }

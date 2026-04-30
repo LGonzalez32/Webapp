@@ -1509,20 +1509,22 @@ export default function EstadoComercialPage() {
   const diagCriticaCount = enrichedBlocks.filter(b => b.severity === 'critical').length
   const [mostrarAdicionales, setMostrarAdicionales] = useState(false)
 
-  // R103: derivación local — ytdChart usa monthlyTotals (pre-computado off-thread).
-  // Tras Ticket 2.4.4 (chip removido) ya no hay filtrado UI multi-mes.
+  // [Ticket 3.B.2] ytdChart consume rango activo del store (monthStart/monthEnd).
+  // Default rango = (0, fechaRef.month) reproduce el comportamiento YTD-anchored
+  // pre-3.B.2 bit-exact. Si user mueve TopBar, los totales y barras siguen.
   const ytdChart = useMemo(() => {
     const currentYear = maxDate.getTime() > 0 ? maxDate.getFullYear() : selectedPeriod.year
     const previousYear = currentYear - 1
-    const selectedMonth = maxDate.getTime() > 0 ? maxDate.getMonth() : selectedPeriod.month
-    const latestMonth = maxDate.getFullYear() === currentYear ? maxDate.getMonth() : selectedMonth
+    const latestMonth = maxDate.getFullYear() === currentYear ? maxDate.getMonth() : selectedPeriod.monthEnd
     const maxDay = maxDate.getDate()
+    const monthStart = selectedPeriod.monthStart
+    const monthEnd = selectedPeriod.monthEnd
 
     const data: { month: string; actual: number; anterior: number; isPartial: boolean; daysElapsed: number; daysTotal: number }[] = []
     let totalActual = 0
     let totalAnterior = 0
 
-    for (let m = 0; m <= selectedMonth; m++) {
+    for (let m = monthStart; m <= monthEnd; m++) {
       const isPartialMonth = m === latestMonth
       const daysInMonth = new Date(currentYear, m + 1, 0).getDate()
 
@@ -1544,19 +1546,21 @@ export default function EstadoComercialPage() {
       })
     }
     return { data, totalActual, totalAnterior, maxDay }
-  }, [monthlyTotals, monthlyTotalsSameDay, selectedPeriod.year, selectedPeriod.month, maxDate])
+  }, [monthlyTotals, monthlyTotalsSameDay, selectedPeriod.year, selectedPeriod.monthStart, selectedPeriod.monthEnd, maxDate])
 
+  // [Ticket 3.B.2] ytdChartUSD: mismo patrón rango-aware que ytdChart (UDS).
   const ytdChartUSD = useMemo(() => {
     if (!dataAvailability.has_venta_neta) return null
     const currentYear = maxDate.getTime() > 0 ? maxDate.getFullYear() : selectedPeriod.year
     const previousYear = currentYear - 1
-    const selectedMonth = maxDate.getTime() > 0 ? maxDate.getMonth() : selectedPeriod.month
-    const latestMonth = maxDate.getFullYear() === currentYear ? maxDate.getMonth() : selectedMonth
+    const latestMonth = maxDate.getFullYear() === currentYear ? maxDate.getMonth() : selectedPeriod.monthEnd
     const maxDay = maxDate.getDate()
+    const monthStart = selectedPeriod.monthStart
+    const monthEnd = selectedPeriod.monthEnd
     const data: { month: string; actual: number; anterior: number; isPartial: boolean; daysElapsed: number; daysTotal: number }[] = []
     let totalActual = 0
     let totalAnterior = 0
-    for (let m = 0; m <= selectedMonth; m++) {
+    for (let m = monthStart; m <= monthEnd; m++) {
       const isPartialMonth = m === latestMonth
       const daysInMonth = new Date(currentYear, m + 1, 0).getDate()
       const ventasActual = monthlyTotals[`${currentYear}-${m}`]?.neta ?? 0
@@ -1568,7 +1572,7 @@ export default function EstadoComercialPage() {
       data.push({ month: MESES_CORTO[m], actual: ventasActual, anterior: ventasAnterior, isPartial: isPartialMonth, daysElapsed: isPartialMonth ? maxDay : daysInMonth, daysTotal: daysInMonth })
     }
     return { data, totalActual, totalAnterior, maxDay }
-  }, [monthlyTotals, monthlyTotalsSameDay, selectedPeriod.year, selectedPeriod.month, maxDate, dataAvailability.has_venta_neta])
+  }, [monthlyTotals, monthlyTotalsSameDay, selectedPeriod.year, selectedPeriod.monthStart, selectedPeriod.monthEnd, maxDate, dataAvailability.has_venta_neta])
 
   // R103: derivación local — metasCerradas cruza monthlyTotals (pre-computado) + metas + deferredVendorAnalysis; no itera ventas crudas
   const metasCerradas = useMemo(() => {
@@ -1827,7 +1831,6 @@ export default function EstadoComercialPage() {
             ? ((ytdActual - ytdAnterior) / ytdAnterior) * 100
             : null
           const yoyYear      = selectedPeriod.year - 1
-          const mesActNombre = MESES_CORTO[selectedPeriod.month].toUpperCase()
 
           return (
             <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
@@ -1847,7 +1850,8 @@ export default function EstadoComercialPage() {
                 <p className="text-sm font-semibold mt-2" style={{ color: varPctYTD >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
                   {varPctYTD >= 0 ? '+' : ''}{varPctYTD.toFixed(1)}%
                   <span className="text-xs font-normal ml-1" style={{ color: 'var(--sf-t5)' }}>
-                    Acumulado Ene–{mesActNombre} día {teamStats.dias_transcurridos} vs mismo período {yoyYear}
+                    {/* [Ticket 3.B.2] Rango activo via formatPeriodLabel; absorbe deuda 3.C ("Ene–" hardcoded). */}
+                    Acumulado {formatPeriodLabel(selectedPeriod.year, selectedPeriod.monthStart, selectedPeriod.monthEnd)} día {teamStats.dias_transcurridos} vs mismo período {yoyYear}
                   </span>
                 </p>
               )}
