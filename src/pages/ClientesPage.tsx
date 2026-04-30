@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useDemoPath } from '../lib/useDemoPath'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
+import { formatPeriodLabel } from '../lib/periods'
 import { Users, ChevronUp, ChevronDown } from 'lucide-react'
 import { toast } from 'sonner'
 import type { ClienteDormido } from '../types'
@@ -69,6 +70,12 @@ export default function ClientesPage() {
     categoriaAnalysis,
     clienteSummaries,
   } = useAppStore()
+
+  // [Ticket 3.B.4] Label del rango YoY (año anterior). includeYear: true porque
+  // refiere al año pasado y omitirlo ambiguafica. Sentinel year=0 → placeholder.
+  const yoyPeriodLabel = selectedPeriod.year > 0
+    ? formatPeriodLabel(selectedPeriod.year - 1, selectedPeriod.monthStart, selectedPeriod.monthEnd, { includeYear: true })
+    : '—'
 
   const [highlightActive, setHighlightActive] = useState<string | null>(highlightCliente)
   const highlightRef = useCallback((node: HTMLTableRowElement | null) => {
@@ -262,7 +269,7 @@ export default function ClientesPage() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
           {[
             { label: 'Inactivo', value: `${c.dias_sin_actividad}d` },
-            { label: `Valor ${MESES_CORTOS[selectedPeriod.month]} ${selectedPeriod.year - 1}`, value: c.valor_yoy_usd > 0 ? `${moneda}${c.valor_yoy_usd >= 1000 ? `${(c.valor_yoy_usd / 1000).toFixed(1)}k` : c.valor_yoy_usd}` : '—' },
+            { label: `Valor ${yoyPeriodLabel}`, value: c.valor_yoy_usd > 0 ? `${moneda}${c.valor_yoy_usd >= 1000 ? `${(c.valor_yoy_usd / 1000).toFixed(1)}k` : c.valor_yoy_usd}` : '—' },
             { label: 'Vendedor', value: c.vendedor.split(' ')[0] },
           ].map((m, i) => (
             <div key={i} style={{ padding: '8px 10px', background: 'var(--sf-bg)', borderRadius: 8, border: '1px solid var(--sf-border)' }}>
@@ -636,7 +643,7 @@ export default function ClientesPage() {
               </p>
               {totalValorEnRiesgo > 0 && usaDolares && (
                 <p className="text-xs mt-0.5" style={{ color: 'var(--sf-t3)' }}>
-                  {moneda}{totalValorEnRiesgo >= 1000 ? `${(totalValorEnRiesgo / 1000).toFixed(1)}k` : totalValorEnRiesgo.toLocaleString()} venta YoY perdida ({MESES_CORTOS[selectedPeriod.month]} {selectedPeriod.year - 1})
+                  {moneda}{totalValorEnRiesgo >= 1000 ? `${(totalValorEnRiesgo / 1000).toFixed(1)}k` : totalValorEnRiesgo.toLocaleString()} venta YoY perdida ({yoyPeriodLabel})
                   {sorted.length > 0 ? ` · ~${moneda}${Math.round(totalValorEnRiesgo / sorted.length / 1000 * 10) / 10}k promedio por cliente` : ''}
                 </p>
               )}
@@ -660,7 +667,7 @@ export default function ClientesPage() {
                       ['vendedor', 'Vendedor'],
                       ['dias_sin_actividad', 'Inactivo'],
                       ['transacciones_yoy', 'Txns YoY'],
-                      ['valor_yoy_usd', `Valor ${MESES_CORTOS[selectedPeriod.month]} ${selectedPeriod.year - 1}`],
+                      ['valor_yoy_usd', `Valor ${yoyPeriodLabel}`],
                       ['prioridad', 'Recuperación'],
                     ] as [SortKey, string][]).map(([k, label], i) => (
                       <th
@@ -848,7 +855,7 @@ export default function ClientesPage() {
                                         `Profundizar sobre cliente dormido: ${c.cliente}`,
                                         `Vendedor: ${c.vendedor}`,
                                         `Días inactivo: ${c.dias_sin_actividad}`,
-                                        `Valor YoY (${MESES_CORTOS[selectedPeriod.month]} ${selectedPeriod.year - 1}): ${moneda}${c.valor_yoy_usd.toLocaleString()}`,
+                                        `Valor YoY (${yoyPeriodLabel}): ${moneda}${c.valor_yoy_usd.toLocaleString()}`,
                                         `Estado: ${c.recovery_label === 'alta' ? 'Alta probabilidad de recuperación' : c.recovery_label === 'recuperable' ? 'Recuperable' : c.recovery_label === 'dificil' ? 'Difícil de recuperar' : 'Perdido'}`,
                                         analysis.text ? `\nAnálisis previo:\n${analysis.text}` : '',
                                         ``,

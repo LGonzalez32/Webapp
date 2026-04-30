@@ -700,7 +700,7 @@ function calcFrecuenciaEsperada(sortedAsc: SaleRecord[]): number | null {
 function computeClientesDormidos(
   sales: SaleRecord[],
   threshold: number,
-  selectedPeriod: { year: number; month: number },
+  selectedPeriod: { year: number; month: number; monthStart?: number; monthEnd?: number },
   byClient?: Map<string, SaleRecord[]>,
 ): ClienteDormido[] {
   // BUG-FIX (Ticket 2.2-A): si no hay sales, retornar lista vacía en vez de
@@ -720,9 +720,14 @@ function computeClientesDormidos(
     return m
   })()
 
-  // YoY reference window: same month of previous year (R53/R58)
+  // [Ticket 3.B.4] YoY reference window: mismo rango del año anterior con
+  // truncamiento same-day en monthEnd cuando coincide con fechaRef.month
+  // (regla CONTEXT.md "MTD vs MTD same-day, YTD vs YTD same-day"). Pre-3.B.4
+  // era single-month sin truncamiento; ahora suma todo el rango del usuario.
   const yoyYear = selectedPeriod.year - 1
-  const yoyMonth = selectedPeriod.month
+  const yoyMonthStart = selectedPeriod.monthStart ?? 0
+  const yoyMonthEnd = selectedPeriod.monthEnd ?? selectedPeriod.month
+  const yoyCutoffDay = yoyMonthEnd === today.getMonth() ? today.getDate() : null
 
   type DormidoRaw = {
     cliente: string; vendedor: string; ultima_compra: Date; dias_sin_actividad: number
@@ -753,8 +758,15 @@ function computeClientesDormidos(
     }
     const vendedor = Object.entries(vendedorCount).sort(([, a], [, b]) => b - a)[0][0]
 
-    // valor_yoy_usd: what the client bought in the same month of previous year (R58)
-    const yoyRecords = records.filter(r => r.fecha.getFullYear() === yoyYear && r.fecha.getMonth() === yoyMonth)
+    // [Ticket 3.B.4] valor_yoy_usd: ventas del cliente en el mismo rango del año
+    // anterior. Same-day cutoff en monthEnd si == mes de fechaRef (regla MTD).
+    const yoyRecords = records.filter(r => {
+      if (r.fecha.getFullYear() !== yoyYear) return false
+      const m = r.fecha.getMonth()
+      if (m < yoyMonthStart || m > yoyMonthEnd) return false
+      if (m === yoyMonthEnd && yoyCutoffDay !== null && r.fecha.getDate() > yoyCutoffDay) return false
+      return true
+    })
     const valor_yoy_usd = yoyRecords.reduce((a, s) => a + (s.venta_neta ?? s.unidades), 0)
     const transacciones_yoy = yoyRecords.length
 
