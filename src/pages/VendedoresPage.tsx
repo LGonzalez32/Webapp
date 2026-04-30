@@ -16,6 +16,7 @@ import {
   getVentasTotalEquipoYTD,
   getVentasPorVendedorAgrupado,
 } from '../lib/domain-aggregations'
+import { formatPeriodLabel } from '../lib/periods'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -69,6 +70,14 @@ export default function VendedoresPage() {
   const dp = useDemoPath()
   const { search: locationSearch } = location
   const highlightVendedor = (location.state as { highlight?: string } | null)?.highlight ?? null
+
+  // [Ticket 3.B.3] Etiquetas de período activas, usadas en headers de tabla,
+  // cards "MEJOR DEL MES" / "NECESITA ATENCIÓN" y AnalysisDrawer subtitle.
+  // Sentinel year=0 (pre-hidratación): fallback al año actual del browser.
+  const _headerYear = selectedPeriod.year > 0 ? selectedPeriod.year : new Date().getFullYear()
+  const _headerStart = selectedPeriod.year > 0 ? selectedPeriod.monthStart : 0
+  const _headerEnd = selectedPeriod.year > 0 ? selectedPeriod.monthEnd : new Date().getMonth()
+  const periodoLabel = formatPeriodLabel(_headerYear, _headerStart, _headerEnd, { includeYear: false })
 
   const [highlightActive, setHighlightActive] = useState<string | null>(highlightVendedor)
   const highlightRef = useCallback((node: HTMLDivElement | null) => {
@@ -454,8 +463,8 @@ CONVENCIÓN DE UNIDADES (R57 — obligatoria):
       <div title={TT_ALERTAS_HEADER} style={{ borderLeft: '1px solid var(--sf-border)', paddingLeft: '16px', cursor: 'help' }}>
         {hdrBtn('alertas', 'Alertas', 'center')}
       </div>
-      <div>{hdrBtn('ytd', selectedPeriod?.year ?? new Date().getFullYear())}</div>
-      <div>{hdrBtn('ytd_ant', (selectedPeriod?.year ?? new Date().getFullYear()) - 1)}</div>
+      <div>{hdrBtn('ytd', `${periodoLabel} ${_headerYear}`)}</div>
+      <div>{hdrBtn('ytd_ant', `${periodoLabel} ${_headerYear - 1}`)}</div>
       <div>{hdrBtn('var', 'Variación')}</div>
       <div>{hdrBtn('var_pct', 'Variación %')}</div>
       <div>{hdrBtn('peso', 'Peso %')}</div>
@@ -887,7 +896,7 @@ CONVENCIÓN DE UNIDADES (R57 — obligatoria):
               <div className="flex items-center gap-2 mt-1">
                 {mejorYtdPct != null && (
                   <span className="text-xs font-medium" style={{ color: mejorYtdPct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
-                    {mejorYtdPct >= 0 ? '+' : ''}{mejorYtdPct.toFixed(1)}% año a la fecha
+                    {mejorYtdPct >= 0 ? '+' : ''}{mejorYtdPct.toFixed(1)}% en {periodoLabel}
                   </span>
                 )}
                 {mejorDelMes.cumplimiento_pct != null && (
@@ -914,7 +923,7 @@ CONVENCIÓN DE UNIDADES (R57 — obligatoria):
               <div className="flex items-center gap-2 mt-1">
                 {atencionYtdPct != null && (
                   <span className="text-xs font-medium" style={{ color: atencionYtdPct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
-                    {atencionYtdPct >= 0 ? '+' : ''}{atencionYtdPct.toFixed(1)}% año a la fecha
+                    {atencionYtdPct >= 0 ? '+' : ''}{atencionYtdPct.toFixed(1)}% en {periodoLabel}
                   </span>
                 )}
                 <span className="text-[11px]" style={{ color: 'var(--sf-t4)' }}>
@@ -1085,7 +1094,7 @@ CONVENCIÓN DE UNIDADES (R57 — obligatoria):
             title={drawerVendedor?.vendedor ?? ''}
             subtitle={(() => {
               const p = drawerVendedor ? (drawerVendedor.variacion_ytd_usd_pct ?? drawerVendedor.variacion_ytd_uds_pct ?? null) : null
-              return p != null ? `${p >= 0 ? '+' : ''}${p.toFixed(1)}% año a la fecha` : undefined
+              return p != null ? `${p >= 0 ? '+' : ''}${p.toFixed(1)}% en ${periodoLabel}` : undefined
             })()}
             badges={rc ? [{ label: rc.label, color: rc.badgeColor, bg: rc.badgeBg }] : []}
             analysisText={analysis?.text ?? null}
