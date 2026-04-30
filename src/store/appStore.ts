@@ -288,18 +288,26 @@ export const useAppStore = create<AppState>()(
       setCanalesDisponibles:    (canalesDisponibles)    => set({ canalesDisponibles }),
       setMonthlyTotals:         (monthlyTotals)         => set({ monthlyTotals }),
       setMonthlyTotalsSameDay:  (monthlyTotalsSameDay)  => set({ monthlyTotalsSameDay }),
-      setFechaRefISO: (fechaRefISO) => set(() => {
+      setFechaRefISO: (fechaRefISO) => set((state) => {
         const updates: any = { fechaRefISO }
         if (fechaRefISO) {
           const fechaRef = new Date(fechaRefISO)
-          // [Ticket 2.3.2] Default YTD desde fechaRef. `month` = monthEnd
-          // (alias compat = mes activo = último del rango).
-          const monthEnd = fechaRef.getMonth()
-          updates.selectedPeriod = {
-            year: fechaRef.getFullYear(),
-            monthStart: 0,
-            monthEnd,
-            month: monthEnd,
+          // [Fix 3.B.8] Materializar selectedPeriod solo si el estado está neutro
+          // (year === 0, pre-hidratación / pre-carga) o si el dataset pertenece
+          // a un año distinto al activo. NO sobrescribir el rango activo del
+          // usuario en cada worker run — eso causaba el rebote del dropdown
+          // "Desde" del TopBar después de que el motor reanaliza.
+          const needsMaterialize =
+            state.selectedPeriod.year === 0 ||
+            state.selectedPeriod.year !== fechaRef.getFullYear()
+          if (needsMaterialize) {
+            const monthEnd = fechaRef.getMonth()
+            updates.selectedPeriod = {
+              year: fechaRef.getFullYear(),
+              monthStart: 0,
+              monthEnd,
+              month: monthEnd,
+            }
           }
         }
         return updates
