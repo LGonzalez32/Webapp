@@ -218,7 +218,7 @@ export function formatPeriodLabel(
   year: number,
   monthStart: number,
   monthEnd: number,
-  opts?: { short?: boolean },
+  opts?: { short?: boolean; includeYear?: boolean },
 ): string {
   if (!isValidMonthIndex(monthStart)) {
     throw new Error(`monthStart fuera de rango [0,11]: ${monthStart}`)
@@ -229,8 +229,12 @@ export function formatPeriodLabel(
   if (monthEnd < monthStart) {
     throw new Error(`monthEnd (${monthEnd}) < monthStart (${monthStart})`)
   }
+  const includeYear = opts?.includeYear !== false // default true preserves consumers
   if (monthStart === monthEnd) {
-    return `${MESES_LARGO[monthStart]} ${year}`
+    return includeYear ? `${MESES_LARGO[monthStart]} ${year}` : MESES_LARGO[monthStart]
+  }
+  if (!includeYear) {
+    return `${MESES_CORTO[monthStart]}–${MESES_CORTO[monthEnd]}`
   }
   const yearLabel = opts?.short ? `'${String(year).slice(-2)}` : String(year)
   return `${MESES_CORTO[monthStart]}–${MESES_CORTO[monthEnd]} ${yearLabel}`

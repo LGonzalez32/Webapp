@@ -305,4 +305,14 @@ describe('formatPeriodLabel', () => {
     expect(() => formatPeriodLabel(2026, NaN, 5)).toThrow(/monthStart fuera de rango/)
     expect(() => formatPeriodLabel(2026, 0, NaN)).toThrow(/monthEnd fuera de rango/)
   })
+
+  it('opts.includeYear=false omite el año en rango y single-month, default lo incluye', () => {
+    // Rango compacto sin año
+    expect(formatPeriodLabel(2026, 0, 1, { includeYear: false })).toBe('Ene–Feb')
+    // Single-month sin año (largo)
+    expect(formatPeriodLabel(2026, 1, 1, { includeYear: false })).toBe('Febrero')
+    // Default sigue produciendo año (regression check)
+    expect(formatPeriodLabel(2026, 0, 1)).toBe('Ene–Feb 2026')
+    expect(formatPeriodLabel(2026, 1, 1)).toBe('Febrero 2026')
+  })
 })

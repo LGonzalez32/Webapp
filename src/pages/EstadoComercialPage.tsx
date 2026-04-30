@@ -1850,8 +1850,8 @@ export default function EstadoComercialPage() {
                 <p className="text-sm font-semibold mt-2" style={{ color: varPctYTD >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
                   {varPctYTD >= 0 ? '+' : ''}{varPctYTD.toFixed(1)}%
                   <span className="text-xs font-normal ml-1" style={{ color: 'var(--sf-t5)' }}>
-                    {/* [Ticket 3.B.2] Rango activo via formatPeriodLabel; absorbe deuda 3.C ("Ene–" hardcoded). */}
-                    Acumulado {formatPeriodLabel(selectedPeriod.year, selectedPeriod.monthStart, selectedPeriod.monthEnd)} día {teamStats.dias_transcurridos} vs mismo período {yoyYear}
+                    {/* [Ticket 3.B.2 + 3.B.2.1] Rango activo compacto (sin año, ya está en el header pill). */}
+                    Acumulado {formatPeriodLabel(selectedPeriod.year, selectedPeriod.monthStart, selectedPeriod.monthEnd, { includeYear: false })} día {teamStats.dias_transcurridos} vs mismo período {yoyYear}
                   </span>
                 </p>
               )}
