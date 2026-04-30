@@ -3,6 +3,107 @@
 Items pendientes que **no se arreglan en el ticket que los descubre**.
 Se atacan en sprints futuros con tickets propios.
 
+## Sprint 2 / Cierre — Plan migración consumers no piloto (Ticket 2.5)
+
+Auditoría doc-only de los consumers de `selectedPeriod` que NO migraron en Tickets 2.4.1/2.4.2 + campos YTD-anchored upstream en `analysis.ts` que ignoran el rango activo. Producto: plan de tickets para Sprint 3 / Sprint 4.
+
+### Inventario de consumers no migrados
+
+| Archivo | Líneas | Campo leído | Uso | Propuesta semántica |
+|---------|--------|-------------|-----|---------------------|
+| `components/producto/ProductoPanel.tsx` | 22, 38, 60, 75 | `.year`, `.month` | trendData (6 meses ancla), topVendedores/topClientes (filtro período) | Firma → `{year, monthStart, monthEnd}`. `month` ancla → `monthEnd` (B1). topVendedores/topClientes → `salesInRange` (B2). |
+| `components/MetasPivotPanel.tsx` | 226–229 | `currentYear`, `currentMonth` (props derivados de selectedPeriod) | render columnas pivot por mes | B1: `currentMonth = monthEnd`. Tabla pivot ya muestra columna por mes; la "celda activa" es monthEnd. |
+| `components/estado-general/EstadoGeneralEmpresa.tsx` | 14, 19–20, 25 | `.year`, `.month` | computeEstadoGeneralEmpresa(year, month, ...) | Firma del helper a evaluar — probablemente B1 (`monthEnd` como mes activo). Single-source con dashboard. |
+| `components/ui/ComparisonSummary.tsx` | 19, 23, 64 | `.year`, `.month` | currentSales = salesInRange-local-shadow(year, month), currentLabel = `${MESES_CORTO[month]} ${year}` | B1 (`monthEnd` como mes activo) **+ rename** del helper local `salesInRange` para no colisionar con el de `lib/analysis.ts` (`salesInMonth` o similar). |
+| `pages/MetasPage.tsx` | 40, 46–47 | `.year`, `.month` (alias `currentYear` / `currentMonth`) | Filtros sobre tabla de metas por mes | B1 (mes activo = `monthEnd`). Si MetasPage muestra "metas del rango", evaluar B2 — decisión de producto. |
+| `pages/RotacionPage.tsx` | 272, 295, 372, 623 | `.year`, `.month` | handleAnalyzeProducto: filter ventas del producto en `(year, month)` para vendedores/clientes; ProductoPanel prop | B1 (`monthEnd`). RotacionPage es período-agnóstico en su core (categoriasInventario es un snapshot global), solo el "análisis" usa el período. |
+| `pages/DepartamentosPage.tsx` | 112 | `.year`, `.month` (destructurados) | ver uso completo en página | Pendiente lectura completa — probablemente B1. |
+| `pages/ChatPage.tsx` | 766, 795, 804, 916 | `.year`, `.month` (en context object al backend) | Contexto que se envía a DeepSeek con metadata del período activo | **P2 trivial**: pasar el objeto completo `{year, monthStart, monthEnd}` y dejar que el prompt lo formatee. |
+| `pages/VendedoresPage.tsx` | 64, 457–458, 769 | `.year` (header buttons YTD/YTD_ANT), prop a VendedorPanel | KPIs de tabla principal NO leen selectedPeriod directamente: leen `vendorAnalysis.ytd_actual_*` que es **YTD-año-completo** upstream. **P0**: incoherencia visible — el TopBar puede decir Mar–Abr y los totales muestran Ene–Abr (ver auditoría YTD-anchored abajo). |
+| `pages/ClientesPage.tsx` | 61, 141, 217, 265, 639, 663, 851, 1330 | `.year`, `.month` | Cross-table local (analyze pareto), labels "Valor {MES} {year-1}" | B1 (`monthEnd`) en labels y filtros. Múltiples sitios, similar a VendedoresPage tabla. |
+| `pages/EstadoComercialPage.tsx` | 256, 335, 356–357, 408, 413, 467, 472, 556, 1009, 1172, 1339, 1365, 1392–1395, 1405, 1412, 1455, 1517, 1553, 1577, 1717, 1829 | `.year`, `.month` (alias = monthEnd) | KPIs del mes, comparaciones YoY mes-a-mes, label `MESES_LARGO[month]`, sub-label "Acumulado Ene–{mes}" L1849 (hardcoded "Ene–"), `now = new Date(year, month, dia)` | Mayoría coherente accidentalmente (B1 = `monthEnd`). **P0 crítico**: sub-label hardcoded "Ene–" L1849. **P1**: label `MESES_LARGO[selectedPeriod.month]` (L1405) usa solo monthEnd, debería ser `formatPeriodLabel(year, monthStart, monthEnd)`. |
+
+### Auditoría campos YTD-anchored en `analysis.ts`
+
+Todos los `ytd_*` se calculan con `buildDefaultYtdRange(fechaReferencia)` = **[1-ene, fechaRef]**, NO con monthStart/monthEnd del usuario.
+
+| Campo | Línea | Consumers principales | Recomendación |
+|-------|-------|-----------------------|---------------|
+| `ytd_actual_uds` / `ytd_anterior_uds` (VendorAnalysis) | analysis.ts:341–358 (computeYTD), 1036, 1270 | VendedoresPage tabla EQUIPO TOTAL + columnas YTD; EstadoComercialPage MaterialityContext L1494, 1503; chatService L310 | **P0**: rango-aware. Recomputar con `salesInRange(sales, year, monthStart, monthEnd)` cuando el usuario elige rango; mantener YTD-completo cuando rango = año entero. Requiere agregar variants `ytd_range_actual_uds` o re-anchor del cálculo. |
+| `ytd_actual_usd` / `ytd_anterior_usd` (VendorAnalysis) | analysis.ts:344–366 | Mismos consumers que uds + EstadoComercialPage MaterialityContext L1493 | Mismo tratamiento que uds. |
+| `variacion_ytd_uds_pct` / `variacion_ytd_usd_pct` | analysis.ts:343, 360, 367–370 | Tabla VAR % en VendedoresPage L719 | Consecuencia de los anteriores. Migrar junto. |
+| `variacion_vs_anio` (categoria) | analysis.ts:485–486 | EstadoComercialPage card categorías | Idem — rango-aware. |
+| `ytd_actual_equipo_uds` / `ytd_anterior_equipo_uds` (TeamStats) | analysis.ts:1038–1040 | EstadoComercialPage card "VENTA ACUMULADA" L1814+ | **P0**: el card de venta acumulada es la primera vista del founder. Si el TopBar dice "Mar–Abr" y el card sigue mostrando Ene–Abr, es la incoherencia más visible. |
+| `ytd_actual_uds` (supervisorAnalysis) | analysis.ts:1270–1306 | EstadoComercialPage tabla supervisores | P1: superficie menor que vendedores. |
+| `ventas_periodo`, `ventas_mes_anterior` (VendorAnalysis) | analysis.ts:422–428 | VendorPanel KPI principal, useRecomendaciones | **Coherente accidentalmente con B1** (anchor = `month` = `monthEnd`). El cálculo es single-month. Si Sprint 3 cambia a "venta acumulada del rango", requiere `ventas_rango`. |
+
+### Categorización de prioridad
+
+**P0 — Bloquea Sprint 3 / clientes reales** (incoherencia visible TopBar vs dato):
+
+1. **VendedoresPage tabla EQUIPO TOTAL** (`ytd_actual_uds` upstream YTD-anchored). Probado en Test 3 de 2.4.5: el valor no cambia con rango.
+2. **EstadoComercialPage card VENTA ACUMULADA** (`ytd_actual_equipo_uds` upstream YTD-anchored).
+3. **EstadoComercialPage sub-label "Acumulado Ene–{mes}"** L1849 hardcoded.
+4. **EstadoComercialPage label `MESES_LARGO[selectedPeriod.month]`** L1405 (período sin formatPeriodLabel).
+5. **ClientesPage labels "Valor {MES} {year-1}"** múltiples sitios (L265, 639, 663, 851) — usan `selectedPeriod.month` único, no rango. Confunde si el TopBar muestra rango.
+
+**P1 — Alta deuda técnica** (coherente accidentalmente, no robusto):
+
+6. **ProductoPanel.tsx** completo — usa `.month` (= monthEnd). Funcional pero firma legacy.
+7. **MetasPivotPanel.tsx** prop `currentMonth` — alias legacy, migrar firma.
+8. **EstadoGeneralEmpresa.tsx** + helper `computeEstadoGeneralEmpresa(year, month, ...)` — firma legacy.
+9. **ComparisonSummary.tsx** — helper local `salesInRange` colisiona en nombre con `lib/analysis.ts`. Renombrar.
+10. **MetasPage.tsx** alias `currentYear/currentMonth` — firma legacy.
+11. **RotacionPage.tsx** handleAnalyzeProducto + ProductoPanel prop.
+12. **EstadoComercialPage** otros sitios `.month` (~20 líneas) — coherente con B1, candidato a barrido único.
+
+**P2 — Deuda menor** (no afecta nada visible):
+
+13. **ChatPage.tsx** context al backend — el LLM ignora la diferencia, pero el contexto debería ser correcto.
+14. **DepartamentosPage.tsx** L112 — pendiente lectura completa.
+
+**P3 — Excepciones documentadas** (no migrar):
+
+15. **PulsoPanel.tsx** — period-agnostic deliberado (Ticket 2.4.3).
+16. **`ventas_periodo` / `ventas_mes_anterior` upstream** — semántica single-month deliberada para VendorPanel KPI principal y `useRecomendaciones`. Si Sprint 3 lo demanda, se agrega variant `ventas_rango` sin tocar el original.
+
+### Plan de tickets sugerido
+
+**Sprint 3 (post-Rendimiento Anual) — P0 bloqueantes**:
+
+- **Ticket 3.A — `ytd_*` rango-aware en analysis.ts** (1–2 commits):
+  - Refactor de `computeYTD`: aceptar `monthStart, monthEnd` opcionales; default = año completo (preserva comportamiento legacy).
+  - Re-correr worker cuando cambia el rango (verificar que `setSelectedPeriodRange` invalida `isProcessed` y dispara re-análisis — confirmado en store).
+  - Tests unit nuevos para `computeYTD` con rango. Esperado: ~3 commits si se separa interfaz + impl + consumers downstream.
+
+- **Ticket 3.B — VendedoresPage rango-aware** (1 commit, depende de 3.A):
+  - Tabla EQUIPO TOTAL y columnas YTD/VAR consumen los nuevos campos rango-aware.
+  - Test 3 de 2.4.5 sube de smoke a assertion estricta de cambio numérico.
+
+- **Ticket 3.C — EstadoComercialPage card VENTA ACUMULADA + sub-label** (1 commit, depende de 3.A):
+  - Card consume `ytd_actual_equipo_uds` rango-aware.
+  - Sub-label L1849: reemplazar "Acumulado Ene–{mes}" por `formatPeriodLabel(year, monthStart, monthEnd)`.
+  - Label L1405 → `formatPeriodLabel`.
+
+- **Ticket 3.D — ClientesPage labels rango-aware** (1 commit):
+  - Reemplazar `MESES_CORTOS[selectedPeriod.month]` por `formatPeriodLabel` en labels (L265, 639, 663, 851).
+  - Cross-table local (L141): consumir rango con `salesInRange`.
+
+**Total Sprint 3**: 4 sub-tickets, ~5 commits. Dependencia: 3.B y 3.C requieren 3.A.
+
+**Sprint 4 (pre-clientes reales) — P1 alta deuda + P2**:
+
+- **Ticket 4.A — ProductoPanel + MetasPivotPanel migrados** (2 commits): firmas + B1 + topVendedores/topClientes a `salesInRange`.
+- **Ticket 4.B — EstadoGeneralEmpresa + ComparisonSummary** (2 commits): firma helper + rename `salesInRange` local.
+- **Ticket 4.C — MetasPage + RotacionPage** (2 commits): firmas legacy + tests E2E mínimos.
+- **Ticket 4.D — EstadoComercialPage barrido `.month`** (1 commit): los ~20 sitios coherentes accidentalmente.
+- **Ticket 4.E — ChatPage + DepartamentosPage** (1 commit, P2): contexto al backend + lectura completa Departamentos.
+- **Ticket 4.F — Tests E2E 4.2 + 4.3 con fixtures empty-data** (1 commit): cierra deuda registrada en BACKLOG Ticket 2.4.5.
+
+**Total Sprint 4**: 6 sub-tickets, ~9 commits.
+
+**Resumen**: 5 sitios P0 + 7 sitios P1 + 2 sitios P2 + 2 excepciones P3. 4 tickets Sprint 3 + 6 tickets Sprint 4. Dependencia única: Sprint 3.A es prerequisito de 3.B y 3.C.
+
 ## Sprint 3 — Features visibles
 
 ### Rendimiento Anual — rediseño de filtros y toggle YTD/Mensual
