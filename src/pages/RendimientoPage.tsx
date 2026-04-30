@@ -131,7 +131,7 @@ export default function RendimientoPage() {
   useAnalysis()
   const navigate = useNavigate()
   const dp = useDemoPath()
-  const { sales, metas, dataAvailability, selectedPeriod, configuracion, forecastData, forecastChartLoading, setForecastData, setForecastChartLoading, dataSource, vendorAnalysis, fechaRefISO } = useAppStore()
+  const { sales, metas, dataAvailability, selectedPeriod, configuracion, setConfiguracion, forecastData, forecastChartLoading, setForecastData, setForecastChartLoading, dataSource, vendorAnalysis, fechaRefISO } = useAppStore()
   const metric: 'unidades' | 'venta_neta' = (configuracion.metricaGlobal ?? 'usd') === 'usd' ? 'venta_neta' : 'unidades'
   const [showBudget, setShowBudget] = useState(true)
   const [selectedVendor, setSelectedVendor] = useState<string>('todos')
@@ -837,6 +837,46 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
       >
         ✦ Analizar rendimiento con IA →
       </button>
+
+      {/* [Ticket 3.F.3] Toggle Venta YTD / Venta mensual histórica.
+          Reubicado del TopBar (3.F.2) a este lugar entre el botón IA y el
+          chart. Estilo pill paritario al toggle Claro/Oscuro del TopBar.
+          Persistencia: configuracion.tableView (store, v13). */}
+      <div className="flex justify-center mt-2 mb-2">
+        <div
+          className="relative flex items-center rounded-full p-0.5"
+          style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)' }}
+        >
+          {/* sliding indicator */}
+          <div
+            className="absolute top-0.5 bottom-0.5 rounded-full transition-all duration-200"
+            style={{
+              width: 'calc(50% - 2px)',
+              left: tableView === 'ytd' ? 2 : 'calc(50%)',
+              background: configuracion.tema === 'dark' ? 'rgba(255,255,255,0.10)' : 'var(--sf-card)',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+            }}
+          />
+          <button
+            onClick={() => tableView !== 'ytd' && setConfiguracion({ tableView: 'ytd' })}
+            className="relative flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors duration-150 cursor-pointer z-10"
+            style={{ color: tableView === 'ytd' ? 'var(--sf-t1)' : 'var(--sf-t5)' }}
+            title="Venta YTD"
+          >
+            <TrendingUp className="w-3.5 h-3.5" style={{ color: tableView === 'ytd' ? '#10b981' : 'inherit' }} />
+            <span className="hidden sm:inline">Venta YTD</span>
+          </button>
+          <button
+            onClick={() => tableView !== 'monthly' && setConfiguracion({ tableView: 'monthly' })}
+            className="relative flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors duration-150 cursor-pointer z-10"
+            style={{ color: tableView === 'monthly' ? 'var(--sf-t1)' : 'var(--sf-t5)' }}
+            title="Venta mensual histórica"
+          >
+            <Calendar className="w-3.5 h-3.5" style={{ color: tableView === 'monthly' ? '#a78bfa' : 'inherit' }} />
+            <span className="hidden sm:inline">Venta mensual histórica</span>
+          </button>
+        </div>
+      </div>
 
       {/* Main chart */}
       <div className="relative" style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '12px', padding: '20px' }}>
