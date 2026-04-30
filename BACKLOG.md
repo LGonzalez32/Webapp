@@ -1,5 +1,7 @@
 # BACKLOG — SalesFlow
 
+> **Sprint 2 cerrado:** 2026-04-29. Ver `SPRINT_2_CIERRE.md` para auditoría retrospectiva. Las entradas siguientes están organizadas por sprint de destino. Sprint 3 arranca con Ticket 3.A (`computeYTD` rango-aware) como prerequisito de 3.B y 3.C.
+
 Items pendientes que **no se arreglan en el ticket que los descubre**.
 Se atacan en sprints futuros con tickets propios.
 
