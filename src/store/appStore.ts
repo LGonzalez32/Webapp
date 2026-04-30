@@ -41,6 +41,7 @@ const DEFAULT_CONFIG: Configuracion = {
   metricaGlobal: 'usd',
   giro: '',
   giro_custom: '',
+  tableView: 'ytd',
 }
 
 const DEFAULT_AVAILABILITY: DataAvailability = {
@@ -464,7 +465,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'salesflow-storage',
-      version: 12,
+      version: 13,
       migrate: (persistedState: any) => {
         // v8: remove deepseek_api_key from persisted config (now handled by backend proxy)
         // v9: migrate moneda 'USD' → '$' for display consistency
@@ -476,6 +477,9 @@ export const useAppStore = create<AppState>()(
         //   eliminado de EstadoComercialPage). El campo nunca se persistió
         //   (no estaba en partialize), pero se bumpea versión para forzar
         //   re-hidratación limpia tras la simplificación de firmas downstream.
+        // v13 [Ticket 3.F.2]: configuracion.tableView agregado ('ytd' | 'monthly').
+        //   Sesiones v12 sin el campo se rellenan automáticamente vía
+        //   { ...DEFAULT_CONFIG, ...cleanConfig } (default 'ytd').
         const { deepseek_api_key: _, ...cleanConfig } = persistedState?.configuracion ?? {}
         if (cleanConfig.moneda === 'USD') cleanConfig.moneda = '$'
         // [Ticket 2.3.2] Migración v9 → v10: shape legacy {year, month} se mapea

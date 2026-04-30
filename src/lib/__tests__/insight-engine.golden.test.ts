@@ -70,6 +70,7 @@ const TEST_CONFIG: Configuracion = {
   metricaGlobal: 'usd',
   giro: '',
   giro_custom: '',
+  tableView: 'ytd',
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

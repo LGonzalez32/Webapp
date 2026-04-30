@@ -59,6 +59,7 @@ const TEST_CONFIG: Configuracion = {
   umbral_normal: 60,
   tema: 'dark',
   metricaGlobal: 'usd',
+  tableView: 'ytd',
   giro: '',
   giro_custom: '',
 }

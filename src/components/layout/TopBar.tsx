@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAppStore } from '../../store/appStore'
-import { Sun, Moon, DollarSign, Hash } from 'lucide-react'
+import { Sun, Moon, DollarSign, Hash, TrendingUp, Calendar } from 'lucide-react'
 import { cn } from '../../lib/utils'
 
 const PAGE_TITLES: Record<string, { title: string; sub: string }> = {
@@ -193,6 +193,47 @@ export default function TopBar() {
             <span className="md:hidden">✦ Hoy</span>
           </button>
         )}
+        {/* [Ticket 3.F.2] Toggle Venta YTD / Venta mensual histórica — solo en /rendimiento */}
+        {location.pathname.endsWith('/rendimiento') && (() => {
+          const tableView = configuracion.tableView ?? 'ytd'
+          const setTableView = (v: 'ytd' | 'monthly') => setConfiguracion({ tableView: v })
+          return (
+            <div
+              className="sf-no-print relative flex items-center rounded-full p-0.5"
+              style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)' }}
+            >
+              {/* sliding indicator */}
+              <div
+                className="absolute top-0.5 bottom-0.5 rounded-full transition-all duration-200"
+                style={{
+                  width: 'calc(50% - 2px)',
+                  left: tableView === 'ytd' ? 2 : 'calc(50%)',
+                  background: tema === 'dark' ? 'rgba(255,255,255,0.10)' : 'var(--sf-card)',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                }}
+              />
+              <button
+                onClick={() => tableView !== 'ytd' && setTableView('ytd')}
+                className="relative flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors duration-150 cursor-pointer z-10"
+                style={{ color: tableView === 'ytd' ? 'var(--sf-t1)' : 'var(--sf-t5)' }}
+                title="Venta YTD"
+              >
+                <TrendingUp className="w-3.5 h-3.5" style={{ color: tableView === 'ytd' ? '#10b981' : 'inherit' }} />
+                <span className="hidden sm:inline">Venta YTD</span>
+              </button>
+              <button
+                onClick={() => tableView !== 'monthly' && setTableView('monthly')}
+                className="relative flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors duration-150 cursor-pointer z-10"
+                style={{ color: tableView === 'monthly' ? 'var(--sf-t1)' : 'var(--sf-t5)' }}
+                title="Venta mensual histórica"
+              >
+                <Calendar className="w-3.5 h-3.5" style={{ color: tableView === 'monthly' ? '#a78bfa' : 'inherit' }} />
+                <span className="hidden sm:inline">Venta mensual histórica</span>
+              </button>
+            </div>
+          )
+        })()}
+
         {/* Currency toggle — only when venta_neta data is available */}
         {dataAvailability.has_venta_neta && (
           <div

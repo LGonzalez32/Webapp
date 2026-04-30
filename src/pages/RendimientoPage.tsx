@@ -264,9 +264,9 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
     try { return !localStorage.getItem('sf_pivot_advanced_seen') } catch { return false }
   })
   const microcopyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // [Ticket 3.E.1] Toggle "Venta YTD" (default) / "Venta mensual histórica".
-  // Estado local, no persiste en store.
-  const [tableView, setTableView] = useState<'ytd' | 'monthly'>('ytd')
+  // [Ticket 3.F.2] tableView migrado a configuracion del store (persistido).
+  // El toggle vive en TopBar (visible solo en /rendimiento). Aquí se lee solo.
+  const tableView = configuracion.tableView ?? 'ytd'
   // [Ticket 3.E.2] Tree pivot monthly histórica (paralelo a pivotData YTD).
   const [monthlyPivotData, setMonthlyPivotData] = useState<MonthlyPivotNode[]>([])
   const [monthlySortDir, setMonthlySortDir] = useState<'asc' | 'desc'>('desc')
@@ -917,31 +917,9 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
       <div style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '12px', overflow: 'hidden' }}>
 
         {/* Pivot header bar */}
+        {/* [Ticket 3.F.2] Toggle YTD/monthly migrado al TopBar global. */}
         <div className="px-6 py-4 flex items-center justify-between gap-3" style={{ borderBottom: '1px solid var(--sf-border)' }}>
           <p style={{ fontSize: '13px', fontWeight: 600, color: 'var(--sf-t2)' }}>Analiza tus ventas</p>
-          {/* [Ticket 3.E.1] Toggle Venta YTD / Venta mensual histórica */}
-          <div className="flex items-center" style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: 8, padding: 2, gap: 2 }}>
-            {([
-              ['ytd', 'Venta YTD'],
-              ['monthly', 'Venta mensual histórica'],
-            ] as const).map(([key, label]) => {
-              const active = tableView === key
-              return (
-                <button
-                  key={key}
-                  onClick={() => setTableView(key)}
-                  className="px-3 py-1 rounded text-xs font-medium transition-colors cursor-pointer"
-                  style={{
-                    background: active ? 'var(--sf-card)' : 'transparent',
-                    color: active ? 'var(--sf-t1)' : 'var(--sf-t5)',
-                    border: active ? '1px solid var(--sf-border)' : '1px solid transparent',
-                  }}
-                >
-                  {label}
-                </button>
-              )
-            })}
-          </div>
           <button
             onClick={() => setShowAdvanced(v => !v)}
             className="flex items-center gap-1.5 text-xs transition-colors rounded-lg px-2.5 py-1.5"

@@ -491,6 +491,9 @@ export interface Configuracion {
   metricaGlobal: 'usd' | 'uds'
   giro: string
   giro_custom: string
+  // [Ticket 3.F.2] Vista activa de la tabla pivot en /rendimiento.
+  // Persistida globalmente; toggle vive en TopBar.
+  tableView: 'ytd' | 'monthly'
 }
 
 // ─── MULTI-TENANT ─────────────────────────────────────────────────────────────
