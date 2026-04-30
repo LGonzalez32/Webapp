@@ -334,9 +334,32 @@ const safePct = (num: number, den: number): number => {
 
 // ─── YTD HELPER ───────────────────────────────────────────────────────────────
 
-function computeYTD(
+/**
+ * Calcula totales (uds + USD) del rango actual y del mismo rango YoY (año - 1),
+ * más variación porcentual.
+ *
+ * El "rango YoY" se construye con `buildComparisonRangeYoY` aplicado al rango
+ * actual, lo que produce el mismo rango del año anterior con clamp same-day
+ * en monthEnd cuando corresponde (regla CONTEXT.md "MTD vs MTD same-day,
+ * YTD vs YTD same-day").
+ *
+ * Nota: los nombres de los campos retornados preservan el prefijo `ytd_` por
+ * compat histórica con consumers downstream. Cuando el rango es
+ * (0, fechaRef.getMonth()) el campo es YTD literal; en otros rangos el "YTD"
+ * del nombre es legacy y el valor representa "totales del rango". Renaming
+ * queda para un ticket futuro de cleanup (ver BACKLOG).
+ *
+ * @param sales ventas a agregar.
+ * @param fechaReferencia "hoy" del negocio (max sales date).
+ * @param monthStart mes inicial del rango actual [0-11].
+ * @param monthEnd mes final del rango actual [0-11], debe ser >= monthStart.
+ * @throws si monthStart > monthEnd.
+ */
+export function computeRangeYoY(
   sales: SaleRecord[],
-  fechaReferencia: Date
+  fechaReferencia: Date,
+  monthStart: number,
+  monthEnd: number,
 ): {
   ytd_actual_uds: number
   ytd_anterior_uds: number
@@ -345,10 +368,12 @@ function computeYTD(
   ytd_anterior_usd?: number
   variacion_ytd_usd_pct?: number | null
 } {
-  // Ticket 2.2-C: rangos YTD centralizados en lib/periods.ts.
-  // buildDefaultYtdRange devuelve [1-ene, endOfDay(fechaRef)].
-  // buildComparisonRangeYoY devuelve mismo rango año anterior con clamp 29-feb.
-  const rangeActual = buildDefaultYtdRange(fechaReferencia)
+  if (monthStart > monthEnd) {
+    throw new Error(`monthEnd (${monthEnd}) < monthStart (${monthStart})`)
+  }
+
+  const year = fechaReferencia.getFullYear()
+  const rangeActual = buildMonthlyRange({ year, monthStart, monthEnd }, fechaReferencia)
   const rangeAnterior = buildComparisonRangeYoY(rangeActual)
 
   const salesActual   = sales.filter((s) => s.fecha >= rangeActual.start && s.fecha <= rangeActual.end)
@@ -359,7 +384,6 @@ function computeYTD(
 
   const variacion_ytd_uds_pct = ytd_anterior_uds > 0 ? safePct(ytd_actual_uds, ytd_anterior_uds) : null
 
-  // USD: solo si hay registros con venta_neta
   const hasNetoActual   = salesActual.some((s) => s.venta_neta != null && s.venta_neta > 0)
   const hasNetoAnterior = salesAnterior.some((s) => s.venta_neta != null && s.venta_neta > 0)
   const ytd_actual_usd   = hasNetoActual   ? salesActual.reduce((a, s) => a + (s.venta_neta ?? 0), 0)   : undefined
@@ -377,6 +401,20 @@ function computeYTD(
     ytd_anterior_usd,
     variacion_ytd_usd_pct,
   }
+}
+
+/**
+ * [Ticket 3.A] Wrapper legacy: rango YTD = (0, mes de fechaRef).
+ * Preservado para compat de los 2 call sites internos (analyzeVendor, analyze
+ * team). Migrar a computeRangeYoY con rango del store en Ticket 3.B.
+ *
+ * Bit-exact equivalente a la implementación pre-3.A:
+ * buildMonthlyRange({year, 0, fechaRef.getMonth()}, fechaRef) cuando fechaRef
+ * cae dentro del rango calendario produce el mismo {start: 1-ene, end: endOfDay(fechaRef)}
+ * que buildDefaultYtdRange(fechaRef) — verificado analíticamente.
+ */
+function computeYTD(sales: SaleRecord[], fechaReferencia: Date) {
+  return computeRangeYoY(sales, fechaReferencia, 0, fechaReferencia.getMonth())
 }
 
 // Accepts pre-grouped vendor sales (only this vendor's records)
