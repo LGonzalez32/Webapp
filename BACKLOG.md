@@ -326,7 +326,36 @@ Datos previamente parseados como `'unidades'` con esos headers
 override del modal del 1.6.2 cubre los casos que el usuario note.
 Si un cliente reporta "mis metas cambiaron solas", apuntar acá.
 
+## Mejoras UX
+
+### Badge calendario explicita cutoff same-day (Ticket 2.4.5)
+
+Hoy el header de EstadoComercialPage muestra dos badges separados: `"Ene–Feb 2026"` (rango formal) + `"Día 6 de 28"` (cutoff intra-mes). Considerar copy más directo tipo `"Ene 1 — Feb 6, 2026"` que comunica el truncamiento same-day en una sola línea.
+
+**Decisión de producto aprobada Sprint 2** (no reabrir): el modo "año cerrado completo" (suma de todos los meses sin truncamiento) queda **exclusivo de Rendimiento Anual** (Sprint 3). Las otras páginas (EstadoComercialPage, ClientePanel, VendedorPanel) mantienen **YTD-same-day** como semántica primaria — el último mes del rango se trunca al día de `fechaRef`.
+
+Due: Sprint 4 / pre-clientes reales.
+
 ## Deuda técnica
+
+### Sub-label "Acumulado Ene–{mes}" hardcoded en EstadoComercialPage (Ticket 2.4.5)
+
+[src/pages/EstadoComercialPage.tsx:1849](src/pages/EstadoComercialPage.tsx#L1849):
+el sub-label de la card "VENTA ACUMULADA" muestra siempre `"Acumulado Ene–{mesActNombre} día X vs mismo período Y"`. El `Ene–` está hardcoded y no refleja el `monthStart` real del rango activo.
+
+Detectado durante implementación de E2E del Ticket 2.4.5. Se difirió porque
+no estaba en el inventario de Fase 1 y el fix implica decidir el copy correcto
+para el modo rango (ej. "Acumulado {formatPeriodLabel(...)}").
+
+Due: Sprint 4 / pre-clientes reales.
+
+### Tests E2E 4.2 + 4.3 empty-data shapes (Ticket 2.4.5)
+
+Diferidos por falta de fixture demo apropiado:
+- **4.2**: dataset cuyo `fechaRef` esté en año pasado (no año-en-curso). Demo actual cubre Ene 2024–Abr 2026 → no aplica.
+- **4.3**: validar que el cálculo MTD same-day usa exactamente el día de `fechaRef`, no `new Date().getDate()`. Requiere dataset con `fechaRef` en día específico (ej. 6-feb).
+
+Solución propuesta: agregar `tests/fixtures/demo-empty-data-*.json` con datasets minimalistas + helper para sembrarlos vía localStorage antes de la navegación. Due: Sprint 4 / pre-clientes reales.
 
 ### useRecomendaciones B1 estricto en rango multi-mes (Ticket 2.4.2)
 

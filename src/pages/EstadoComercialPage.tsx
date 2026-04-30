@@ -1793,6 +1793,7 @@ export default function EstadoComercialPage() {
         ) : null}
         {/* Período activo (legible). El selector vive en TopBar (Ticket 2.3.4). */}
         <span
+          data-testid="period-badge"
           className="sf-no-print flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
           style={{ background: 'var(--sf-inset)', color: 'var(--sf-t2)', border: '1px solid var(--sf-border)' }}
         >

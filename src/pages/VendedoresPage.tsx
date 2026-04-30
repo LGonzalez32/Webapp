@@ -696,7 +696,7 @@ CONVENCIÓN DE UNIDADES (R57 — obligatoria):
         </div>
 
         {/* YTD ACT total */}
-        <div className="flex items-center justify-end tabular-nums"
+        <div data-testid="kpi-equipo-total-actual" className="flex items-center justify-end tabular-nums"
           style={{ ...mono, fontSize: 13, color: 'var(--sf-t1)' }}>
           {fmtNum(total2026)}
         </div>

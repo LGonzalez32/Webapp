@@ -255,7 +255,7 @@ export default function ClientePanel({
           <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--sf-border)' }}>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <p className="text-[11px] font-bold uppercase tracking-widest mb-2" style={{ color: 'var(--sf-t5)' }}>
+                <p data-testid="cliente-panel-header" className="text-[11px] font-bold uppercase tracking-widest mb-2" style={{ color: 'var(--sf-t5)' }}>
                   COMPRAS {mesLabel}
                 </p>
                 <p style={{ ...mono, fontSize: 32, color: 'var(--sf-t1)', lineHeight: 1 }}>
