@@ -59,27 +59,29 @@ def _mock_handler_no_usage(request: httpx.Request) -> httpx.Response:
 
 @pytest.fixture
 def patch_deepseek(monkeypatch):
-    """Replace httpx.AsyncClient inside the chat module with a MockTransport.
+    """Override get_http_client with an AsyncClient backed by MockTransport.
 
-    This is the simplest injection that does not require refactoring the
-    handler in this commit. QW1 (singleton + Depends) will switch to
-    `app.dependency_overrides` for cleaner overrides.
+    Cleaner than module-level monkeypatching now that QW1 introduced the
+    Depends(get_http_client) injection point.
     """
-    import app.api.routes.chat as chat_mod
+    from main import app
+    from app.api.routes.chat import get_http_client
 
-    real_async_client = chat_mod.httpx.AsyncClient
     handler_holder: dict[str, object] = {"handler": _mock_handler_full_usage}
 
-    def factory(*args, **kwargs):
-        kwargs.pop("http2", None)
-        return real_async_client(
-            transport=httpx.MockTransport(handler_holder["handler"]), **kwargs,
+    def _override():
+        return httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda req: handler_holder["handler"](req)  # type: ignore[operator]
+            ),
         )
 
-    monkeypatch.setattr(chat_mod.httpx, "AsyncClient", factory)
+    app.dependency_overrides[get_http_client] = _override
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
-
-    return handler_holder
+    try:
+        yield handler_holder
+    finally:
+        app.dependency_overrides.pop(get_http_client, None)
 
 
 def _client() -> TestClient:

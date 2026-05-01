@@ -6,7 +6,7 @@ import uuid
 from typing import Any, AsyncIterator, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -43,21 +43,32 @@ def _check_status(status_code: int) -> None:
         raise HTTPException(status_code=502, detail="API_ERROR")
 
 
+async def get_http_client(request: Request) -> httpx.AsyncClient:
+    """Dependency: surface the singleton built in main.py:lifespan.
+
+    Explicit injection (not request.app.state.http_client direct access)
+    keeps handlers testable via app.dependency_overrides.
+    """
+    return request.app.state.http_client
+
+
 @router.post("/chat")
-async def proxy_chat(body: ChatRequest):
+async def proxy_chat(
+    body: ChatRequest,
+    http: httpx.AsyncClient = Depends(get_http_client),
+):
     api_key = _get_api_key()
     payload = body.model_dump(exclude_none=True)
 
     try:
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            resp = await client.post(
-                DEEPSEEK_URL,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {api_key}",
-                },
-                json=payload,
-            )
+        resp = await http.post(
+            DEEPSEEK_URL,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            json=payload,
+        )
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="API_ERROR")
     except Exception:
@@ -123,6 +134,7 @@ def _build_timing(
 
 
 async def _stream_deepseek(
+    http: httpx.AsyncClient,
     api_key: str,
     payload: dict[str, Any],
     request_id: str,
@@ -140,44 +152,43 @@ async def _stream_deepseek(
     t_upstream_connect = time.perf_counter()
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            async with client.stream(
-                "POST",
-                DEEPSEEK_URL,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {api_key}",
-                },
-                json=payload,
-            ) as resp:
-                _check_status(resp.status_code)
+        async with http.stream(
+            "POST",
+            DEEPSEEK_URL,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            json=payload,
+        ) as resp:
+            _check_status(resp.status_code)
 
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    data = line[6:]
-                    if data.strip() == "[DONE]":
-                        break
+            async for line in resp.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data = line[6:]
+                if data.strip() == "[DONE]":
+                    break
 
-                    if t_first_byte_upstream is None:
-                        t_first_byte_upstream = time.perf_counter()
+                if t_first_byte_upstream is None:
+                    t_first_byte_upstream = time.perf_counter()
 
-                    try:
-                        chunk = json.loads(data)
-                    except json.JSONDecodeError:
-                        continue
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
 
-                    last_chunk_data = chunk
-                    chunks_received += 1
+                last_chunk_data = chunk
+                chunks_received += 1
 
-                    choices = chunk.get("choices") or []
-                    if choices:
-                        delta = choices[0].get("delta") or {}
-                        token = delta.get("content")
-                        if token:
-                            if t_first_byte_client is None:
-                                t_first_byte_client = time.perf_counter()
-                            yield f"data: {json.dumps({'token': token})}\n\n"
+                choices = chunk.get("choices") or []
+                if choices:
+                    delta = choices[0].get("delta") or {}
+                    token = delta.get("content")
+                    if token:
+                        if t_first_byte_client is None:
+                            t_first_byte_client = time.perf_counter()
+                        yield f"data: {json.dumps({'token': token})}\n\n"
 
         t_last_byte = time.perf_counter()
 
@@ -216,14 +227,17 @@ async def _stream_deepseek(
 
 
 @router.post("/chat/stream")
-async def proxy_chat_stream(body: ChatRequest):
+async def proxy_chat_stream(
+    body: ChatRequest,
+    http: httpx.AsyncClient = Depends(get_http_client),
+):
     api_key = _get_api_key()
     payload = body.model_dump(exclude_none=True)
     request_id = uuid.uuid4().hex[:8]
     t_request_received = time.perf_counter()
 
     return StreamingResponse(
-        _stream_deepseek(api_key, payload, request_id, t_request_received),
+        _stream_deepseek(http, api_key, payload, request_id, t_request_received),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
