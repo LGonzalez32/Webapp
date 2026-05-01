@@ -121,9 +121,16 @@ function aggregateDeptoYoY(
   sales: SaleRecord[],
   year: number,
   month: number,
+  fechaReferencia: Date,
 ): Array<{ depto: string; pct: number }> {
   const curr = new Map<string, number>()
   const prev = new Map<string, number>()
+  // Cap previous-year comparison at the same day-of-month to avoid comparing
+  // a partial current month against a full previous month (rule: MTD YoY same-day-range).
+  const isCurrentMonth =
+    fechaReferencia.getFullYear() === year && fechaReferencia.getMonth() === month
+  const maxDay = isCurrentMonth ? fechaReferencia.getDate() : 31
+
   for (const r of sales) {
     const d = toDate(r.fecha)
     const y = d.getFullYear()
@@ -131,8 +138,11 @@ function aggregateDeptoYoY(
     const depto = (r as unknown as { departamento?: string }).departamento
     if (!depto) continue
     const val = r.venta_neta ?? 0
-    if (y === year && m === month) curr.set(depto, (curr.get(depto) ?? 0) + val)
-    else if (y === year - 1 && m === month) prev.set(depto, (prev.get(depto) ?? 0) + val)
+    if (y === year && m === month) {
+      curr.set(depto, (curr.get(depto) ?? 0) + val)
+    } else if (y === year - 1 && m === month && d.getDate() <= maxDay) {
+      prev.set(depto, (prev.get(depto) ?? 0) + val)
+    }
   }
   const out: Array<{ depto: string; pct: number }> = []
   for (const [depto, cVal] of curr) {
@@ -148,8 +158,9 @@ export function getParrafoTerritorialCanal(
   year: number,
   month: number,
   canalAnalysis: CanalAnalysis[],
+  fechaReferencia: Date,
 ): ParrafoTerritorialCanal | null {
-  const deptoYoY = aggregateDeptoYoY(sales, year, month)
+  const deptoYoY = aggregateDeptoYoY(sales, year, month, fechaReferencia)
   const hayTerritorial = deptoYoY.length >= 2
   const hayCanales     = canalAnalysis && canalAnalysis.length >= 2
 
@@ -445,8 +456,16 @@ export function computeEstadoGeneral(
   categoriaAnalysis: CategoriaAnalysis[],
   canalAnalysis: CanalAnalysis[],
 ): EstadoGeneralResult {
+  // fechaReferencia = max(sales.fecha) — same invariant as the rest of the pipeline.
+  const fechaReferencia = sales.length > 0
+    ? new Date(sales.reduce((max, s) => {
+        const t = (s.fecha instanceof Date ? s.fecha : new Date(s.fecha as string)).getTime()
+        return t > max ? t : max
+      }, 0))
+    : new Date()
+
   const parrafoNegocio          = getParrafoNegocio(vendorAnalysis)
-  const parrafoTerritorialCanal = getParrafoTerritorialCanal(sales, year, month, canalAnalysis)
+  const parrafoTerritorialCanal = getParrafoTerritorialCanal(sales, year, month, canalAnalysis, fechaReferencia)
   const parrafoClientesProd     = getParrafoClientesProductos(sales, year, month)
   const parrafoCategorias       = getParrafoCategorias(
     categoriaAnalysis,
