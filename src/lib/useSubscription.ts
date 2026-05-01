@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAuthStore } from '../store/authStore'
+import { useOrgStore } from '../store/orgStore'
 import { supabase } from './supabaseClient'
 import type { PlanType, FeatureKey } from './subscription'
 import { canAccessFeature, getChatUsage, getChatLimit } from './subscription'
@@ -22,12 +23,13 @@ interface SubscriptionState {
  */
 export function useSubscription(): SubscriptionState {
   const userId = useAuthStore((s) => s.user?.id ?? null)
+  const orgId = useOrgStore((s) => s.org?.id ?? null)
   const [plan, setPlan] = useState<PlanType>('trial')
   const [trialEndsAt, setTrialEndsAt] = useState<Date | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    if (!userId) {
+    if (!userId || !orgId) {
       setPlan('trial')
       setTrialEndsAt(null)
       setLoading(false)
@@ -39,20 +41,20 @@ export function useSubscription(): SubscriptionState {
       setLoading(true)
       try {
         const { data, error } = await supabase
-          .from('user_subscriptions')
-          .select('plan, trial_ends_at')
-          .eq('user_id', userId!)
+          .from('subscriptions')
+          .select('plan, current_period_end')
+          .eq('organization_id', orgId!)
           .maybeSingle()
 
         if (cancelled) return
 
         if (error || !data) {
-          // No subscription row — treat as trial (table might not exist yet)
+          // No subscription row — treat as trial
           setPlan('trial')
           setTrialEndsAt(new Date(Date.now() + 14 * 24 * 60 * 60 * 1000))
         } else {
           const dbPlan = data.plan as PlanType
-          const trialEnd = data.trial_ends_at ? new Date(data.trial_ends_at) : null
+          const trialEnd = data.current_period_end ? new Date(data.current_period_end) : null
 
           if (dbPlan === 'trial' && trialEnd && trialEnd < new Date()) {
             // Trial expired → degrade to esencial
@@ -63,7 +65,7 @@ export function useSubscription(): SubscriptionState {
           setTrialEndsAt(trialEnd)
         }
       } catch {
-        // Supabase table doesn't exist yet — default to trial
+        // Default to trial on any error
         setPlan('trial')
         setTrialEndsAt(new Date(Date.now() + 14 * 24 * 60 * 60 * 1000))
       } finally {
@@ -73,7 +75,7 @@ export function useSubscription(): SubscriptionState {
 
     fetchSubscription()
     return () => { cancelled = true }
-  }, [userId])
+  }, [userId, orgId])
 
   const now = new Date()
   const isTrialActive = plan === 'trial' && !!trialEndsAt && trialEndsAt > now
