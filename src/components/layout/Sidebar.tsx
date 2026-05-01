@@ -10,6 +10,7 @@ import { useAppStore } from '../../store/appStore'
 import { useAuthStore } from '../../store/authStore'
 import { useOrgStore } from '../../store/orgStore'
 import { supabase } from '../../lib/supabaseClient'
+import { cleanupClientState } from '../../lib/cleanupClientState'
 
 interface NavItem {
   label: string
@@ -20,7 +21,7 @@ interface NavItem {
 export default function Sidebar() {
   const location = useLocation()
   const navigate = useNavigate()
-  const { configuracion, resetAll } = useAppStore()
+  const { configuracion } = useAppStore()
   const { user } = useAuthStore()
   const org = useOrgStore(s => s.org)
   const currentRole = useOrgStore(s => s.currentRole)
@@ -40,8 +41,8 @@ export default function Sidebar() {
 
   const handleLogout = async () => {
     if (isDemo) { navigate('/'); return }
+    await cleanupClientState()
     await supabase.auth.signOut()
-    resetAll()
     navigate('/login')
   }
 
