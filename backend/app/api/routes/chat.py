@@ -10,6 +10,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from ..dependencies import get_current_user
+from ...services.quota import consume_quota
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -56,7 +59,11 @@ async def get_http_client(request: Request) -> httpx.AsyncClient:
 async def proxy_chat(
     body: ChatRequest,
     http: httpx.AsyncClient = Depends(get_http_client),
+    user = Depends(get_current_user),  # [Sprint I2] auth requerida
 ):
+    # [Sprint I2] Quota check + atomic consume. Admin bypass interno.
+    consume_quota(user)
+
     api_key = _get_api_key()
     payload = body.model_dump(exclude_none=True)
 
@@ -230,7 +237,11 @@ async def _stream_deepseek(
 async def proxy_chat_stream(
     body: ChatRequest,
     http: httpx.AsyncClient = Depends(get_http_client),
+    user = Depends(get_current_user),  # [Sprint I2] auth requerida
 ):
+    # [Sprint I2] Quota check + atomic consume antes de abrir el stream.
+    consume_quota(user)
+
     api_key = _get_api_key()
     payload = body.model_dump(exclude_none=True)
     request_id = uuid.uuid4().hex[:8]

@@ -265,6 +265,7 @@ export default function Sidebar() {
           isOpen ? 'translate-x-0' : '-translate-x-full'
         )}
         style={{ background: 'var(--sf-sidebar)', borderRight: '1px solid var(--sf-border-subtle)' }}
+        aria-hidden={!isOpen ? 'true' : undefined}
       >
         <SidebarContent />
       </aside>

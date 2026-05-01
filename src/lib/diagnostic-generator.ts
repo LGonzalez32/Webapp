@@ -92,8 +92,17 @@ export function determineSinAccionesLabel(
   const textMentionsDormidos =
     /clientes?\s+sin\s+comprar|semanas?\s+sin\s+comprar|d[íi]as?\s+sin\s+comprar/i.test(allBlockText)
 
+  // [Sprint H1] Fix G3: el copy "revisar la cartera de dormidos" solo aplica
+  // cuando el block efectivamente proviene de un candidato cliente_dormido.
+  // Para otros tipos (cross_delta, contribution, change, trend) que caen acá
+  // por presencia incidental de dormidos en cartera del vendedor, usar copy
+  // genérico sin mencionar dormidos.
+  const { insightType: blockInsightType } = parseBlockMeta(block.id)
   if (hasDormidoForVendor || hasDormidoMentioned || textMentionsDormidos) {
-    return prefix + 'revisar la cartera de dormidos manualmente.'
+    if (blockInsightType === 'cliente_dormido') {
+      return prefix + 'revisar la cartera de dormidos manualmente.'
+    }
+    return prefix + 'acción manual requerida — los datos automáticos no proponen una palanca clara para este caso.'
   }
 
   return prefix + 'los datos históricos no muestran una palanca clara.'

@@ -299,6 +299,23 @@ function auditGate(tipoMetaActivo: 'usd' | 'uds') {
     }),
   }
 
+  // [Fase 7.6 / Sprint E1] Audit por modo (strict/relaxed/fail) × insightTypeId.
+  // Mide el efecto cualitativo de añadir narrativas concretas (D1 añadió templates
+  // trend/change). Hipótesis: muchos candidatos pasan de relaxed → strict cuando
+  // accion ya no es null. Sin cambio funcional — solo telemetría.
+  const gateAuditByMode: Record<'strict' | 'relaxed' | 'fail', Record<string, number>> = {
+    strict:  {},
+    relaxed: {},
+    fail:    {},
+  }
+  for (const { c, decision } of decisions) {
+    const bucket = gateAuditByMode[decision.mode]
+    bucket[c.insightTypeId] = (bucket[c.insightTypeId] ?? 0) + 1
+  }
+  gateAuditByMode.strict  = sortedEntries(gateAuditByMode.strict)
+  gateAuditByMode.relaxed = sortedEntries(gateAuditByMode.relaxed)
+  gateAuditByMode.fail    = sortedEntries(gateAuditByMode.fail)
+
   return {
     poolSize:       candidates.length,
     gatePassCount:  passing.length,
@@ -309,6 +326,7 @@ function auditGate(tipoMetaActivo: 'usd' | 'uds') {
     gateRescuedByContributionUpException: passing.filter(
       (d) => d.decision.reason === 'relaxed:exception_contribution_up',
     ).length,
+    gateAuditByMode,
     failsByRule,
     failsByTypeAndRule:   sortedEntries(failsByTypeAndRule),
     failsByMetricAndRule: sortedEntries(failsByMetricAndRule),

@@ -717,7 +717,7 @@ function computeClientesDormidos(
 
   type DormidoRaw = {
     cliente: string; vendedor: string; ultima_compra: Date; dias_sin_actividad: number
-    valor_yoy_usd: number; transacciones_yoy: number; _compras_total: number
+    valor_yoy_usd: number; unidades_yoy: number; transacciones_yoy: number; _compras_total: number
     frecuencia_promedio: number; frecuencia_esperada: number | null; threshold_efectivo: number
     meses_distintos: number; meses_historial: number
   }
@@ -754,6 +754,10 @@ function computeClientesDormidos(
       return true
     })
     const valor_yoy_usd = yoyRecords.reduce((a, s) => a + (s.venta_neta ?? s.unidades), 0)
+    // [Sprint H2] unidades_yoy: paralelo a valor_yoy_usd pero solo unidades (no
+    // mezclado con venta_neta). Habilita render dual-metric en /clientes tab
+    // Inactivos cuando metricaGlobal === 'uds'. Cierra blocker F2.
+    const unidades_yoy = yoyRecords.reduce((a, s) => a + (s.unidades ?? 0), 0)
     const transacciones_yoy = yoyRecords.length
 
     let frecuencia_promedio = 0
@@ -775,7 +779,7 @@ function computeClientesDormidos(
 
     candidates.push({
       cliente, vendedor, ultima_compra, dias_sin_actividad,
-      valor_yoy_usd, transacciones_yoy, _compras_total: records.length,
+      valor_yoy_usd, unidades_yoy, transacciones_yoy, _compras_total: records.length,
       frecuencia_promedio, frecuencia_esperada, threshold_efectivo,
       meses_distintos, meses_historial,
     })
@@ -816,6 +820,7 @@ function computeClientesDormidos(
     return {
       cliente: c.cliente, vendedor: c.vendedor, ultima_compra: c.ultima_compra,
       dias_sin_actividad: c.dias_sin_actividad, valor_yoy_usd: c.valor_yoy_usd,
+      unidades_yoy: c.unidades_yoy,
       transacciones_yoy: c.transacciones_yoy, recovery_score, recovery_label, recovery_explicacion,
       frecuencia_esperada_dias: c.frecuencia_esperada !== null ? Math.round(c.frecuencia_esperada) : null,
       threshold_usado: c.threshold_efectivo,

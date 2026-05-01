@@ -6,6 +6,7 @@ import { useOrgStore } from '../store/orgStore'
 import { getUserOrg, loadOrgData } from './orgService'
 import { getDemoData, DEMO_EMPRESA } from './demoData'
 import { loadDatasets } from './dataCache'
+import { useAlertStatusStore } from '../store/alertStatusStore'
 import type { SaleRecord, MetaRecord, InventoryItem } from '../types'
 
 export function useAutoLoad() {
@@ -102,6 +103,7 @@ export function useAutoLoad() {
         setSales(sales)
         if (metas && metas.length > 0) setMetas(metas)
         if (inventory && inventory.length > 0) setInventory(inventory)
+        useAlertStatusStore.getState().loadAlertStatuses(org.id).catch(() => {})
         // useAnalysis se dispara automáticamente cuando sales cambia
       } catch (err) {
         navigate('/cargar', { replace: true })

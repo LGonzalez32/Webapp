@@ -3,8 +3,10 @@ import { useAppStore } from '../store/appStore'
 import { useAuthStore } from '../store/authStore'
 import { useOrgStore } from '../store/orgStore'
 import { useEmpresaName } from '../lib/useEmpresaName'
-import { Store, BarChart3, Save, Package, Bell, RotateCcw, HelpCircle } from 'lucide-react'
+import { Store, BarChart3, Save, Package, Bell, RotateCcw, HelpCircle, Trash2 } from 'lucide-react'
+import { toast } from 'sonner'
 import { GIRO_OPTIONS } from '../lib/giroOptions'
+import { cleanupClientState } from '../lib/cleanupClientState'
 
 interface NotifPrefs {
   email: string
@@ -415,6 +417,35 @@ export default function ConfiguracionPage() {
               <span className="text-xs text-purple-400 font-medium animate-in fade-in duration-200">Guardado</span>
             )}
           </div>
+        </div>
+      </div>
+
+      {/* [Sprint G4] Diagnóstico — limpieza de caché local sin logout */}
+      <div className="bg-zinc-900 border border-red-900/40 rounded-2xl overflow-hidden">
+        <div className="px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-red-500/10 flex items-center justify-center border border-red-500/20">
+              <Trash2 className="w-4 h-4 text-red-400" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-zinc-50">Limpiar caché del navegador</h3>
+              <p className="text-[11px] text-zinc-500">Borra datos cacheados localmente. Útil si la app muestra datos viejos. No te desloguea.</p>
+            </div>
+          </div>
+          <button
+            onClick={async () => {
+              if (!confirm('¿Limpiar todos los datos cacheados? Tendrás que recargar la app después.')) return
+              try {
+                await cleanupClientState()
+                toast.success('Caché limpiada — recarga la página')
+              } catch {
+                toast.error('No se pudo limpiar la caché')
+              }
+            }}
+            className="px-4 py-2 text-xs font-medium rounded-lg border border-red-700 text-red-300 hover:border-red-500 hover:text-red-100 transition-colors"
+          >
+            Limpiar caché
+          </button>
         </div>
       </div>
 

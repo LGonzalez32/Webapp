@@ -269,7 +269,7 @@ export default function RotacionPage() {
   const highlightCategory = (location.state as { highlight?: string } | null)?.highlight ?? null
   const alertCategoria = useMemo(() => new URLSearchParams(location.search).get('categoria'), [location.search])
   const initialFilter = alertCategoria ?? highlightCategory
-  const { categoriasInventario, dataAvailability, configuracion, sales, selectedPeriod, insights, clientesDormidos, vendorAnalysis, categoriaAnalysis } = useAppStore()
+  const { categoriasInventario, dataAvailability, configuracion, sales, selectedPeriod, insights, clientesDormidos, vendorAnalysis, categoriaAnalysis, isProcessed } = useAppStore()
 
   const [panelProducto, setPanelProducto] = useState<CategoriaInventario | null>(null)
   const [searchText, setSearchText] = useState(alertCategoria ?? '')
@@ -440,7 +440,7 @@ export default function RotacionPage() {
     [configuracion.umbral_riesgo_quiebre, configuracion.umbral_baja_cobertura, configuracion.umbral_normal]
   )
 
-  if (!dataAvailability.has_inventario) {
+  if (isProcessed && !dataAvailability.has_inventario) {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-4 animate-in fade-in duration-500">
         <div className="text-5xl">📦</div>

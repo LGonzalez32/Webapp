@@ -193,10 +193,19 @@ SOLO MEMORIA: vendorAnalysis, teamStats, insights, clientesDormidos,
 >    `gateRescuedByContributionUpException` en audit para monitoreo.
 >
 > **Fase 7 cerrada.** Backlog explícito (no continuación inmediata):
->   - **7.6** — atacar `accion: null` en detectores `change`/`trend`
->     para que la puerta relajada se active. Diferido hasta tener criterio
->     claro de producto para "acción concreta aceptable" (riesgo: inventar
->     acciones genéricas que el gate ya filtra correctamente).
+>   - **7.6 ✅ HECHO** (Sprints D1 + F1 + G2). `NARRATIVE_TEMPLATES` extendido
+>     con templates para `trend`, `change`, `cliente_dormido`, `cross_delta`
+>     y `contribution`. Bucket `relaxed` del `gateAuditByMode` queda en `{}`
+>     para USD y UDS pools. `cliente_dormido` y `cross_delta` requirieron
+>     wiring inline en sus special builders (no entran al registry loop).
+>     Todas las acciones respetan `Z12_GENERIC_ACTION_RE` (verificado por
+>     audit en `insight-engine.gate-audit.test.ts`).
+>   - **7.7 (siguiente)** — atacar el bucket `fail` que queda. Post-7.6
+>     persisten ~4-5 candidatos `change`/`trend`/`outlier`/`contribution`
+>     fallando solo por `materiality` (impacto USD bajo). Templates no
+>     resuelven esto — requiere repensar el threshold (¿share del negocio
+>     en lugar de USD absoluto? ¿gradiente por severity?). Diferido hasta
+>     decisión de producto.
 >
 > **Regla post-6A:** todo cambio que afecte pass/fail va en `evaluateInsightCandidate()` o helpers de `insightStandard.ts`. Cambios de generación/detección/ranker pueden vivir en `insight-engine.ts` mientras respeten el gate.
 >
@@ -283,3 +292,52 @@ Rango: Enero 2024 – Abril 2026 | 4 categorías | 3 canales | 10 departamentos 
 - Para "buscar dónde se usa X" o exploración con >3 queries: usar Agent (Explore), no Grep+Read en serie.
 - Edits masivos: fragmentar en varios Edit en paralelo. NUNCA un Write gigante (dispara Output Token Limit).
 - Después de cada fase Z.X: invocar /regression-sweep para detectar fallbacks/edge-cases removidos sin querer.
+
+---
+
+## PRODUCTION READINESS (Sprint I — 2026-05-01)
+
+### Backend chat: auth + tier-aware quota (I2)
+- `/api/v1/chat` y `/api/v1/chat/stream` exigen `Authorization: Bearer <jwt>`
+  (Supabase JWT validado contra `auth.users`).
+- Quota tier-aware via env vars (`PLAN_TRIAL_DAILY`, `PLAN_ESENCIAL_DAILY`,
+  etc.). Modificable sin redeploy/migration. Defaults en `quota.py:PLAN_DEFAULTS`.
+- Admin bypass: emails en `ADMIN_EMAILS` (CSV) saltan toda verificación —
+  no consumen quota ni bloquean.
+- Atomicidad: tabla `chat_usage(user_id, date, count)` + RPC
+  `try_consume_chat_quota(user_id, daily, monthly)` con `SELECT FOR UPDATE`
+  (migration `011_chat_usage.sql`).
+- Frontend: `chatService.ts` usa `getAuthHeaders()` que lee `supabase.auth.getSession().access_token`.
+- Pricing reference: trial 5/50, esencial 10/200, profesional 50/unlimited,
+  empresa unlimited/unlimited (todos modificables via env).
+
+### Storage wrapper anti-leak demo (G1)
+- `appStore.ts` partialize devuelve `{}` en `dataSource === 'demo'` y el
+  storage wrapper no-opea `setItem` cuando state es demo o vacío.
+- Cubierto por `cleanup-and-storage.test.ts` y `demo-storage-isolation.test.ts`.
+
+### ErrorBoundary global (I3)
+- `<ErrorBoundary>` wrappea `<App/>` en `main.tsx`. Workaround: el repo no
+  tiene `@types/react`, ErrorBoundary usa cast manual de `React.Component`.
+- Fallback con botones "Recargar" y "Limpiar caché y recargar"
+  (este último invoca `cleanupClientState`).
+
+### Audits read-only
+- `docs/AUDIT-RLS-H4.md` — todas las tablas `public` con RLS, policies en
+  `organizations` / `organization_members` / `alert_status` / `subscriptions`.
+- `docs/AUDIT-I1-FOLLOWUPS.md` — `profiles` y `subscriptions` clean,
+  Storage `org-data` con 4 policies path-aware.
+- `docs/AUDIT-CHAT-BACKEND-I2.md` — diagnóstico pre-fix del endpoint
+  abierto + recomendaciones (la fix ya aplicada).
+- `docs/PROD-DEPLOY-CHECKLIST.md` — checklist humano para deploy.
+
+### Env vars requeridas en Render (backend)
+```
+SUPABASE_URL, SUPABASE_SERVICE_KEY        # prerequisito (NUEVAS desde I2)
+DEEPSEEK_API_KEY, ALLOWED_ORIGINS         # ya existentes
+ADMIN_EMAILS                              # I2
+PLAN_TRIAL_DAILY/MONTHLY                  # I2 (5/50)
+PLAN_ESENCIAL_DAILY/MONTHLY               # I2 (10/200)
+PLAN_PROFESIONAL_DAILY/MONTHLY            # I2 (50/unlimited)
+PLAN_EMPRESA_DAILY/MONTHLY                # I2 (unlimited/unlimited)
+```

@@ -509,13 +509,50 @@ export const useAppStore = create<AppState>()(
       },
       // sales/metas/inventory NO se persisten: son muy grandes para localStorage
       // y bloquean el hilo principal al serializarse. Se restauran via IndexedDB o getDemoData().
-      partialize: (state) => ({
-        selectedPeriod: state.selectedPeriod,
-        configuracion: state.configuracion,
-        orgId: state.orgId,
-        dataSource: state.dataSource,
-        tipoMetaActivo: state.tipoMetaActivo,
-      }) as any,
+      // [Sprint G1] En modo demo el partialize devuelve {} para que el storage
+      // no acumule PII (configuracion.empresa = "Los Pinos S.A.", orgId, etc.).
+      // El skip real de la escritura ocurre en el storage wrapper de abajo —
+      // partialize {} es defensa-en-profundidad.
+      partialize: (state) => {
+        if (state.dataSource === 'demo') {
+          return {} as any
+        }
+        return {
+          selectedPeriod: state.selectedPeriod,
+          configuracion: state.configuracion,
+          orgId: state.orgId,
+          dataSource: state.dataSource,
+          tipoMetaActivo: state.tipoMetaActivo,
+        } as any
+      },
+      // [Sprint G1] Storage wrapper que no-opea setItem cuando el state vivo es
+      // demo. El parse mira el flag dataSource del payload serializado (Zustand
+      // serializa { state, version }). Si el payload viene de demo (o vacío,
+      // post-partialize {}), no escribimos a localStorage.
+      storage: {
+        getItem: (name) => {
+          try {
+            const raw = localStorage.getItem(name)
+            return raw == null ? null : JSON.parse(raw)
+          } catch { return null }
+        },
+        setItem: (name, value) => {
+          try {
+            const liveDataSource = (value as any)?.state?.dataSource
+            if (liveDataSource === 'demo') return
+            // partialize devolvió {} en demo (sin dataSource). Detectar y skip.
+            if (
+              value && typeof value === 'object' &&
+              (value as any).state &&
+              Object.keys((value as any).state).length === 0
+            ) return
+            localStorage.setItem(name, JSON.stringify(value))
+          } catch { /* storage access denied */ }
+        },
+        removeItem: (name) => {
+          try { localStorage.removeItem(name) } catch { /* */ }
+        },
+      },
     }
   )
 )

@@ -674,6 +674,23 @@ export function parseChartBlock(content: string): {
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'https://webapp-0yx8.onrender.com'
 
+// [Sprint I2] Obtener access_token de Supabase para mandar como Authorization
+// header al backend. Backend valida el JWT y aplica quota per-user.
+// En modo demo (sin sesión real) retorna null y el backend devolverá 401 — el
+// caller debe interceptar y mostrar canned response (callAI ya lo hace).
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  try {
+    const { supabase } = await import('./supabaseClient')
+    const { data } = await supabase.auth.getSession()
+    const token = data?.session?.access_token
+    if (token) headers['Authorization'] = `Bearer ${token}`
+  } catch {
+    // Sin sesión: backend devolverá 401, caller decide qué hacer.
+  }
+  return headers
+}
+
 export async function callAI(
   messages: { role: string; content: string }[],
   options?: { max_tokens?: number; temperature?: number; model?: string; top_p?: number; frequency_penalty?: number },
@@ -681,7 +698,7 @@ export async function callAI(
   try {
     const response = await fetch(`${BACKEND_URL}/api/v1/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await getAuthHeaders(),
       body: JSON.stringify({
         messages,
         model: options?.model || 'deepseek-chat',
@@ -811,9 +828,21 @@ export async function sendChatMessageStream(
     ...recentMessages.map((m) => ({ role: m.role, content: m.content })),
   ]
 
+  // Demo mode bypass — no real session, no backend call.
+  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/demo')) {
+    const demoText = '📊 **Análisis de ejemplo** — Esta es una vista previa del asistente con IA.\n\nEn la versión completa, el asistente analiza tus datos en tiempo real y genera recomendaciones personalizadas con nombres, cifras y acciones concretas.\n\n💡 **Regístrate gratis** para desbloquear el análisis con IA sobre tus propios datos.'
+    for (const char of demoText) {
+      callbacks.onToken(char)
+      // tiny async yield so the UI can repaint token by token
+      await new Promise(r => setTimeout(r, 8))
+    }
+    callbacks.onDone(demoText)
+    return
+  }
+
   const response = await fetch(`${BACKEND_URL}/api/v1/chat/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await getAuthHeaders(),
     body: JSON.stringify({
       messages: apiMessages,
       model: 'deepseek-chat',

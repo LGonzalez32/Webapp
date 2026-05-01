@@ -6,7 +6,7 @@ import { cn } from '../lib/utils'
 import { useDemoPath } from '../lib/useDemoPath'
 import type { VendorAnalysis } from '../types'
 import VendedorPanel from '../components/vendedor/VendedorPanel'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDown, ChevronRight, MessageCircle } from 'lucide-react'
 import AnalysisDrawer from '../components/ui/AnalysisDrawer'
 import { SFSelect } from '../components/ui/SFSelect'
 import { SFSearch } from '../components/ui/SFSearch'
@@ -310,6 +310,15 @@ CONVENCIÓN DE UNIDADES (R57 — obligatoria):
     }
   }, [configuracion, clientesDormidos, insights])
 
+  // [Sprint E2] Acceso directo al chat con prefill por vendedor — sin pasar
+  // por el análisis inline. Complementa handleAnalyzeVendedor (resumen rápido)
+  // y handleProfundizarVendedor (deep-dive post-análisis).
+  const handleChatVendedor = useCallback((v: VendorAnalysis) => {
+    const displayMessage = `✦ Analizar a ${v.vendedor}`
+    const prefill = `Analiza el desempeño de ${v.vendedor}: cumplimiento, tendencia, clientes en riesgo. ¿Qué acciones recomiendas?`
+    navigate(dp('/chat'), { state: { prefill, displayPrefill: displayMessage, source: 'Vendedores' } })
+  }, [navigate, dp])
+
   const handleProfundizarVendedor = useCallback((v: VendorAnalysis, analysisText: string) => {
     const displayMessage = `Profundizar: ${v.vendedor} (${RIESGO_CONFIG[v.riesgo].label})`
     const fullContext = [
@@ -576,20 +585,38 @@ CONVENCIÓN DE UNIDADES (R57 — obligatoria):
               )
             }
             return (
-              <button
-                onClick={(e) => { e.stopPropagation(); handleAnalyzeVendedor(v) }}
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 3,
-                  padding: '3px 8px', borderRadius: 5, fontSize: 10, fontWeight: 600,
-                  border: '1px solid rgba(16,185,129,0.2)', background: 'rgba(16,185,129,0.06)',
-                  color: '#10b981', cursor: 'pointer', whiteSpace: 'nowrap' as const,
-                  transition: 'background 0.15s',
-                }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(16,185,129,0.12)')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'rgba(16,185,129,0.06)')}
-              >
-                ✦ Analizar
-              </button>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleAnalyzeVendedor(v) }}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 3,
+                    padding: '3px 8px', borderRadius: 5, fontSize: 10, fontWeight: 600,
+                    border: '1px solid rgba(16,185,129,0.2)', background: 'rgba(16,185,129,0.06)',
+                    color: '#10b981', cursor: 'pointer', whiteSpace: 'nowrap' as const,
+                    transition: 'background 0.15s',
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'rgba(16,185,129,0.12)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'rgba(16,185,129,0.06)')}
+                >
+                  ✦ Analizar
+                </button>
+                {/* [Sprint E2] Acceso directo al chat — paralelo al análisis inline */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleChatVendedor(v) }}
+                  title={`Preguntar al asistente sobre ${v.vendedor}`}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    width: 22, height: 22, borderRadius: 5,
+                    border: '1px solid var(--sf-border)', background: 'transparent',
+                    color: 'var(--sf-t4)', cursor: 'pointer',
+                    transition: 'background 0.15s, color 0.15s',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'var(--sf-inset)'; e.currentTarget.style.color = 'var(--sf-t1)' }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--sf-t4)' }}
+                >
+                  <MessageCircle style={{ width: 12, height: 12 }} />
+                </button>
+              </div>
             )
           })()}
         </div>

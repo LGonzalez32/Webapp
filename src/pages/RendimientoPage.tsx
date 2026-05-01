@@ -764,7 +764,7 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
             <div style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderTop: '3px solid var(--sf-border)', borderRadius: '12px', padding: '20px' }}>
               <p style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--sf-t5)', marginBottom: '4px' }}>YTD {selectedYear}</p>
               <p style={{ fontFamily: "'DM Mono', monospace", fontSize: '28px', fontWeight: 500, color: 'var(--sf-t1)' }}>{useVentaNeta ? formatCurrency(ytdStats.ytdCurr, configuracion.moneda) : formatUnits(ytdStats.ytdCurr)}</p>
-              <p style={{ fontSize: '12px', color: 'var(--sf-t5)', marginTop: '4px' }}>Acumulado {MESES[0]}–{MESES[currentMonth]}</p>
+              <p style={{ fontSize: '12px', color: 'var(--sf-t5)', marginTop: '4px' }}>Ene–{MESES[currentMonth]} {selectedYear} vs mismo período {selectedYear - 1}</p>
             </div>
             <div style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderTop: `3px solid ${ytdStats.variacion == null ? 'var(--sf-border)' : ytdStats.variacion >= 0 ? 'var(--sf-green)' : 'var(--sf-red)'}`, borderRadius: '12px', padding: '20px' }}>
               <p style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--sf-t5)', marginBottom: '4px' }}>vs {selectedYear - 1}</p>

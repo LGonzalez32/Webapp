@@ -1,0 +1,10 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Sprint F4 — demo mode localStorage isolation audit > reports which keys the store writes during demo data load 1`] = `
+{
+  "leakDetected": false,
+  "writtenOther": [],
+  "writtenPersisted": [],
+  "writtenUiPrefs": [],
+}
+`;

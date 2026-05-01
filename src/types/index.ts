@@ -204,6 +204,7 @@ export interface ClienteDormido {
   ultima_compra: Date
   dias_sin_actividad: number
   valor_yoy_usd: number
+  unidades_yoy: number
   transacciones_yoy: number
   recovery_score: number
   recovery_label: 'alta' | 'recuperable' | 'dificil' | 'perdido'

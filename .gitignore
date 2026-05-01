@@ -21,3 +21,6 @@ playwright-report/
 
 # Bitácora interna de fixes aplicados (notas de trabajo, no producto)
 audit/
+
+# Supabase CLI scratch
+supabase/.temp/

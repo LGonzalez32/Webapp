@@ -667,7 +667,7 @@ export default function ClientesPage() {
                       ['vendedor', 'Vendedor'],
                       ['dias_sin_actividad', 'Inactivo'],
                       ['transacciones_yoy', 'Txns YoY'],
-                      ['valor_yoy_usd', `Valor ${yoyPeriodLabel}`],
+                      ['valor_yoy_usd', usaDolares ? `Valor ${yoyPeriodLabel}` : `Unidades ${yoyPeriodLabel}`],
                       ['prioridad', 'Recuperación'],
                     ] as [SortKey, string][]).map(([k, label], i) => (
                       <th
@@ -738,9 +738,19 @@ export default function ClientesPage() {
                         </td>
                         <td style={{ padding: '10px 12px', color: 'var(--sf-t3)', fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace", textAlign: 'right' }}>{c.transacciones_yoy || '—'}</td>
                         <td style={{ padding: '10px 12px', color: 'var(--sf-t1)', fontWeight: 500, fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace", textAlign: 'right' }}>
-                          {c.valor_yoy_usd > 0
-                            ? `${moneda}${c.valor_yoy_usd >= 1000 ? `${(c.valor_yoy_usd / 1000).toFixed(1)}k` : c.valor_yoy_usd.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
-                            : '—'}
+                          {(() => {
+                            // [Sprint H2] Mostrar uds o USD según metricaGlobal.
+                            // unidades_yoy se rellena en analysis.ts paralelo a valor_yoy_usd.
+                            if (usaDolares) {
+                              return c.valor_yoy_usd > 0
+                                ? `${moneda}${c.valor_yoy_usd >= 1000 ? `${(c.valor_yoy_usd / 1000).toFixed(1)}k` : c.valor_yoy_usd.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+                                : '—'
+                            }
+                            const u = c.unidades_yoy ?? 0
+                            return u > 0
+                              ? `${u >= 1000 ? `${(u / 1000).toFixed(1)}k` : u.toLocaleString(undefined, { maximumFractionDigits: 0 })} uds`
+                              : '—'
+                          })()}
                         </td>
                         <td style={{ padding: '10px 12px', maxWidth: 180 }}>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>

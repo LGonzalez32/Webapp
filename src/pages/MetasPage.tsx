@@ -12,12 +12,13 @@ import {
   getMetaMes,
   type MatrizVendedorMesEntry,
 } from '../lib/domain-aggregations'
-import { Target, TrendingUp, TrendingDown, Upload, PenLine, ChevronDown } from 'lucide-react'
+import { Target, TrendingUp, TrendingDown, Upload, PenLine, ChevronDown, BarChart2 } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { callAI } from '../lib/chatService'
 import AnalysisDrawer from '../components/ui/AnalysisDrawer'
 import { parseMetasFile } from '../lib/fileParser'
 import MetasPivotPanel from '../components/MetasPivotPanel'
+import { SFSelect } from '../components/ui/SFSelect'
 import type { MetaRecord } from '../types'
 
 const MESES_SHORT = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
@@ -65,6 +66,62 @@ export default function MetasPage() {
     )
     return Array.from(s).sort()
   }, [metas, currentYear])
+
+  // ── Dimension breakdown (C2) ──────────────────────────────────────────────
+  type DimView = 'vendedor' | 'canal' | 'categoria'
+  const [dimView, setDimView] = useState<DimView>('vendedor')
+
+  const dimValues = useMemo(() => {
+    if (dimView === 'vendedor') return vendedoresActivos
+    if (dimView === 'canal') {
+      const s = new Set(sales.map(s => s.canal).filter((c): c is string => Boolean(c)))
+      return Array.from(s).sort()
+    }
+    const s = new Set(sales.map(s => s.categoria).filter((c): c is string => Boolean(c)))
+    return Array.from(s).sort()
+  }, [dimView, vendedoresActivos, sales])
+
+  const dimRows = useMemo(() => {
+    const getMetaVal = (m: MetaRecord) => tipoMetaActivo === 'usd' ? (m.meta_usd ?? 0) : (m.meta_uds ?? m.meta ?? 0)
+    const getSalesVal = (arr: typeof sales) => tipoMetaActivo === 'usd'
+      ? arr.reduce((a, s) => a + (s.venta_neta ?? 0), 0)
+      : arr.reduce((a, s) => a + s.unidades, 0)
+
+    const matchesDim = (val: string) => (m: MetaRecord | typeof sales[0], isDim: 'meta' | 'sale') => {
+      if (isDim === 'meta') {
+        const mr = m as MetaRecord
+        if (dimView === 'vendedor') return mr.vendedor === val && !mr.canal && !mr.categoria && !mr.cliente
+        if (dimView === 'canal') return mr.canal === val && !mr.vendedor && !mr.categoria && !mr.cliente
+        return mr.categoria === val && !mr.vendedor && !mr.canal && !mr.cliente
+      }
+      const sr = m as typeof sales[0]
+      if (dimView === 'vendedor') return sr.vendedor === val
+      if (dimView === 'canal') return sr.canal === val
+      return sr.categoria === val
+    }
+
+    return dimValues.map(val => {
+      const matchMeta = matchesDim(val)
+      const matchSale = matchesDim(val)
+
+      const metasMes = metas.filter(m => m.anio === currentYear && m.mes === currentMonth + 1 && matchMeta(m, 'meta'))
+      const metaMes = metasMes.reduce((a, m) => a + getMetaVal(m), 0)
+      const salesMes = salesInPeriod(sales, currentYear, currentMonth).filter(s => matchSale(s, 'sale'))
+      const realMes = getSalesVal(salesMes)
+      const pctMes = metaMes > 0 ? (realMes / metaMes) * 100 : null
+
+      const metasYTD = metas.filter(m => m.anio === currentYear && m.mes >= 1 && m.mes <= currentMonth + 1 && matchMeta(m, 'meta'))
+      const metaYTD = metasYTD.reduce((a, m) => a + getMetaVal(m), 0)
+      const salesYTD = sales.filter(s => {
+        const d = new Date(s.fecha)
+        return d.getFullYear() === currentYear && d.getMonth() <= currentMonth && matchSale(s, 'sale')
+      })
+      const realYTD = getSalesVal(salesYTD)
+      const pctYTD = metaYTD > 0 ? (realYTD / metaYTD) * 100 : null
+
+      return { val, metaMes, realMes, pctMes, metaYTD, realYTD, pctYTD }
+    })
+  }, [dimValues, dimView, metas, sales, currentYear, currentMonth, tipoMetaActivo])
 
   const buildDraft = useCallback(() => {
     const draft: Record<string, Record<number, { meta_uds?: number; meta_usd?: number }>> = {}
@@ -480,6 +537,77 @@ Reglas: máximo 100 palabras, cada bullet con número concreto, sin instruccione
       >
         ✦ Analizar cumplimiento con IA →
       </button>
+
+      {/* ── Breakdown por dimensión (mes actual) ─────────────────────────────
+          SFSelect elige la dimensión; la tabla muestra meta mes / real mes /
+          % cumplimiento / meta YTD / real YTD por cada valor de esa dimensión. */}
+      <div className="rounded-2xl overflow-hidden" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
+        <div className="px-6 py-4 flex items-center justify-between gap-3 flex-wrap" style={{ borderBottom: '1px solid var(--sf-border)' }}>
+          <div className="flex items-center gap-2">
+            <BarChart2 className="w-4 h-4" style={{ color: 'var(--sf-t4)' }} />
+            <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--sf-t4)' }}>
+              Cumplimiento — {MESES_SHORT[currentMonth]} {currentYear}
+            </p>
+          </div>
+          <SFSelect
+            value={dimView}
+            onChange={e => setDimView(e.target.value as DimView)}
+          >
+            <option value="vendedor">Por vendedor</option>
+            {dataAvailability.has_canal && <option value="canal">Por canal</option>}
+            {dataAvailability.has_categoria && <option value="categoria">Por categoría</option>}
+          </SFSelect>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr style={{ borderBottom: '1px solid var(--sf-border)' }}>
+                <th className="text-left px-5 py-3 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--sf-t4)' }}>
+                  {dimView === 'vendedor' ? 'Vendedor' : dimView === 'canal' ? 'Canal' : 'Categoría'}
+                </th>
+                <th className="text-right px-4 py-3 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--sf-t4)' }}>Meta mes</th>
+                <th className="text-right px-4 py-3 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--sf-t4)' }}>Real mes</th>
+                <th className="text-center px-4 py-3 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--sf-t4)' }}>% Mes</th>
+                <th className="text-right px-4 py-3 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--sf-t4)' }}>Meta YTD</th>
+                <th className="text-right px-4 py-3 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--sf-t4)' }}>Real YTD</th>
+                <th className="text-center px-4 py-3 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--sf-t4)' }}>% YTD</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dimRows.map(row => (
+                <tr key={row.val} style={{ borderBottom: '0.5px solid var(--sf-border)' }}>
+                  <td className="px-5 py-3 font-medium" style={{ color: 'var(--sf-t1)' }}>{row.val}</td>
+                  <td className="px-4 py-3 text-right tabular-nums" style={{ color: 'var(--sf-t3)' }}>
+                    {row.metaMes > 0 ? fmtVal(row.metaMes) : <span style={{ color: 'var(--sf-t5)' }}>—</span>}
+                  </td>
+                  <td className="px-4 py-3 text-right tabular-nums" style={{ color: 'var(--sf-t1)' }}>
+                    {fmtVal(row.realMes)}
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    <CumplimientoBadge pct={row.pctMes} />
+                  </td>
+                  <td className="px-4 py-3 text-right tabular-nums" style={{ color: 'var(--sf-t3)' }}>
+                    {row.metaYTD > 0 ? fmtVal(row.metaYTD) : <span style={{ color: 'var(--sf-t5)' }}>—</span>}
+                  </td>
+                  <td className="px-4 py-3 text-right tabular-nums" style={{ color: 'var(--sf-t1)' }}>
+                    {fmtVal(row.realYTD)}
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    <CumplimientoBadge pct={row.pctYTD} />
+                  </td>
+                </tr>
+              ))}
+              {dimRows.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-5 py-6 text-center text-xs" style={{ color: 'var(--sf-t5)' }}>
+                    Sin datos para esta dimensión
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       {/* Multi-dim pivot — mismo UX que "Analiza tus ventas" en Rendimiento.
           Filtrado a YTD (Ene → fin del mes actual). Muestra Venta YTD, Meta YTD,

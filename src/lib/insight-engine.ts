@@ -833,6 +833,194 @@ const NARRATIVE_TEMPLATES: Record<
     }
   },
 
+  // [Fase 7.6] trend — pendiente sostenida (R²≥0.7, pctChange≥10%) sobre history.
+  // Templates antes ausentes hacían que c.accion=undefined → r4 fallaba en strict
+  // y solo entraba por relaxed. Acción específica al dirección + member.
+  'trend': (detail, _tma) => {
+    const member    = detail.member    as string
+    const direction = detail.direction as 'up' | 'down'
+    const months    = detail.months    as number
+    const pctChange = detail.pctChange as number
+    const pctAbs    = (Math.abs(pctChange) * 100).toFixed(0)
+    const dirNoun   = direction === 'down' ? 'caída' : 'crecimiento'
+    const titulo = `${member} — ${dirNoun} sostenido (${pctAbs}% en ${months} meses)`
+    const descripcion =
+      `${member} acumula ${months} meses con ${dirNoun} de ${pctAbs}%. ` +
+      `La pendiente es estadísticamente clara (R² ≥ 0.7): no es ruido del mes.`
+    const conclusion = direction === 'down'
+      ? `${member} no se recupera solo — la pendiente lleva ${months} meses sin quebrar.`
+      : `${member} viene capturando volumen mes a mes; conviene proteger ese ritmo antes de que se diluya.`
+    return {
+      titulo,
+      descripcion,
+      conclusion,
+      accion: {
+        texto: direction === 'down'
+          ? `Convocar a ${member} esta semana para revisar pipeline y ofertas competitivas: la cartera perdió ${pctAbs}% en ${months} meses sin quiebres intermedios.`
+          : `Documentar qué hizo ${member} en estos ${months} meses para crecer ${pctAbs}% y replicarlo en cuentas con perfil similar.`,
+        entidades:    [member],
+        respaldo:     `${pctAbs}% de ${dirNoun} en ${months} meses (R² ≥ 0.7)`,
+        ejecutableEn: 'esta_semana',
+      },
+    }
+  },
+
+  // [Fase 7.6] change — salto MoM ≥ 25%. Misma motivación que trend: ausencia
+  // de template producía c.accion=undefined y solo pasaba en relaxed.
+  'change': (detail, _tma) => {
+    const member    = detail.member    as string
+    const direction = detail.direction as 'up' | 'down'
+    const pctChange = detail.pctChange as number
+    const current   = detail.current   as number
+    const previous  = detail.previous  as number
+    const pctAbs    = Math.abs(pctChange).toFixed(0)
+    const sign      = pctChange > 0 ? '+' : ''
+    const titulo    = direction === 'down'
+      ? `${member} cayó ${pctAbs}% vs período anterior`
+      : `${member} subió ${pctAbs}% vs período anterior`
+    const descripcion =
+      `${member} pasó de ${fmtNum(previous)} a ${fmtNum(current)} (${sign}${pctAbs}%). ` +
+      `Es un salto fuera del rango habitual entre períodos consecutivos.`
+    const conclusion = direction === 'down'
+      ? `Una caída de ${pctAbs}% entre dos períodos consecutivos rara vez se corrige sin intervención directa.`
+      : `Un salto de ${pctAbs}% merece confirmar si se sostiene en el próximo período o fue un pedido extraordinario.`
+    return {
+      titulo,
+      descripcion,
+      conclusion,
+      accion: {
+        texto: direction === 'down'
+          ? `Contactar a ${member} antes del cierre de mes para entender si la caída de ${pctAbs}% responde a un evento puntual (stockout, problema de servicio) o a algo estructural.`
+          : `Confirmar con ${member} si el salto de ${pctAbs}% es base nueva o un pedido extraordinario; ajustar forecast del próximo período según la respuesta.`,
+        entidades:    [member],
+        respaldo:     `${fmtNum(previous)} → ${fmtNum(current)} (${sign}${pctAbs}%)`,
+        ejecutableEn: 'esta_semana',
+      },
+    }
+  },
+
+  // [Sprint G2] contribution — miembro que más contribuye al cambio agregado.
+  // Detail shape (insight-registry.ts:495): { member, contributionPct, totalChange,
+  // memberChange, totalCurrent, totalPrev, memberValue, memberPrevValue }.
+  // Acción dirigida al member, diferenciada por dirección del cambio.
+  // Nota Fase 7.5-B: la excepción contribution-up sigue activa pero ahora
+  // raramente se invoca — los casos extremos pasan strict directo con esta
+  // acción (`gateRescuedByContributionUpException` puede caer a 0).
+  'contribution': (detail, _tma) => {
+    const member          = detail.member          as string
+    const contributionPct = (detail.contributionPct as number) ?? 0
+    const memberChange    = (detail.memberChange    as number) ?? 0
+    const totalChange     = (detail.totalChange     as number) ?? 0
+    const memberValue     = (detail.memberValue     as number) ?? 0
+    const memberPrevValue = (detail.memberPrevValue as number) ?? 0
+    const direction: 'up' | 'down' = memberChange >= 0 ? 'up' : 'down'
+    const verbo = direction === 'up' ? 'aporta' : 'arrastra'
+    const dirNoun = direction === 'up' ? 'crecimiento' : 'caída'
+    const fmt = (n: number) => Math.round(Math.abs(n)).toLocaleString('es-SV')
+    const pctAbs = Math.abs(contributionPct).toFixed(0)
+    const titulo = `${member} ${verbo} ${pctAbs}% del ${dirNoun} agregada`
+    const descripcion =
+      `${member} pasó de ${fmt(memberPrevValue)} a ${fmt(memberValue)} ` +
+      `(${memberChange >= 0 ? '+' : ''}${fmt(memberChange)}). ` +
+      `Representa el ${pctAbs}% del cambio total del grupo (${fmt(totalChange)} en agregado).`
+    const conclusion = direction === 'down'
+      ? `${member} es el principal responsable de la caída del grupo: cualquier plan que no aterrice ahí no mueve el agregado.`
+      : `${member} concentra ${pctAbs}% del crecimiento; entender su patrón es la palanca más rentable para replicar.`
+    return {
+      titulo,
+      descripcion,
+      conclusion,
+      accion: {
+        texto: direction === 'down'
+          ? `Reunirse con quien atiende ${member} esta semana: aporta ${pctAbs}% de la caída del grupo (${fmt(memberChange)}). Definir plan específico antes de tocar al resto del equipo.`
+          : `Documentar qué hizo ${member} para concentrar ${pctAbs}% del crecimiento (${memberChange >= 0 ? '+' : ''}${fmt(memberChange)}) y replicar el patrón en otros miembros del grupo antes de que se diluya.`,
+        entidades:    [member],
+        respaldo:     `${pctAbs}% del cambio agregado · ${fmt(memberPrevValue)} → ${fmt(memberValue)}`,
+        ejecutableEn: 'esta_semana',
+      },
+    }
+  },
+
+  // [Sprint F1] cliente_dormido — clientes inactivos sobre el umbral configurado.
+  // Detail shape (insight-engine.ts:5482): { umbralDiasDormido, diasSinComprar,
+  // impactoVentaHistorica, impactoVentanaLabel, clienteNombre, vendedor,
+  // frecuenciaHistoricaDias }. Acción específica al cliente + vendedor responsable.
+  'cliente_dormido': (detail, _tma) => {
+    const cliente   = detail.clienteNombre         as string
+    const vendedor  = detail.vendedor              as string
+    const dias      = detail.diasSinComprar        as number
+    const umbral    = detail.umbralDiasDormido     as number
+    const impacto   = (detail.impactoVentaHistorica as number) ?? 0
+    const ventana   = detail.impactoVentanaLabel   as string | undefined
+    const frec      = detail.frecuenciaHistoricaDias as number | null | undefined
+    const impactoFmt = impacto > 0 ? `$${Math.round(impacto).toLocaleString('es-SV')}` : null
+    const titulo = `↓ ${cliente} sin compras hace ${dias} días`
+    const descripcion = [
+      `${cliente} no registra compra hace ${dias} días, ${dias - umbral} por encima del umbral de ${umbral} días.`,
+      frec && frec > 0 ? `Compraba típicamente cada ${frec} días.` : '',
+      impactoFmt && ventana ? `Aportaba ${impactoFmt} en ${ventana}.` : '',
+    ].filter(Boolean).join(' ')
+    const conclusion = impactoFmt
+      ? `${cliente} se enfría con ${impactoFmt} de venta YoY en juego — la ventana de recuperación se cierra mes a mes.`
+      : `${cliente} se enfría sin compra reciente; el riesgo de perderlo crece con cada semana adicional.`
+    return {
+      titulo,
+      descripcion,
+      conclusion,
+      accion: {
+        texto: vendedor
+          ? `${vendedor} debe contactar a ${cliente} esta semana para confirmar si sigue comprando o cambió de proveedor; agendar visita si la respuesta es ambigua.`
+          : `Asignar a un vendedor para contactar a ${cliente} esta semana y confirmar si sigue activo o ya migró a otro proveedor.`,
+        entidades:    [cliente, ...(vendedor ? [vendedor] : [])],
+        respaldo:     `${dias} días sin compra (umbral ${umbral})${impactoFmt ? ` · ${impactoFmt} histórico` : ''}`,
+        ejecutableEn: 'esta_semana',
+      },
+    }
+  },
+
+  // [Sprint F1] cross_delta — combo dim×dim×... con cambio significativo USD YoY.
+  // Detail shape (insight-engine.ts:6813): { dimensionPath: [{dim,member}],
+  // memberValue, memberPrevValue, memberChange, pctChange, pctSobreNegocio,
+  // cross_context }. Acción dirigida a la combinación granular completa.
+  'cross_delta': (detail, _tma) => {
+    type DimNode = { dim: string; member: string }
+    const path        = (detail.dimensionPath as DimNode[]) ?? []
+    const cur         = (detail.memberValue     as number) ?? 0
+    const prev        = (detail.memberPrevValue as number) ?? 0
+    const delta       = (detail.memberChange    as number) ?? (cur - prev)
+    const pctChange   = (detail.pctChange       as number) ?? 0
+    const pctNegocio  = (detail.pctSobreNegocio as number) ?? 0
+    const direction: 'up' | 'down' = delta >= 0 ? 'up' : 'down'
+    const verbo  = direction === 'up' ? 'creció'  : 'cayó'
+    const verboInf = direction === 'up' ? 'crecimiento' : 'caída'
+    const fmt = (n: number) => Math.round(Math.abs(n)).toLocaleString('es-SV')
+    const granular = path.length > 0 ? path[0].member : 'combo'
+    const otros    = path.slice(1).map(p => `${p.member}`).join(' · ')
+    const pathLabel = otros ? `${granular} en ${otros}` : granular
+    const pctAbs = (Math.abs(pctChange) * 100).toFixed(1)
+    const pctNegFmt = (pctNegocio * 100).toFixed(2)
+    const titulo = `${pathLabel} ${verbo} $${fmt(delta)} (${direction === 'up' ? '+' : ''}${pctAbs}%)`
+    const descripcion =
+      `${pathLabel}: $${fmt(prev)} → $${fmt(cur)} (${direction === 'up' ? '+' : ''}${pctAbs}%). ` +
+      `Representa ${pctNegFmt}% del negocio del período — la combinación mueve la aguja por sí sola.`
+    const conclusion = direction === 'down'
+      ? `La ${verboInf} no está repartida entre dimensiones: vive concentrada en ${pathLabel}, así que cualquier plan general que no aterrice ahí no la corrige.`
+      : `El ${verboInf} no es difuso: ${pathLabel} concentra la mejora, y entender qué pasó ahí es lo que permite replicarlo.`
+    return {
+      titulo,
+      descripcion,
+      conclusion,
+      accion: {
+        texto: direction === 'down'
+          ? `Convocar a quien atiende ${pathLabel} esta semana: la combinación bajó $${fmt(delta)} (${pctAbs}%) y mueve ${pctNegFmt}% del negocio — definir plan de recuperación específico de esa intersección, no del total.`
+          : `Documentar qué hizo ${pathLabel} para crecer $${fmt(delta)} (${pctAbs}%) y replicar el patrón en otras combinaciones equivalentes antes de que se diluya el efecto.`,
+        entidades:    path.map(p => p.member),
+        respaldo:     `$${fmt(prev)} → $${fmt(cur)} (${direction === 'up' ? '+' : ''}${pctAbs}%) · ${pctNegFmt}% del negocio`,
+        ejecutableEn: 'esta_semana',
+      },
+    }
+  },
+
   // Versión simplificada de meta_gap (detail tiene solo cumplimiento + gap desde el registry)
   'meta_gap': (detail, _tma) => {
     const member      = detail.member      as string
@@ -5413,6 +5601,24 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
       const impactoFmt = impacto > 0
         ? ` Aportaba $${Math.round(impacto).toLocaleString('es-SV')} en ${mesAnteriorLabel}.`
         : ''
+      // [Sprint F1] Aplicar NARRATIVE_TEMPLATES['cliente_dormido'] al accion
+      // (mantener title/description inline existentes para no alterar UI).
+      const _detailDormido = {
+        umbralDiasDormido:     umbralDias,
+        esUmbralDefault,
+        diasSinComprar:        dias,
+        impactoVentaHistorica: impacto,          // ahora YoY, no all-time
+        impactoVentanaLabel:   mesAnteriorLabel, // etiqueta temporal explícita
+        clienteNombre:         cd.cliente,
+        vendedor:              cd.vendedor,
+        frecuenciaHistoricaDias: frec,
+        comparison:            'no_temporal' as const,
+      }
+      let _accionDormido: NarrativeResult['accion'] | undefined
+      try {
+        const _tmplD = NARRATIVE_TEMPLATES['cliente_dormido']
+        if (_tmplD) _accionDormido = _tmplD(_detailDormido, tipoMetaActivo).accion
+      } catch { /* fallback to undefined */ }
       allCandidates.push({
         _origin:       'special_builder',
         metricId:      'dias_sin_compra',
@@ -5423,17 +5629,8 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
         severity,
         title:         `↓ ${cd.cliente} — sin compras hace ${dias} días`,
         description:   `${cd.cliente} no compra hace ${dias} días (umbral actual: ${umbralDias}).${impactoFmt}`,
-        detail: {
-          umbralDiasDormido:     umbralDias,
-          esUmbralDefault,
-          diasSinComprar:        dias,
-          impactoVentaHistorica: impacto,          // ahora YoY, no all-time
-          impactoVentanaLabel:   mesAnteriorLabel, // etiqueta temporal explícita
-          clienteNombre:         cd.cliente,
-          vendedor:              cd.vendedor,
-          frecuenciaHistoricaDias: frec,
-          comparison:            'no_temporal',
-        },
+        detail:        _detailDormido,
+        accion:        _accionDormido,
       })
       console.debug(
         `[fase5b] candidato dormido emitido con umbral ${esUmbralDefault ? 'default' : 'custom'}=${umbralDias}: ${cd.cliente} (${dias}d, impacto YoY=${Math.round(impacto)} en ${mesAnteriorLabel})`,
@@ -6744,6 +6941,27 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
         // dimensionPath: estructura canónica con todo el N-tuple
         const dimensionPath = combo.map((d, i) => ({ dim: d, member: path[i] }))
 
+        // [Sprint F1] Aplicar NARRATIVE_TEMPLATES['cross_delta'] al accion para
+        // mover el candidato de mode='relaxed' → 'strict'. Mantenemos
+        // title/description inline (referencian _pathNatural ya construido).
+        const _detailCD = {
+          dimensionPath,             // Array<{dim, member}> — N-dim
+          comboSize:       combo.length,
+          comboKey,
+          memberValue:     cur,
+          memberPrevValue: prev,
+          memberChange:    delta,
+          pctChange,
+          pctSobreNegocio,
+          paretoFraction,
+          tupleScale,
+          cross_context: Object.fromEntries(combo.map((d, i) => [d, path[i]])),
+        }
+        let _accionCD: NarrativeResult['accion'] | undefined
+        try {
+          const _tmplCD = NARRATIVE_TEMPLATES['cross_delta']
+          if (_tmplCD) _accionCD = _tmplCD(_detailCD, tipoMetaActivo).accion
+        } catch { /* fallback to undefined */ }
         const candidate: InsightCandidate = {
           _origin:       'special_builder',
           metricId:      'venta',
@@ -6754,20 +6972,9 @@ export function runInsightEngine(params: EngineParams): InsightCandidate[] {
           severity,
           title,
           description,
-          detail: {
-            dimensionPath,             // Array<{dim, member}> — N-dim
-            comboSize:       combo.length,
-            comboKey,
-            memberValue:     cur,
-            memberPrevValue: prev,
-            memberChange:    delta,
-            pctChange,
-            pctSobreNegocio,
-            paretoFraction,
-            tupleScale,
-            cross_context: Object.fromEntries(combo.map((d, i) => [d, path[i]])),
-          },
-          conclusion: title,
+          detail:        _detailCD,
+          conclusion:    title,
+          accion:        _accionCD,
           impacto_usd_normalizado: absDelta,
           impacto_usd_source:      'cross_delta_yoy',
           direction,

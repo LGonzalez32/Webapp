@@ -141,7 +141,7 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
     {
       "dimensionId": "cliente",
       "direction": "down",
-      "hasAction": false,
+      "hasAction": true,
       "hasConclusion": false,
       "hasDescription": true,
       "impactoPctRounded": null,
@@ -345,7 +345,7 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
     {
       "dimensionId": "departamento",
       "direction": "neutral",
-      "hasAction": false,
+      "hasAction": true,
       "hasConclusion": true,
       "hasDescription": true,
       "impactoPctRounded": null,
@@ -404,7 +404,7 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
           {
             "currentRank": 2,
             "id": "special_builder:meta_gap_temporal:vendedor:cumplimiento_meta:Luis Hernández",
-            "portfolioRank": 6,
+            "portfolioRank": 8,
             "portfolioScore": 0.4,
             "reasons": [
               "economic_impact",
@@ -639,7 +639,7 @@ exports[`insight-engine golden master (demo dataset, UDS) > produces stable stru
         {
           "currentRank": 2,
           "id": "special_builder:meta_gap_temporal:vendedor:cumplimiento_meta:Luis Hernández",
-          "portfolioRank": 6,
+          "portfolioRank": 8,
           "portfolioScore": 0.4,
           "reasons": [
             "economic_impact",
@@ -834,7 +834,7 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
     {
       "dimensionId": "cliente",
       "direction": "down",
-      "hasAction": false,
+      "hasAction": true,
       "hasConclusion": false,
       "hasDescription": true,
       "impactoPctRounded": null,
@@ -1072,7 +1072,7 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
     {
       "dimensionId": "departamento",
       "direction": "neutral",
-      "hasAction": false,
+      "hasAction": true,
       "hasConclusion": true,
       "hasDescription": true,
       "impactoPctRounded": null,
@@ -1089,8 +1089,8 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
     {
       "dimensionId": "categoria",
       "direction": "up",
-      "hasAction": false,
-      "hasConclusion": false,
+      "hasAction": true,
+      "hasConclusion": true,
       "hasDescription": true,
       "impactoPctRounded": 381.52,
       "impactoValorRounded": 1519,
@@ -1148,7 +1148,7 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
           {
             "currentRank": 2,
             "id": "special_builder:meta_gap_temporal:vendedor:cumplimiento_meta:Miguel Ángel Díaz",
-            "portfolioRank": 6,
+            "portfolioRank": 9,
             "portfolioScore": 0.424,
             "reasons": [
               "economic_impact",
@@ -1386,7 +1386,7 @@ exports[`insight-engine golden master (demo dataset, USD) > produces stable stru
         {
           "currentRank": 2,
           "id": "special_builder:meta_gap_temporal:vendedor:cumplimiento_meta:Miguel Ángel Díaz",
-          "portfolioRank": 6,
+          "portfolioRank": 9,
           "portfolioScore": 0.424,
           "reasons": [
             "economic_impact",
