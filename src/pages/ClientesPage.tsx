@@ -430,9 +430,9 @@ export default function ClientesPage() {
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           <span
             style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'rgba(226,75,74,0.15)', color: '#E24B4A', border: '1px solid rgba(226,75,74,0.25)', cursor: 'help' }}
-            title={`Clientes sin comprar desde hace al menos ${configuracion.dias_dormido_threshold} días (umbral configurable).`}
+            title={`Clientes sin comprar en los últimos ${diasDormidoInput} días (umbral del filtro activo). Total en análisis: ${clientesDormidos.length}.`}
           >
-            {clientesDormidos.length} inactivos
+            {filtered.length} inactivos
           </span>
           <span
             style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'rgba(239,159,39,0.15)', color: '#EF9F27', border: '1px solid rgba(239,159,39,0.25)', cursor: 'help' }}
