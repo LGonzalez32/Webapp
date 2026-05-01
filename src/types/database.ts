@@ -184,6 +184,47 @@ export type Database = {
         }
         Relationships: []
       }
+      alert_status: {
+        Row: {
+          alert_key: string
+          created_at: string | null
+          id: string
+          org_id: string
+          reopened_at: string | null
+          status: string
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          alert_key: string
+          created_at?: string | null
+          id?: string
+          org_id: string
+          reopened_at?: string | null
+          status?: string
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          alert_key?: string
+          created_at?: string | null
+          id?: string
+          org_id?: string
+          reopened_at?: string | null
+          status?: string
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "alert_status_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       alerts: {
         Row: {
           created_at: string | null
