@@ -29,6 +29,25 @@ docker build -t salesflow-forecast .
 docker run -p 8000:8000 --env-file .env salesflow-forecast
 ```
 
+## ⚠️ ADVERTENCIA DE SEGURIDAD — Service-Role Key
+
+Si alguna vez este backend necesita conectarse a Supabase (ej. para leer datos
+de org, escribir métricas, o bypass de RLS), **usar el service-role key en el
+backend es un riesgo crítico**:
+
+- El `SUPABASE_SERVICE_ROLE_KEY` **bypasea RLS por completo** — cualquier query
+  realizada con ese key tiene acceso total a todos los datos de todas las orgs.
+- **Nunca exponer este key en el frontend** ni en variables de entorno de Vite.
+- Si el backend lo usa: verificar manualmente que TODAS las queries filtren por
+  `organization_id` o `user_id` antes de hacer merge a producción.
+- Configurarlo SOLO como variable de entorno en el panel de Render/Railway —
+  **nunca en `.env` commiteado al repo**.
+- Considerar usar el `anon key` + RLS en lugar del service-role key siempre
+  que sea posible.
+
+Por ahora este backend NO usa Supabase. Esta advertencia es para cuando se
+conecte.
+
 ## No tocar sin...
 
 1. Leer `/docs/LEGACY-PYTHON-FORECAST.md` completo.
