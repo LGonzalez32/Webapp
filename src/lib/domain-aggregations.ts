@@ -734,3 +734,35 @@ export function getAgregadosParaFiltro( // [Z.4 — perf: cuello-2]
 
   return { byMonth, clientProductMap, memberTxCounts, memberValues, ventaTotalNegocio }
 }
+
+// ─── Meta del mes: filtro canónico ────────────────────────────────────────────
+
+/**
+ * Suma la meta del mes para el equipo usando SOLO metas single-dim por vendedor.
+ * Excluye metas con canal, categoría o cliente para evitar doble conteo con metas
+ * multi-dim (vendedor+canal, vendedor+cliente+canal, etc.).
+ *
+ * Fuente canónica — consumir desde dashboard, MetasPage y cualquier otra vista
+ * que necesite "meta del mes del equipo". No replicar este filtro inline.
+ */
+export function getMetaMes(
+  metas: MetaRecord[],
+  year: number,
+  month: number,
+  tipoMeta: 'uds' | 'usd',
+): number {
+  const getVal = (m: MetaRecord) =>
+    tipoMeta === 'usd' ? (m.meta_usd ?? 0) : (m.meta_uds ?? m.meta ?? 0)
+
+  return metas
+    .filter(
+      (m) =>
+        m.anio === year &&
+        m.mes === month + 1 &&
+        m.vendedor &&
+        !m.canal &&
+        !m.categoria &&
+        !m.cliente,
+    )
+    .reduce((acc, m) => acc + getVal(m), 0)
+}

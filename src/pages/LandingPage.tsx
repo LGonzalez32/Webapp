@@ -613,8 +613,8 @@ export default function LandingPage() {
                       <div className="text-[10px] text-slate-500">2 clientes dormidos - Recovery: difícil</div>
                     </div>
                     <div className="bg-amber-500/10 border-l-2 border-amber-500 rounded p-1.5">
-                      <div className="text-[9px] text-slate-300 font-medium">Equipo no cerrará la meta del mes</div>
-                      <div className="text-[10px] text-slate-500">Brecha: 23,473 uds de 46,057</div>
+                      <div className="text-[9px] text-slate-300 font-medium">Equipo en riesgo de no cerrar la meta</div>
+                      <div className="text-[10px] text-slate-500">Proyección por debajo del objetivo</div>
                     </div>
                   </div>
                 </div>

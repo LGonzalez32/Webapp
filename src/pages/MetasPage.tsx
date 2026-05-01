@@ -9,6 +9,7 @@ import {
   getMatrizHistoricaVendedorMes,
   getSupervisorMap,
   getListaSupervisores,
+  getMetaMes,
   type MatrizVendedorMesEntry,
 } from '../lib/domain-aggregations'
 import { Target, TrendingUp, TrendingDown, Upload, PenLine, ChevronDown } from 'lucide-react'
@@ -211,11 +212,8 @@ Reglas: máximo 100 palabras, cada bullet con número concreto, sin instruccione
     [vendors, histMonths, metas, sales, vendorAnalysis, currentYear, currentMonth, tipoMetaActivo],
   )
 
-  // [fix-1.2] teamMeta usa solo metas single-dim (vendedor sin otras dimensiones)
-  // para alinear con lo que la tabla de edición muestra vía find() por vendor.
-  const teamMeta = metas
-    .filter((m) => m.anio === currentYear && m.mes === currentMonth + 1 && m.vendedor && !m.canal && !m.categoria && !m.cliente)
-    .reduce((a, m) => a + (tipoMetaActivo === 'usd' ? (m.meta_usd ?? 0) : (m.meta_uds ?? m.meta ?? 0)), 0)
+  // getMetaMes: filtro canónico single-dim desde domain-aggregations (B2).
+  const teamMeta = getMetaMes(metas, currentYear, currentMonth, tipoMetaActivo)
 
   // R103: derivación local — periodSales es una slice de ventas para el mes activo; se usa también en teamRealUds
   const periodSales = useMemo(() => salesInPeriod(sales, currentYear, currentMonth), [sales, currentYear, currentMonth])

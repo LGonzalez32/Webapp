@@ -1000,16 +1000,14 @@ export function computeCommercialAnalysis(
   const prevTotal = prevSales.reduce((a, s) => a + s.unidades, 0)
   const variacion_pct = prevTotal > 0 ? safePct(total_unidades, prevTotal) : null
 
-  const metasDelPeriodo = metas.filter((m) => m.mes === month + 1 && m.anio === year)
+  // Filtro canónico single-dim: excluye canal/categoria/cliente para evitar
+  // doble conteo con metas multi-dim. Versión exportable en domain-aggregations.getMetaMes.
   const getMetaVal = (m: MetaRecord) => tipoMetaActivo === 'usd' ? (m.meta_usd ?? 0) : (m.meta_uds ?? m.meta ?? 0)
-  // Only sum vendedor-level metas (exclude supervisor/categoria metas)
-  const vendedorMetas = metasDelPeriodo.filter((m) => m.vendedor && !m.supervisor && !m.categoria)
-  const meta_equipo =
-    vendedorMetas.length > 0
-      ? vendedorMetas.reduce((a, m) => a + getMetaVal(m), 0)
-      : undefined
-  const meta_equipo_total: number | null =
-    vendedorMetas.length > 0 ? vendedorMetas.reduce((a, m) => a + getMetaVal(m), 0) : null
+  const vendedorMetas = metas.filter(
+    (m) => m.mes === month + 1 && m.anio === year && m.vendedor && !m.canal && !m.categoria && !m.cliente
+  )
+  const meta_equipo = vendedorMetas.length > 0 ? vendedorMetas.reduce((a, m) => a + getMetaVal(m), 0) : undefined
+  const meta_equipo_total: number | null = vendedorMetas.length > 0 ? vendedorMetas.reduce((a, m) => a + getMetaVal(m), 0) : null
 
   const proyeccion_equipo = vendorAnalysis.reduce(
     (a, v) => a + (v.proyeccion_cierre ?? 0),
