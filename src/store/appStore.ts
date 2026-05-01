@@ -266,9 +266,14 @@ export const useAppStore = create<AppState>()(
       tipoMetaActivo: 'uds',
 
       // Actions
-      setSales: (sales) => set({ sales }),
-      setMetas: (metas) => set({ metas }),
-      setInventory: (inventory) => set({ inventory }),
+      // Cambiar el dataset siempre invalida el análisis derivado (vendorAnalysis,
+      // dataAvailability, insights, etc.). Sin este reset, navegar entre datos
+      // cargados → demo deja `isProcessed=true` y useAnalysis no re-corre,
+      // dejando dataAvailability con flags viejos (has_inventario/has_departamento
+      // = false) y empty states en /rotacion y /departamentos.
+      setSales: (sales) => set({ sales, isProcessed: false }),
+      setMetas: (metas) => set({ metas, isProcessed: false }),
+      setInventory: (inventory) => set({ inventory, isProcessed: false }),
 
       setVendorAnalysis: (vendorAnalysis) => set({ vendorAnalysis }),
       setTeamStats: (teamStats) => set({ teamStats }),
