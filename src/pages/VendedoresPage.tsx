@@ -6,15 +6,38 @@ import { cn } from '../lib/utils'
 import { useDemoPath } from '../lib/useDemoPath'
 import type { VendorAnalysis } from '../types'
 import VendedorPanel from '../components/vendedor/VendedorPanel'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDown, ChevronRight, MessageCircle } from 'lucide-react'
 import AnalysisDrawer from '../components/ui/AnalysisDrawer'
 import { SFSelect } from '../components/ui/SFSelect'
 import { SFSearch } from '../components/ui/SFSearch'
 import { callAI } from '../lib/chatService'
+import {
+  getConteosPorEstado,
+  getVentasTotalEquipoYTD,
+  getVentasPorVendedorAgrupado,
+} from '../lib/domain-aggregations'
+import { formatPeriodLabel } from '../lib/periods'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const RIESGO_ORDER: Record<string, number> = { critico: 0, riesgo: 1, ok: 2, superando: 3 }
+
+// Tooltips Tarea 2.4 — definiciones desde src/lib/analysis.ts:420-432
+// Con meta:  proyeccion_cierre vs meta. <70% crítico, 70-90% riesgo, 90-105% ok, >105% superando.
+// Sin meta:  variacion_vs_anio (YTD). <-20% crítico, -20% a -10% riesgo, -10% a +10% ok, >+10% superando.
+const ESTADO_VENDEDOR_TOOLTIPS: Record<'critico' | 'riesgo' | 'ok' | 'superando', string> = {
+  critico:   'Cumplimiento proyectado al cierre menor al 70% de la meta (o, sin meta, caída anual mayor al 20% vs año anterior).',
+  riesgo:    'Cumplimiento proyectado entre 70% y 90% de la meta (o, sin meta, caída anual entre 10% y 20%).',
+  ok:        'Cumplimiento proyectado entre 90% y 105% de la meta (o, sin meta, variación anual entre -10% y +10%).',
+  superando: 'Cumplimiento proyectado mayor al 105% de la meta (o, sin meta, crecimiento anual mayor al 10%).',
+}
+const TT_VEND_EN_RIESGO   = 'Vendedores en estado CRÍTICO o RIESGO según proyección anual o desempeño YTD. No depende del rango seleccionado.'
+const TT_VEND_SUPERANDO   = 'Vendedores con proyección anual >105% de la meta o crecimiento YTD significativo. No depende del rango seleccionado.'
+const TT_CUMPL_PROM       = 'Promedio simple del cumplimiento de meta de los vendedores con meta asignada.'
+const TT_ACUMULADO_PROM   = 'Promedio simple de la variación del año a la fecha del equipo vs mismo período del año anterior.'
+const TT_PULSO_EQUIPO     = 'Porcentaje del equipo en buen estado: (OK + SUPERANDO) / total de vendedores.'
+const TT_ESTADO_HEADER    = 'Estado del vendedor: CRÍTICO, RIESGO, OK o SUPERANDO según cumplimiento proyectado vs meta (o variación anual sin meta).'
+const TT_ALERTAS_HEADER   = 'Hallazgos activos del motor de insights asignados al vendedor (clientes dormidos, productos sin movimiento, caídas sostenidas, etc.).'
 
 const RIESGO_CONFIG = {
   critico:   { label: 'CRÍTICO', badgeBg: '#FF4D4D15', badgeColor: '#FF4D4D', dot: '#FF4D4D' },
@@ -48,6 +71,14 @@ export default function VendedoresPage() {
   const { search: locationSearch } = location
   const highlightVendedor = (location.state as { highlight?: string } | null)?.highlight ?? null
 
+  // [Ticket 3.B.3] Etiquetas de período activas, usadas en headers de tabla,
+  // cards "MEJOR DEL MES" / "NECESITA ATENCIÓN" y AnalysisDrawer subtitle.
+  // Sentinel year=0 (pre-hidratación): fallback al año actual del browser.
+  const _headerYear = selectedPeriod.year > 0 ? selectedPeriod.year : new Date().getFullYear()
+  const _headerStart = selectedPeriod.year > 0 ? selectedPeriod.monthStart : 0
+  const _headerEnd = selectedPeriod.year > 0 ? selectedPeriod.monthEnd : new Date().getMonth()
+  const periodoLabel = formatPeriodLabel(_headerYear, _headerStart, _headerEnd, { includeYear: false })
+
   const [highlightActive, setHighlightActive] = useState<string | null>(highlightVendedor)
   const highlightRef = useCallback((node: HTMLDivElement | null) => {
     if (node && highlightActive) {
@@ -56,6 +87,7 @@ export default function VendedoresPage() {
     }
   }, [highlightActive])
 
+  // R103: alerta UI derivada — extrae param ?vendedor= de URL, no es agregación cruda
   const alertVendedor = useMemo(() => new URLSearchParams(locationSearch).get('vendedor'), [locationSearch])
   const [alertFilter, setAlertFilter]   = useState<string | null>(alertVendedor)
 
@@ -90,12 +122,13 @@ export default function VendedoresPage() {
     }
   }, [supervisorAnalysis])
 
+  // R103: lookup UI — lista de canales para filtro de select
   const canales = useMemo(
     () => [...new Set(sales.map(s => s.canal).filter((c): c is string => !!c))].sort(),
     [sales],
   )
 
-  // Filter only — sort applied separately in `sorted`
+  // R103: filtro UI — depende de search, filterEstado, filterCanal (estado local)
   const filtered = useMemo(() => {
     let data = [...vendorAnalysis]
     if (search) {
@@ -112,34 +145,22 @@ export default function VendedoresPage() {
     return data
   }, [vendorAnalysis, sales, search, filterEstado, filterCanal])
 
-  // Header counts — refleja el filtro activo
-  const counts = useMemo(() => ({
-    critico:   filtered.filter(v => v.riesgo === 'critico').length,
-    riesgo:    filtered.filter(v => v.riesgo === 'riesgo').length,
-    ok:        filtered.filter(v => v.riesgo === 'ok').length,
-    superando: filtered.filter(v => v.riesgo === 'superando').length,
-  }), [filtered])
+  // R102/Z.1.b: migrado a domain-aggregations.getConteosPorEstado
+  const counts = useMemo(() => getConteosPorEstado(filtered), [filtered])
 
-  // Team total for PESO % denominator (always unfiltered)
-  const teamTotal = useMemo(() => {
-    const usaDolares = metrica === 'dolares' && dataAvailability.has_venta_neta
-    return vendorAnalysis.reduce((sum, v) =>
-      sum + (usaDolares ? (v.ytd_actual_neto ?? 0) : (v.ytd_actual ?? 0)), 0)
-  }, [vendorAnalysis, metrica, dataAvailability.has_venta_neta])
+  // R102/Z.1.b: migrado a domain-aggregations.getVentasTotalEquipoYTD (siempre sin filtrar — denominador de peso %)
+  const teamTotal = useMemo(
+    () => getVentasTotalEquipoYTD(vendorAnalysis, metrica === 'dolares' && dataAvailability.has_venta_neta),
+    [vendorAnalysis, metrica, dataAvailability.has_venta_neta],
+  )
 
-  // Filtered totals for the totals row
-  const filteredTotals = useMemo(() => {
-    const usaDolares = metrica === 'dolares' && dataAvailability.has_venta_neta
-    const total2026 = filtered.reduce((sum, v) =>
-      sum + (usaDolares ? (v.ytd_actual_neto ?? 0) : (v.ytd_actual ?? 0)), 0)
-    const total2025 = filtered.reduce((sum, v) =>
-      sum + (usaDolares ? (v.ytd_anterior_neto ?? 0) : (v.ytd_anterior ?? 0)), 0)
-    const varAbs = total2026 - total2025
-    const varPct = total2025 > 0 ? ((total2026 - total2025) / total2025) * 100 : null
-    return { total2026, total2025, varAbs, varPct }
-  }, [filtered, metrica, dataAvailability.has_venta_neta])
+  // R102/Z.1.b: migrado a domain-aggregations.getVentasPorVendedorAgrupado
+  const filteredTotals = useMemo(
+    () => getVentasPorVendedorAgrupado(filtered, metrica === 'dolares' && dataAvailability.has_venta_neta),
+    [filtered, metrica, dataAvailability.has_venta_neta],
+  )
 
-  // Sorted list — applies after filtering
+  // R103: orden UI — sort multi-criterio con sortCol/sortDir (estado local de tabla)
   const sorted = useMemo(() => {
     const arr = [...filtered]
     arr.sort((a, b) => {
@@ -148,24 +169,35 @@ export default function VendedoresPage() {
       switch (sortCol) {
         case 'vendedor':
           valA = a.vendedor; valB = b.vendedor; break
-        case 'peso':
-          valA = teamTotal > 0 ? (a.ytd_actual ?? 0) / teamTotal : 0
-          valB = teamTotal > 0 ? (b.ytd_actual ?? 0) / teamTotal : 0
+        case 'peso': {
+          const aTot = metrica === 'dolares' ? (a.ytd_actual_usd ?? 0) : (a.ytd_actual_uds ?? 0)
+          const bTot = metrica === 'dolares' ? (b.ytd_actual_usd ?? 0) : (b.ytd_actual_uds ?? 0)
+          valA = teamTotal > 0 ? aTot / teamTotal : 0
+          valB = teamTotal > 0 ? bTot / teamTotal : 0
           break
+        }
         case 'ytd':
-          valA = metrica === 'dolares' ? (a.ytd_actual_neto ?? 0) : (a.ytd_actual ?? 0)
-          valB = metrica === 'dolares' ? (b.ytd_actual_neto ?? 0) : (b.ytd_actual ?? 0)
+          valA = metrica === 'dolares' ? (a.ytd_actual_usd ?? 0) : (a.ytd_actual_uds ?? 0)
+          valB = metrica === 'dolares' ? (b.ytd_actual_usd ?? 0) : (b.ytd_actual_uds ?? 0)
           break
         case 'ytd_ant':
-          valA = metrica === 'dolares' ? (a.ytd_anterior_neto ?? 0) : (a.ytd_anterior ?? 0)
-          valB = metrica === 'dolares' ? (b.ytd_anterior_neto ?? 0) : (b.ytd_anterior ?? 0)
+          valA = metrica === 'dolares' ? (a.ytd_anterior_usd ?? 0) : (a.ytd_anterior_uds ?? 0)
+          valB = metrica === 'dolares' ? (b.ytd_anterior_usd ?? 0) : (b.ytd_anterior_uds ?? 0)
           break
-        case 'var':
-          valA = (a.ytd_actual ?? 0) - (a.ytd_anterior ?? 0)
-          valB = (b.ytd_actual ?? 0) - (b.ytd_anterior ?? 0)
+        case 'var': {
+          const aAct = metrica === 'dolares' ? (a.ytd_actual_usd ?? 0)   : (a.ytd_actual_uds ?? 0)
+          const aAnt = metrica === 'dolares' ? (a.ytd_anterior_usd ?? 0) : (a.ytd_anterior_uds ?? 0)
+          const bAct = metrica === 'dolares' ? (b.ytd_actual_usd ?? 0)   : (b.ytd_actual_uds ?? 0)
+          const bAnt = metrica === 'dolares' ? (b.ytd_anterior_usd ?? 0) : (b.ytd_anterior_uds ?? 0)
+          valA = aAct - aAnt; valB = bAct - bAnt
           break
-        case 'var_pct':
-          valA = a.variacion_ytd_pct ?? 0; valB = b.variacion_ytd_pct ?? 0; break
+        }
+        case 'var_pct': {
+          const aPct = metrica === 'dolares' ? (a.variacion_ytd_usd_pct ?? a.variacion_ytd_uds_pct ?? 0) : (a.variacion_ytd_uds_pct ?? 0)
+          const bPct = metrica === 'dolares' ? (b.variacion_ytd_usd_pct ?? b.variacion_ytd_uds_pct ?? 0) : (b.variacion_ytd_uds_pct ?? 0)
+          valA = aPct; valB = bPct
+          break
+        }
         case 'meta':
           valA = a.cumplimiento_pct ?? 0; valB = b.cumplimiento_pct ?? 0; break
         case 'alertas':
@@ -197,6 +229,7 @@ export default function VendedoresPage() {
   // Supervisor groups
   const hasSuper = dataAvailability.has_supervisor && supervisorAnalysis.length > 0
 
+  // R103: agrupación UI — cruza supervisorAnalysis con sorted (lista ya filtrada/ordenada por UI)
   const supGroups = useMemo(() => {
     if (!hasSuper) return null
     const filteredNames = new Set(sorted.map(v => v.vendedor))
@@ -223,12 +256,15 @@ export default function VendedoresPage() {
     const userPrompt = [
       `Vendedor: ${v.vendedor}`,
       `Estado: ${v.riesgo.toUpperCase()}`,
-      `Unidades período: ${v.ventas_periodo}`,
+      `Unidades período: ${v.ventas_periodo} uds`,
       v.variacion_pct != null ? `Variación vs anterior: ${v.variacion_pct.toFixed(1)}%` : '',
-      v.ytd_actual != null ? `YTD actual: ${v.ytd_actual.toLocaleString()}` : '',
-      v.ytd_anterior != null ? `YTD anterior: ${v.ytd_anterior.toLocaleString()}` : '',
-      v.variacion_ytd_pct != null ? `Variación YTD: ${v.variacion_ytd_pct.toFixed(1)}%` : '',
-      v.meta != null ? `Meta: ${v.meta} | Cumplimiento: ${v.cumplimiento_pct?.toFixed(1)}%` : '',
+      v.ytd_actual_usd != null ? `YTD actual: ${mon} ${v.ytd_actual_usd.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '',
+      v.ytd_anterior_usd != null ? `YTD anterior: ${mon} ${v.ytd_anterior_usd.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '',
+      v.variacion_ytd_usd_pct != null ? `Variación YTD (${mon}): ${v.variacion_ytd_usd_pct.toFixed(1)}%` : '',
+      v.ytd_actual_uds != null ? `YTD actual: ${v.ytd_actual_uds.toLocaleString()} uds` : '',
+      v.ytd_anterior_uds != null ? `YTD anterior: ${v.ytd_anterior_uds.toLocaleString()} uds` : '',
+      v.variacion_ytd_uds_pct != null ? `Variación YTD (uds): ${v.variacion_ytd_uds_pct.toFixed(1)}%` : '',
+      v.meta != null ? `Meta: ${v.meta} uds | Cumplimiento: ${v.cumplimiento_pct?.toFixed(1)}%` : '',
       `Semanas bajo promedio: ${v.semanas_bajo_promedio}`,
       dormidos.length > 0 ? `Clientes dormidos: ${dormidos.slice(0, 3).map(c => `${c.cliente} (${c.dias_sin_actividad}d)`).join(', ')}` : '',
       vis.length > 0 ? `Alertas activas: ${vis.map(i => i.titulo).join('; ')}` : '',
@@ -253,7 +289,13 @@ Reglas:
 - Si una sección no aplica, omítela
 - NUNCA des instrucciones operativas
 - Moneda: ${mon}
-- Responde en español`
+- Responde en español
+
+CONVENCIÓN DE UNIDADES (R57 — obligatoria):
+- Campos con sufijo "_usd" son dinero en ${mon}. Preséntalos con el prefijo de moneda: "${mon} 11,916".
+- Campos con sufijo "_uds" son unidades vendidas. Preséntalos con el sufijo "uds": "8,976 uds".
+- PROHIBIDO prefijar unidades con "$" o con "${mon}". PROHIBIDO presentar dinero sin el símbolo de moneda.
+- Al hablar de "Variación YTD" cita la variación en dinero (variacion_ytd_usd_pct) si existe; la variación en unidades (variacion_ytd_uds_pct) solo se menciona cuando aporta una señal distinta.`
 
     try {
       const json = await callAI(
@@ -268,13 +310,24 @@ Reglas:
     }
   }, [configuracion, clientesDormidos, insights])
 
+  // [Sprint E2] Acceso directo al chat con prefill por vendedor — sin pasar
+  // por el análisis inline. Complementa handleAnalyzeVendedor (resumen rápido)
+  // y handleProfundizarVendedor (deep-dive post-análisis).
+  const handleChatVendedor = useCallback((v: VendorAnalysis) => {
+    const displayMessage = `✦ Analizar a ${v.vendedor}`
+    const prefill = `Analiza el desempeño de ${v.vendedor}: cumplimiento, tendencia, clientes en riesgo. ¿Qué acciones recomiendas?`
+    navigate(dp('/chat'), { state: { prefill, displayPrefill: displayMessage, source: 'Vendedores' } })
+  }, [navigate, dp])
+
   const handleProfundizarVendedor = useCallback((v: VendorAnalysis, analysisText: string) => {
     const displayMessage = `Profundizar: ${v.vendedor} (${RIESGO_CONFIG[v.riesgo].label})`
     const fullContext = [
       `Profundizar sobre vendedor: ${v.vendedor}`,
       `Estado: ${v.riesgo.toUpperCase()}`,
-      v.ytd_actual != null ? `YTD actual: ${v.ytd_actual.toLocaleString()}` : '',
-      v.variacion_ytd_pct != null ? `Variación YTD: ${v.variacion_ytd_pct.toFixed(1)}%` : '',
+      v.ytd_actual_usd != null ? `YTD actual: ${configuracion.moneda} ${v.ytd_actual_usd.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '',
+      v.ytd_actual_uds != null ? `YTD actual: ${v.ytd_actual_uds.toLocaleString()} uds` : '',
+      v.variacion_ytd_usd_pct != null ? `Variación YTD (${configuracion.moneda}): ${v.variacion_ytd_usd_pct.toFixed(1)}%` : '',
+      v.variacion_ytd_uds_pct != null ? `Variación YTD (uds): ${v.variacion_ytd_uds_pct.toFixed(1)}%` : '',
       v.meta != null ? `Cumplimiento meta: ${v.cumplimiento_pct?.toFixed(1)}%` : '',
       analysisText ? `\nAnálisis previo:\n${analysisText}` : '',
       ``,
@@ -414,15 +467,15 @@ Reglas:
       <div style={{ paddingLeft: 16 }}>
         {hdrBtn('vendedor', 'Vendedor', 'start')}
       </div>
-      <div>{hdrBtn('estado', 'Estado', 'center')}</div>
+      <div title={TT_ESTADO_HEADER} style={{ cursor: 'help' }}>{hdrBtn('estado', 'Estado', 'center')}</div>
       <div className={cn(colCls, 'flex items-center justify-center')} style={{ color: 'var(--sf-t5)' }}>IA</div>
-      <div style={{ borderLeft: '1px solid var(--sf-border)', paddingLeft: '16px' }}>
+      <div title={TT_ALERTAS_HEADER} style={{ borderLeft: '1px solid var(--sf-border)', paddingLeft: '16px', cursor: 'help' }}>
         {hdrBtn('alertas', 'Alertas', 'center')}
       </div>
-      <div>{hdrBtn('ytd', selectedPeriod?.year ?? new Date().getFullYear())}</div>
-      <div>{hdrBtn('ytd_ant', (selectedPeriod?.year ?? new Date().getFullYear()) - 1)}</div>
-      <div>{hdrBtn('var', 'Var')}</div>
-      <div>{hdrBtn('var_pct', 'Var %')}</div>
+      <div>{hdrBtn('ytd', `${periodoLabel} ${_headerYear}`)}</div>
+      <div>{hdrBtn('ytd_ant', `${periodoLabel} ${_headerYear - 1}`)}</div>
+      <div>{hdrBtn('var', 'Variación')}</div>
+      <div>{hdrBtn('var_pct', 'Variación %')}</div>
       <div>{hdrBtn('peso', 'Peso %')}</div>
       {dataAvailability.has_metas && (
         <div>{hdrBtn('meta', 'Meta %')}</div>
@@ -436,17 +489,20 @@ Reglas:
     const vis         = insights.filter(i => i.vendedor === v.vendedor)
     const hasMeta     = dataAvailability.has_metas && v.cumplimiento_pct !== undefined
     const usaDolares  = metrica === 'dolares' && dataAvailability.has_venta_neta
-    const unitsActual   = v.ytd_actual ?? 0
-    const unitsAnterior = v.ytd_anterior ?? 0
-    // En dólares: usar ytd_*_neto del motor (suma directa de venta_neta); null si no hay datos
+    const unitsActual   = v.ytd_actual_uds ?? 0
+    const unitsAnterior = v.ytd_anterior_uds ?? 0
+    // En dólares: usar ytd_*_usd del motor (suma directa de venta_neta); null si no hay datos
     const ytdActual   = usaDolares
-      ? (v.ytd_actual_neto != null ? v.ytd_actual_neto : (unitsActual > 0 ? null : 0))
+      ? (v.ytd_actual_usd != null ? v.ytd_actual_usd : (unitsActual > 0 ? null : 0))
       : unitsActual
     const ytdAnterior = usaDolares
-      ? (v.ytd_anterior_neto != null ? v.ytd_anterior_neto : (unitsAnterior > 0 ? null : 0))
+      ? (v.ytd_anterior_usd != null ? v.ytd_anterior_usd : (unitsAnterior > 0 ? null : 0))
       : unitsAnterior
     const varAbs      = (ytdActual && ytdAnterior) ? ytdActual - ytdAnterior : null
-    const varPct      = v.variacion_ytd_pct
+    // R56: VAR% debe calcularse sobre la MISMA serie que las columnas $ ant/$ act visibles
+    const varPct      = usaDolares
+      ? (v.variacion_ytd_usd_pct ?? null)
+      : (v.variacion_ytd_uds_pct ?? null)
     const delay       = Math.min(index * 70, 600)
 
     const pesoVal = teamTotal > 0 && (ytdActual ?? 0) > 0
@@ -503,11 +559,15 @@ Reglas:
 
         {/* ESTADO */}
         <div className="flex items-center justify-center">
-          <span style={{
-            background: rc.badgeBg, color: rc.badgeColor,
-            padding: '3px 8px', borderRadius: 4,
-            fontSize: 11, fontWeight: 500,
-          }}>
+          <span
+            title={ESTADO_VENDEDOR_TOOLTIPS[v.riesgo as 'critico' | 'riesgo' | 'ok' | 'superando'] ?? TT_ESTADO_HEADER}
+            style={{
+              background: rc.badgeBg, color: rc.badgeColor,
+              padding: '3px 8px', borderRadius: 4,
+              fontSize: 11, fontWeight: 500,
+              cursor: 'help',
+            }}
+          >
             {rc.label}
           </span>
         </div>
@@ -525,20 +585,38 @@ Reglas:
               )
             }
             return (
-              <button
-                onClick={(e) => { e.stopPropagation(); handleAnalyzeVendedor(v) }}
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 3,
-                  padding: '3px 8px', borderRadius: 5, fontSize: 10, fontWeight: 600,
-                  border: '1px solid rgba(16,185,129,0.2)', background: 'rgba(16,185,129,0.06)',
-                  color: '#10b981', cursor: 'pointer', whiteSpace: 'nowrap' as const,
-                  transition: 'background 0.15s',
-                }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(16,185,129,0.12)')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'rgba(16,185,129,0.06)')}
-              >
-                ✦ Analizar
-              </button>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleAnalyzeVendedor(v) }}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 3,
+                    padding: '3px 8px', borderRadius: 5, fontSize: 10, fontWeight: 600,
+                    border: '1px solid rgba(16,185,129,0.2)', background: 'rgba(16,185,129,0.06)',
+                    color: '#10b981', cursor: 'pointer', whiteSpace: 'nowrap' as const,
+                    transition: 'background 0.15s',
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'rgba(16,185,129,0.12)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'rgba(16,185,129,0.06)')}
+                >
+                  ✦ Analizar
+                </button>
+                {/* [Sprint E2] Acceso directo al chat — paralelo al análisis inline */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleChatVendedor(v) }}
+                  title={`Preguntar al asistente sobre ${v.vendedor}`}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    width: 22, height: 22, borderRadius: 5,
+                    border: '1px solid var(--sf-border)', background: 'transparent',
+                    color: 'var(--sf-t4)', cursor: 'pointer',
+                    transition: 'background 0.15s, color 0.15s',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'var(--sf-inset)'; e.currentTarget.style.color = 'var(--sf-t1)' }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--sf-t4)' }}
+                >
+                  <MessageCircle style={{ width: 12, height: 12 }} />
+                </button>
+              </div>
             )
           })()}
         </div>
@@ -578,7 +656,7 @@ Reglas:
           className="flex items-center justify-end tabular-nums"
           style={{ ...mono, fontSize: 13, color: varAbs == null ? 'var(--sf-t5)' : varAbs >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}
         >
-          {varAbs == null ? '—' : `${varAbs >= 0 ? '+' : ''}${metrica === 'dolares' ? fmtMoney(Math.abs(varAbs)) : Math.round(Math.abs(varAbs)).toLocaleString()}`}
+          {varAbs == null ? '—' : `${varAbs > 0 ? '+' : varAbs < 0 ? '-' : ''}${metrica === 'dolares' ? fmtMoney(Math.abs(varAbs)) : Math.round(Math.abs(varAbs)).toLocaleString()}`}
         </div>
 
         {/* VAR % */}
@@ -654,7 +732,7 @@ Reglas:
         </div>
 
         {/* YTD ACT total */}
-        <div className="flex items-center justify-end tabular-nums"
+        <div data-testid="kpi-equipo-total-actual" className="flex items-center justify-end tabular-nums"
           style={{ ...mono, fontSize: 13, color: 'var(--sf-t1)' }}>
           {fmtNum(total2026)}
         </div>
@@ -668,7 +746,7 @@ Reglas:
         {/* VAR abs */}
         <div className="flex items-center justify-end tabular-nums"
           style={{ ...mono, fontSize: 13, color: varAbs >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
-          {`${varAbs >= 0 ? '+' : ''}${metrica === 'dolares' ? fmtMoney(Math.abs(varAbs)) : Math.round(Math.abs(varAbs)).toLocaleString()}`}
+          {`${varAbs > 0 ? '+' : varAbs < 0 ? '-' : ''}${metrica === 'dolares' ? fmtMoney(Math.abs(varAbs)) : Math.round(Math.abs(varAbs)).toLocaleString()}`}
         </div>
 
         {/* VAR % */}
@@ -752,6 +830,7 @@ Reglas:
               <button
                 key={estado}
                 onClick={() => toggleFilterEstado(estado)}
+                title={ESTADO_VENDEDOR_TOOLTIPS[estado as 'critico' | 'riesgo' | 'ok' | 'superando']}
                 style={{
                   background: isActive ? `${color}25` : `${color}15`,
                   color,
@@ -781,18 +860,20 @@ Reglas:
         const cumplimientos = vendorAnalysis.filter(v => v.cumplimiento_pct != null).map(v => v.cumplimiento_pct!)
         const avgCumplimiento = cumplimientos.length > 0 ? Math.round(cumplimientos.reduce((a, b) => a + b, 0) / cumplimientos.length) : null
         const superandoCount = vendorAnalysis.filter(v => v.riesgo === 'superando').length
-        const ytdVars = vendorAnalysis.filter(v => v.variacion_ytd_pct != null).map(v => v.variacion_ytd_pct!)
+        // R56: si hay dinero, el promedio YTD representa dinero; si no, unidades
+        const pickYtdPct = (v: VendorAnalysis) => v.variacion_ytd_usd_pct ?? v.variacion_ytd_uds_pct ?? null
+        const ytdVars = vendorAnalysis.map(pickYtdPct).filter((x): x is number => x != null)
         const avgYtd = ytdVars.length > 0 ? (ytdVars.reduce((a, b) => a + b, 0) / ytdVars.length) : null
         return (
           <div className="flex flex-wrap gap-2 mb-1">
             {[
-              { label: 'Vendedores', value: String(totalV), color: 'var(--sf-t3)' },
-              { label: 'En riesgo', value: String(enRiesgoCount), color: enRiesgoCount > 0 ? '#FF4D4D' : 'var(--sf-green)' },
-              { label: 'Superando', value: String(superandoCount), color: superandoCount > 0 ? '#60A5FA' : 'var(--sf-t4)' },
-              { label: 'Cumpl. prom.', value: avgCumplimiento != null ? `${avgCumplimiento}%` : '—', color: avgCumplimiento != null ? (avgCumplimiento >= 100 ? 'var(--sf-green)' : avgCumplimiento >= 70 ? '#FFB800' : '#FF4D4D') : 'var(--sf-t5)' },
-              { label: 'YTD prom.', value: avgYtd != null ? `${avgYtd >= 0 ? '+' : ''}${avgYtd.toFixed(1)}%` : '—', color: avgYtd != null ? (avgYtd >= 0 ? 'var(--sf-green)' : '#FF4D4D') : 'var(--sf-t5)' },
+              { label: 'Vendedores', value: String(totalV), color: 'var(--sf-t3)', tip: 'Cantidad total de vendedores en el equipo.' },
+              { label: 'En riesgo', value: String(enRiesgoCount), color: enRiesgoCount > 0 ? '#FF4D4D' : 'var(--sf-green)', tip: TT_VEND_EN_RIESGO },
+              { label: 'Superando', value: String(superandoCount), color: superandoCount > 0 ? '#60A5FA' : 'var(--sf-t4)', tip: TT_VEND_SUPERANDO },
+              { label: 'Cumpl. prom.', value: avgCumplimiento != null ? `${avgCumplimiento}%` : '—', color: avgCumplimiento != null ? (avgCumplimiento >= 100 ? 'var(--sf-green)' : avgCumplimiento >= 70 ? '#FFB800' : '#FF4D4D') : 'var(--sf-t5)', tip: TT_CUMPL_PROM },
+              { label: 'Acumulado año prom.', value: avgYtd != null ? `${avgYtd >= 0 ? '+' : ''}${avgYtd.toFixed(1)}%` : '—', color: avgYtd != null ? (avgYtd >= 0 ? 'var(--sf-green)' : '#FF4D4D') : 'var(--sf-t5)', tip: TT_ACUMULADO_PROM },
             ].map(kpi => (
-              <div key={kpi.label} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
+              <div key={kpi.label} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', cursor: 'help' }} title={kpi.tip}>
                 <span className="text-[10px]" style={{ color: 'var(--sf-t5)' }}>{kpi.label}</span>
                 <span className="text-[12px] font-bold" style={{ color: kpi.color, fontFamily: "'DM Mono', monospace" }}>{kpi.value}</span>
               </div>
@@ -803,16 +884,19 @@ Reglas:
 
       {/* ── Mini-dashboard: 3 cards ─────────────────────────────────────────── */}
       {vendorAnalysis.length > 0 && (() => {
+        const pickYtd = (v: VendorAnalysis) => v.variacion_ytd_usd_pct ?? v.variacion_ytd_uds_pct ?? null
         const mejorDelMes = [...vendorAnalysis].sort((a, b) => {
           if (a.riesgo === 'superando' && b.riesgo !== 'superando') return -1
           if (b.riesgo === 'superando' && a.riesgo !== 'superando') return 1
-          return (b.variacion_ytd_pct ?? -Infinity) - (a.variacion_ytd_pct ?? -Infinity)
+          return (pickYtd(b) ?? -Infinity) - (pickYtd(a) ?? -Infinity)
         })[0]
         const necesitaAtencion = [...vendorAnalysis].sort((a, b) => {
           const diff = (RIESGO_ORDER[a.riesgo] ?? 99) - (RIESGO_ORDER[b.riesgo] ?? 99)
           if (diff !== 0) return diff
-          return (a.variacion_ytd_pct ?? 0) - (b.variacion_ytd_pct ?? 0)
+          return (pickYtd(a) ?? 0) - (pickYtd(b) ?? 0)
         })[0]
+        const mejorYtdPct = pickYtd(mejorDelMes)
+        const atencionYtdPct = pickYtd(necesitaAtencion)
         const totalVendedores = vendorAnalysis.length
         const criticos = vendorAnalysis.filter(v => v.riesgo === 'critico').length
         const enRiesgo = vendorAnalysis.filter(v => v.riesgo === 'riesgo').length
@@ -837,9 +921,9 @@ Reglas:
               </div>
               <p className="text-[15px] font-semibold truncate" style={{ color: 'var(--sf-t1)' }}>{mejorDelMes.vendedor}</p>
               <div className="flex items-center gap-2 mt-1">
-                {mejorDelMes.variacion_ytd_pct != null && (
-                  <span className="text-xs font-medium" style={{ color: mejorDelMes.variacion_ytd_pct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
-                    {mejorDelMes.variacion_ytd_pct >= 0 ? '+' : ''}{mejorDelMes.variacion_ytd_pct.toFixed(1)}% YTD
+                {mejorYtdPct != null && (
+                  <span className="text-xs font-medium" style={{ color: mejorYtdPct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
+                    {mejorYtdPct >= 0 ? '+' : ''}{mejorYtdPct.toFixed(1)}% en {periodoLabel}
                   </span>
                 )}
                 {mejorDelMes.cumplimiento_pct != null && (
@@ -864,9 +948,9 @@ Reglas:
               </div>
               <p className="text-[15px] font-semibold truncate" style={{ color: 'var(--sf-t1)' }}>{necesitaAtencion.vendedor}</p>
               <div className="flex items-center gap-2 mt-1">
-                {necesitaAtencion.variacion_ytd_pct != null && (
-                  <span className="text-xs font-medium" style={{ color: necesitaAtencion.variacion_ytd_pct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
-                    {necesitaAtencion.variacion_ytd_pct >= 0 ? '+' : ''}{necesitaAtencion.variacion_ytd_pct.toFixed(1)}% YTD
+                {atencionYtdPct != null && (
+                  <span className="text-xs font-medium" style={{ color: atencionYtdPct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
+                    {atencionYtdPct >= 0 ? '+' : ''}{atencionYtdPct.toFixed(1)}% en {periodoLabel}
                   </span>
                 )}
                 <span className="text-[11px]" style={{ color: 'var(--sf-t4)' }}>
@@ -880,7 +964,7 @@ Reglas:
               className="rounded-xl p-4"
               style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}
             >
-              <div className="flex items-center gap-2 mb-2">
+              <div className="flex items-center gap-2 mb-2" style={{ cursor: 'help' }} title={TT_PULSO_EQUIPO}>
                 <span className="w-2 h-2 rounded-full" style={{ background: saludColor }} />
                 <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--sf-t5)' }}>Pulso del equipo</span>
               </div>
@@ -1035,7 +1119,10 @@ Reglas:
             isOpen={isOpen}
             onClose={() => setExpandedVendedor(null)}
             title={drawerVendedor?.vendedor ?? ''}
-            subtitle={drawerVendedor?.variacion_ytd_pct != null ? `${drawerVendedor.variacion_ytd_pct >= 0 ? '+' : ''}${drawerVendedor.variacion_ytd_pct.toFixed(1)}% YTD` : undefined}
+            subtitle={(() => {
+              const p = drawerVendedor ? (drawerVendedor.variacion_ytd_usd_pct ?? drawerVendedor.variacion_ytd_uds_pct ?? null) : null
+              return p != null ? `${p >= 0 ? '+' : ''}${p.toFixed(1)}% en ${periodoLabel}` : undefined
+            })()}
             badges={rc ? [{ label: rc.label, color: rc.badgeColor, bg: rc.badgeBg }] : []}
             analysisText={analysis?.text ?? null}
             onDeepen={drawerVendedor && analysis?.text ? () => handleProfundizarVendedor(drawerVendedor, analysis.text!) : undefined}

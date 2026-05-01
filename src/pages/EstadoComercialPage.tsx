@@ -1,18 +1,22 @@
-﻿import { useEffect, useState, useMemo, useCallback, useDeferredValue, useRef } from 'react'
-import { createPortal } from 'react-dom'
+import { useEffect, useState, useMemo, useCallback, useDeferredValue, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ResponsiveContainer, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, LabelList } from 'recharts'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
 import type { Insight, InsightTipo, InsightPrioridad, VendorAnalysis } from '../types'
-import { salesInPeriod } from '../lib/analysis'
 import { callAI } from '../lib/chatService'
 import VendedorPanel from '../components/vendedor/VendedorPanel'
 import { useDemoPath } from '../lib/useDemoPath'
-import { buildDiagnostic, type DiagnosticBlock } from '../lib/diagnostic-engine'
+import { useEmpresaName } from '../lib/useEmpresaName'
+import { candidatesToDiagnosticBlocks, buildRichBlocksFromInsights, recordInsightRuntimeAuditReport, type DiagnosticBlock } from '../lib/insight-engine'
 import DiagnosticBlockView from '../components/diagnostic/DiagnosticBlock'
-import InsightCardNew from '../components/InsightCardNew'
-import { Calendar, CheckCircle, RotateCcw, ChevronDown, Users, Building2, Star, TrendingUp, TrendingDown, Bell } from 'lucide-react'
+import EstadoGeneralEmpresa from '../components/estado-general/EstadoGeneralEmpresa'
+import { enrichDiagnosticBlocks, type EnrichedDiagnosticBlock } from '../lib/diagnostic-actions'
+import { getTopProductosPorClienteAmbosRangos } from '../lib/domain-aggregations'
+import { buildInsightChains, buildExecutiveProblems, EXECUTIVE_COMPRESSION_ENABLED, type ExecutiveProblem, type MaterialityContext } from '../lib/decision-engine'
+import ExecutiveProblemCard from '../components/insights/ExecutiveProblemCard'
+import { formatPeriodLabel } from '../lib/periods'
+import { Calendar, CheckCircle, RotateCcw, Users, Building2, Star, TrendingUp, TrendingDown, Bell } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAlertStatusStore } from '../store/alertStatusStore'
 import type { AlertStatus } from '../store/alertStatusStore'
@@ -59,6 +63,7 @@ function getFeedLabel(tipo: InsightTipo): string {
     case 'riesgo_vendedor': return 'VENDEDOR'
     case 'riesgo_cliente': return 'CLIENTE'
     case 'riesgo_producto': return 'PRODUCTO'
+    case 'riesgo_inventario': return 'INVENTARIO'
   }
 }
 
@@ -71,7 +76,7 @@ const FEED_FILTERS: { key: FeedFilterKey; label: string; match: (i: Insight) => 
   { key: 'vendedores', label: 'Equipo',        match: i => i.tipo === 'riesgo_vendedor' || i.tipo === 'riesgo_equipo' },
   { key: 'hallazgo',   label: 'Oportunidades', match: i => i.tipo === 'hallazgo' },
   // kept for count logic but not shown as tabs:
-  { key: 'productos',  label: 'Productos',     match: i => i.tipo === 'riesgo_producto' },
+  { key: 'productos',  label: 'Productos',     match: i => i.tipo === 'riesgo_producto' || i.tipo === 'riesgo_inventario' },
   { key: 'clientes',   label: 'Clientes',      match: i => i.tipo === 'riesgo_cliente' },
 ]
 
@@ -154,6 +159,7 @@ function formatAlertaContent(
     keyLabel = tipo === 'riesgo_vendedor' ? 'caída % vs promedio'
       : tipo === 'riesgo_cliente' ? 'días sin actividad'
       : tipo === 'riesgo_producto' ? 'uds sin movimiento'
+      : tipo === 'riesgo_inventario' ? 'días de cobertura'
       : tipo === 'riesgo_meta' ? '% cumplimiento'
       : tipo === 'riesgo_equipo' ? '% brecha vs meta'
       : tipo === 'cruzado' ? 'factores combinados'
@@ -242,13 +248,17 @@ function relativeTime(isoString: string): string {
 export default function EstadoComercialPage() {
   const navigate = useNavigate()
   const dp = useDemoPath()
+  const empresaName = useEmpresaName()
   useAnalysis()
   const {
     insights, vendorAnalysis, teamStats, dataAvailability,
-    configuracion, selectedPeriod, setSelectedPeriod, sales, loadingMessage,
+    configuracion, selectedPeriod, sales, metas, loadingMessage,
     clientesDormidos, concentracionRiesgo, categoriasInventario, supervisorAnalysis,
     canalAnalysis, categoriaAnalysis, dataSource, tipoMetaActivo,
   } = useAppStore()
+  // [Z.11.4] Candidates filtrados (post-Z.11+Z.12) emitidos por analysisWorker.
+  // Single source of truth tras Ticket 2.4.4 (selectedMonths removido).
+  const filteredCandidatesStore = useAppStore(s => s.filteredCandidates)
 
   const [vendedorPanel, setVendedorPanel] = useState<VendorAnalysis | null>(null)
   const [mounted, setMounted] = useState(false)
@@ -260,10 +270,6 @@ export default function EstadoComercialPage() {
   const [noteDraft, setNoteDraft] = useState('')
   const dashMetrica = configuracion.metricaGlobal ?? 'usd'
   const dropdownRef = useRef<HTMLDivElement>(null)
-  const [monthDropOpen, setMonthDropOpen] = useState(false)
-  const monthDropRef = useRef<HTMLDivElement>(null)
-  const monthBtnRef = useRef<HTMLButtonElement>(null)
-  const [monthDropRect, setMonthDropRect] = useState<{ top: number; left: number; width: number } | null>(null)
 
   useEffect(() => {
     if (sales.length === 0 && dataSource === 'none') navigate(dp('/cargar'), { replace: true })
@@ -312,51 +318,23 @@ export default function EstadoComercialPage() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [openDropdownKey])
 
-  // Cerrar month dropdown al clic fuera (portal-safe: verifica btn + portal)
-  useEffect(() => {
-    if (!monthDropOpen) return
-    const handleClick = (e: MouseEvent) => {
-      const target = e.target as Node
-      // Clic dentro del botón trigger → lo maneja el onClick del botón
-      if (monthDropRef.current?.contains(target)) return
-      // Clic dentro del portal (dropdown renderizado en body) → no cerrar
-      // Los nodos del portal son hijos directos de body pero no del ref
-      // Usamos el data-attr para identificar el portal
-      const portalEl = document.getElementById('sf-month-portal')
-      if (portalEl?.contains(target)) return
-      setMonthDropOpen(false)
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [monthDropOpen])
-
-
-
-  // â"€â"€ Chips de mes â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-  // maxDate y meses disponibles derivados del Worker (off-thread)
+  // maxDate derivado del Worker (off-thread)
   const fechaRefISO = useAppStore(s => s.fechaRefISO)
   const monthlyTotals = useAppStore(s => s.monthlyTotals)
   const monthlyTotalsSameDay = useAppStore(s => s.monthlyTotalsSameDay)
 
+  // R103: helper de fecha — derivado de fechaRefISO (store), no de ventas crudas
   const maxDate = useMemo(
     () => fechaRefISO ? new Date(fechaRefISO) : new Date(0),
     [fechaRefISO],
   )
-  const maxChipMonth = maxDate.getFullYear() === selectedPeriod.year ? maxDate.getMonth() : selectedPeriod.month
-
-  // ── Meses disponibles (derivados del map de totales mensuales) ──────────
-  const availableMonths = useMemo(() => {
-    const all = Object.keys(monthlyTotals)
-      .map(k => { const [y, m] = k.split('-').map(Number); return { year: y, month: m } })
-      .sort((a, b) => b.year - a.year || b.month - a.month)
-    const latestYear = all[0]?.year ?? new Date().getFullYear()
-    return all.filter(am => am.year === latestYear)
-  }, [monthlyTotals])
-
-  // â"€â"€ Slices de ventas cacheados (evitar llamadas repetidas a salesInPeriod) â"€
-  const salesActual = useMemo(() =>
-    salesInPeriod(sales, selectedPeriod.year, selectedPeriod.month),
-  [sales, selectedPeriod.year, selectedPeriod.month])
+  // R103: filtro UI — salesActual filtra por año del selectedPeriod del store.
+  const salesActual = useMemo(() => {
+    return sales.filter((s) => {
+      const fd = s.fecha instanceof Date ? s.fecha : new Date(s.fecha)
+      return fd.getFullYear() === selectedPeriod.year
+    })
+  }, [sales, selectedPeriod.year])
 
   // â"€â"€ Datos diferidos para secciones secundarias (evita freeze UI) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const deferredSales            = useDeferredValue(sales)
@@ -369,7 +347,7 @@ export default function EstadoComercialPage() {
 
   // â"€â"€ Datos producto â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-  // â"€â"€ Estado del mes (vs histórico mismo mes años anteriores) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+  // R103: derivación local — estadoMes usa monthlyTotals (pre-computado off-thread) + teamStats; no itera ventas crudas
   const estadoMes = useMemo(() => {
     const diasTranscurridos = teamStats?.dias_transcurridos ?? 1
     const diasTotales       = teamStats?.dias_totales ?? 30
@@ -429,7 +407,7 @@ export default function EstadoComercialPage() {
     }
   }, [monthlyTotals, selectedPeriod.year, selectedPeriod.month, teamStats])
 
-  // â"€â"€ Causas del atraso â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+  // R103: derivación local — causasAtraso depende de estadoMes (local) + deferredVendorAnalysis (engine output); no es suma cruda de ventas
   const causasAtraso = useMemo(() => {
     if (estadoMes.estado !== 'atrasado' || estadoMes.anos_base === 0) return []
     const { year, month } = selectedPeriod
@@ -488,8 +466,7 @@ export default function EstadoComercialPage() {
     return causas.sort((a, b) => b.impacto_uds - a.impacto_uds).slice(0, 3)
   }, [estadoMes, deferredSales, selectedPeriod, deferredVendorAnalysis, dataAvailability])
 
-  // â"€â"€ Focos de riesgo críticos â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-  // ── Comparación mes vs mes anterior ───────────────────────────────────────
+  // R103: derivación local — comparacionMes usa monthlyTotals + monthlyTotalsSameDay (pre-computado off-thread); no itera ventas crudas
   const comparacionMes = useMemo(() => {
     const fmtK = (n: number) => n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : n.toLocaleString()
     const { year, month } = selectedPeriod // month 0-based
@@ -578,6 +555,7 @@ export default function EstadoComercialPage() {
     }
   }, [monthlyTotals, monthlyTotalsSameDay, maxDate, selectedPeriod])
 
+  // R103: derivación local — focosRiesgo filtra insights (output del motor); no agrega ventas crudas
   const focosRiesgo = useMemo(() =>
     insights.filter(i => i.prioridad === 'CRITICA' && i.impacto_economico).slice(0, 3),
   [insights])
@@ -728,7 +706,8 @@ export default function EstadoComercialPage() {
     return bullets.slice(0, 6)
   }, [estadoMes, causasAtraso, comparacionMes, deferredVendorAnalysis, deferredClientesDormidos, concentracionRiesgo])
 
-  // â"€â"€ Escenario de mejora con clientes recuperables â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+  // ── Escenario de mejora con clientes recuperables ─────────────────────────
+  // TODO Z.1 — extraer cálculo de impacto recuperable a domain-aggregations
   const escenarioMejora = useMemo(() => {
     if (estadoMes.proyeccion_cierre <= 0) return null
 
@@ -1121,7 +1100,7 @@ export default function EstadoComercialPage() {
           if (dormidosZona.length > 0) {
             let l3 = `Clientes dormidos en la zona: ${dormidosZona.length}`
             if (dataAvailability.has_venta_neta) {
-              const valorRiesgo = dormidosZona.reduce((s, c) => s + c.valor_historico, 0)
+              const valorRiesgo = dormidosZona.reduce((s, c) => s + c.valor_yoy_usd, 0)
               if (valorRiesgo > 0) l3 += ` — Valor en riesgo: ${sym}${Math.round(valorRiesgo).toLocaleString('es-SV')}`
             }
             lineas.push(l3)
@@ -1273,8 +1252,8 @@ export default function EstadoComercialPage() {
         }
 
         // Línea 7 — YTD
-        if (peorVendedor.ytd_actual != null && peorVendedor.ytd_anterior != null && peorVendedor.ytd_anterior > 0) {
-          const ytdPct = Math.round(((peorVendedor.ytd_actual - peorVendedor.ytd_anterior) / peorVendedor.ytd_anterior) * 100)
+        if (peorVendedor.ytd_actual_uds != null && peorVendedor.ytd_anterior_uds != null && peorVendedor.ytd_anterior_uds > 0) {
+          const ytdPct = Math.round(((peorVendedor.ytd_actual_uds - peorVendedor.ytd_anterior_uds) / peorVendedor.ytd_anterior_uds) * 100)
           if (ytdPct < 0) {
             lineas.push(`También cae en YTD: ${Math.abs(ytdPct)}% vs año anterior — no es solo este mes`)
           } else if (ytdPct > 0) {
@@ -1310,9 +1289,9 @@ export default function EstadoComercialPage() {
         }
         lineas.push(l1)
 
-        // Línea 2 — valor histórico
-        if (topDormido.valor_historico > 0) {
-          lineas.push(`Valor histórico mensual: ${Math.round(topDormido.valor_historico).toLocaleString('es-SV')} uds`)
+        // Línea 2 — valor YoY
+        if (topDormido.valor_yoy_usd > 0) {
+          lineas.push(`Valor YoY: ${Math.round(topDormido.valor_yoy_usd).toLocaleString('es-SV')}`)
         }
 
         // Línea 3 — vendedor responsable
@@ -1342,8 +1321,8 @@ export default function EstadoComercialPage() {
         if (dataAvailability.has_inventario) {
           const productosCliente = new Set(
             deferredSales
-              .filter(s => (s.cliente ?? s.codigo_cliente) === topDormido.cliente)
-              .map(s => s.producto ?? s.codigo_producto)
+              .filter(s => s.cliente === topDormido.cliente)
+              .map(s => s.producto)
               .filter((p): p is string => p != null && p.trim() !== '')
           )
           const stockCruzado = categoriasInventario
@@ -1374,8 +1353,8 @@ export default function EstadoComercialPage() {
           }
         }
 
-        const impacto = topDormido.valor_historico > 0
-          ? `Valor en riesgo: ${Math.round(topDormido.valor_historico).toLocaleString('es-SV')} uds`
+        const impacto = topDormido.valor_yoy_usd > 0
+          ? `Valor YoY: ${Math.round(topDormido.valor_yoy_usd).toLocaleString('es-SV')}`
           : ''
 
         result.push({ titulo: `${topDormido.cliente} — sin actividad`, lineas, impacto, tipo: 'riesgo_cliente', dimLabel: 'CLIENTE', dimColor: '#4ADE80' })
@@ -1385,47 +1364,171 @@ export default function EstadoComercialPage() {
     return result
   }, [causasAtraso, vendorAnalysis, supervisorAnalysis, clientesDormidos, canalAnalysis, categoriaAnalysis, categoriasInventario, insights, teamStats, dataAvailability, configuracion, deferredSales, selectedPeriod])
 
-  // ── Diagnóstico del mes — agrupa los insights en bloques narrativos ─────
-  // (Legacy: se mantiene calculado pero ya no se renderiza en la sección Diagnóstico)
-  const diagnosticBlocks: DiagnosticBlock[] = useMemo(() => {
-    if (!insights?.length) return []
-    return buildDiagnostic(insights, vendorAnalysis)
+  // ── Diagnóstico del mes — motor único Metric × Dimension + narrativa rica (Z.2) ─
+  // [Z.11.4] Single source of truth para candidates motor 2: consume
+  // `filteredCandidatesStore` pre-computado post-Z.11+Z.12 por analysisWorker.
+  // Tras Ticket 2.4.4 (selectedMonths removido) ya no hay multi-mes fallback.
+
+  const _filteredCandidates = useMemo(() => {
+    if (!sales?.length) return []
+    return filteredCandidatesStore
+  }, [filteredCandidatesStore, sales])
+
+  // [Z.9.5] Causal linking + compresión ejecutiva — gateado por EXECUTIVE_COMPRESSION_ENABLED
+  const _insightChains = useMemo(() => {
+    if (!EXECUTIVE_COMPRESSION_ENABLED || !_filteredCandidates.length) return []
+    // allowSingletons: true → candidatos sin par (ej: stock_risk) forman cadenas de 1 nodo.
+    // El filtro de materialidad en buildExecutiveProblems descarta los de bajo impacto.
+    return buildInsightChains(_filteredCandidates, { allowSingletons: true })
+  }, [_filteredCandidates])
+
+  // [R148] Denominadores de materialidad para el motor ejecutivo
+  const _materialityContext = useMemo((): MaterialityContext => {
+    const isUSD = dataAvailability.has_venta_neta && tipoMetaActivo === 'usd'
+
+    // LY mismo período — USD: suma ytd_anterior_usd; UDS: acumula monthlyTotals same-day
+    const lySamePeriodUSD = dataAvailability.has_venta_neta
+      ? vendorAnalysis.reduce((sum, v) => sum + (v.ytd_anterior_usd ?? 0), 0) : 0
+    const prevYear    = selectedPeriod.year - 1
+    const latestMonth = maxDate.getFullYear() === selectedPeriod.year ? maxDate.getMonth() : selectedPeriod.month
+    let lySamePeriodUds = 0
+    for (let m = 0; m <= selectedPeriod.month; m++) {
+      lySamePeriodUds += m === latestMonth
+        ? (monthlyTotalsSameDay[`${prevYear}-${m}`]?.uds ?? 0)
+        : (monthlyTotals[`${prevYear}-${m}`]?.uds ?? 0)
+    }
+    const salesLYRaw       = isUSD ? lySamePeriodUSD : lySamePeriodUds
+    const salesCurrentRaw  = isUSD ? estadoMes.ingreso_actual : estadoMes.actual
+    const salesYTDCurrentUSD = dataAvailability.has_venta_neta
+      ? vendorAnalysis.reduce((sum, v) => sum + (v.ytd_actual_usd ?? 0), 0) : 0
+
+    const mn = MESES_LARGO[selectedPeriod.month]
+    const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
+    return {
+      salesLYSamePeriod:  salesLYRaw > 0      ? salesLYRaw      : null,
+      salesCurrentPeriod: salesCurrentRaw > 0  ? salesCurrentRaw : null,
+      salesYTDCurrent:    salesYTDCurrentUSD > 0 ? salesYTDCurrentUSD : null,
+      metaPeriodo:        (teamStats?.meta_equipo_total ?? teamStats?.meta_equipo ?? 0) || null,
+      periodLabel:        `${cap(mn)} ${selectedPeriod.year} vs ${mn} ${selectedPeriod.year - 1}`,
+    }
+  }, [dataAvailability.has_venta_neta, tipoMetaActivo, vendorAnalysis, monthlyTotals,
+      monthlyTotalsSameDay, estadoMes, selectedPeriod, maxDate, teamStats])
+
+  const _executiveProblems: ExecutiveProblem[] = useMemo(() => {
+    if (!EXECUTIVE_COMPRESSION_ENABLED || !_insightChains.length) return []
+    return buildExecutiveProblems(_insightChains, _filteredCandidates, _materialityContext)
+  }, [_insightChains, _filteredCandidates, _materialityContext])
+
+  const _execAttention   = useMemo(() => _executiveProblems.filter(p => p.problemDirection !== 'mejora'), [_executiveProblems])
+  const _execOpportunity = useMemo(() => _executiveProblems.filter(p => p.problemDirection === 'mejora'), [_executiveProblems])
+
+  // Candidatos no cubiertos por ningún ExecutiveProblem → lista residual de diagnóstico
+  const _residualCandidates = useMemo(() => {
+    if (!EXECUTIVE_COMPRESSION_ENABLED || !_executiveProblems.length) return _filteredCandidates
+    const covered = new Set(_executiveProblems.flatMap(p => p.coveredCandidates))
+    return _filteredCandidates.filter(c => {
+      const cid = `${c.insightTypeId}:${c.dimensionId}:${c.member ?? '_global'}`
+      return !covered.has(cid)
+    })
+  }, [_filteredCandidates, _executiveProblems])
+
+  // [Z.4 — perf: cuello-3] legacyBlocks solo depende de insights y vendorAnalysis — no del período
+  const _legacyBlocks = useMemo(() => {
+    if (!vendorAnalysis?.length) return []
+    return buildRichBlocksFromInsights(insights ?? [], vendorAnalysis)
   }, [insights, vendorAnalysis])
 
+  // PASO 3: Conversión a DiagnosticBlock — narrativa rica + fusión legacy (internos)
+  // Usa _residualCandidates para excluir los cubiertos por el Panel Ejecutivo.
+  const diagnosticBlocks: DiagnosticBlock[] = useMemo(() => {
+    if (!sales?.length || !vendorAnalysis?.length) return []
+    return candidatesToDiagnosticBlocks(_residualCandidates, {
+      tipoMetaActivo, sales, inventory: categoriasInventario, metas,
+      clientesDormidos, vendorAnalysis, insights: insights ?? [], selectedPeriod,
+    }, _legacyBlocks)
+  }, [_residualCandidates, _legacyBlocks, tipoMetaActivo, sales, categoriasInventario, metas,
+      clientesDormidos, vendorAnalysis, insights, selectedPeriod])
+
+  // R102: migrado a domain-aggregations.getTopProductosPorClienteAmbosRangos
+  const topProductosPorCliente = useMemo(() => {
+    if (!dataAvailability.has_venta_neta || !dataAvailability.has_cliente || !dataAvailability.has_producto) return undefined
+    const now = new Date(selectedPeriod.year, selectedPeriod.month, teamStats?.dias_transcurridos ?? maxDate.getDate())
+    return getTopProductosPorClienteAmbosRangos(sales, now, teamStats?.dias_transcurridos)
+  }, [sales, selectedPeriod, teamStats, dataAvailability, maxDate])
+
+  // R68–R73: enrich blocks with sujeto, delta, chip, narrative, deterministic actions
+  const enrichedBlocks: EnrichedDiagnosticBlock[] = useMemo(() => {
+    const diasTranscurridos = teamStats?.dias_transcurridos ?? 1
+    const diasTotalesMes    = teamStats?.dias_totales ?? 30
+    return enrichDiagnosticBlocks(diagnosticBlocks, {
+      vendorAnalysis:      vendorAnalysis ?? [],
+      clientesDormidos:    clientesDormidos ?? [],
+      categoriasInventario: categoriasInventario ?? [],
+      tipoMetaActivo,
+      selectedPeriod,
+      diasTranscurridos,
+      diasTotalesMes,
+      topProductosPorCliente,
+    })
+  }, [diagnosticBlocks, teamStats, vendorAnalysis, clientesDormidos, categoriasInventario, tipoMetaActivo, selectedPeriod, topProductosPorCliente])
+
+  useEffect(() => {
+    if (!sales?.length || !vendorAnalysis?.length) return
+    // [Z.11.4] candidatesReturned no está disponible page-side: el worker hace
+    // gate y solo emite filteredCandidates. Reusamos _filteredCandidates en
+    // ambos slots; gate stage capturado en analysis_worker stage report.
+    // discardedCount=0 page-side es correcto: no descarta al leer del store.
+    recordInsightRuntimeAuditReport({
+      candidatesReturned: _filteredCandidates,
+      filteredCandidates: _filteredCandidates,
+      chainsCount: _insightChains.length,
+      executiveProblemsCount: _executiveProblems.length,
+      residualCandidatesCount: _residualCandidates.length,
+      legacyBlocksCount: _legacyBlocks.length,
+      diagnosticBlocksCount: diagnosticBlocks.length,
+      enrichedBlocksCount: enrichedBlocks.length,
+    })
+  }, [
+    sales, vendorAnalysis, _filteredCandidates, _insightChains,
+    _executiveProblems, _residualCandidates, _legacyBlocks, diagnosticBlocks, enrichedBlocks,
+  ])
+
+  // R103: conteo UI sobre enrichedBlocks, no agregación de ventas
   const urgentPendingCount = useMemo(
-    () => diagnosticBlocks.filter((b: DiagnosticBlock) => b.severity === 'critical' || b.severity === 'warning').length,
-    [diagnosticBlocks],
+    () => enrichedBlocks.filter(b => b.severity === 'critical' || b.severity === 'warning').length,
+    [enrichedBlocks],
   )
 
-  // ── Diagnóstico v2: tarjetas individuales basadas en el motor de insights ──
+  // ── Estado general (riesgo_equipo) — sin cambios ──────────────────────────
   const diagInsights: Insight[] = insights ?? []
-  const diagUrgentes = diagInsights.filter(i => i.prioridad === 'CRITICA' || i.prioridad === 'ALTA')
-  const diagAdicionales = diagInsights.filter(i => i.prioridad === 'MEDIA')
-  // BAJA se omite del diagnóstico
-  const diagCriticaCount = diagInsights.filter(i => i.prioridad === 'CRITICA').length
+  const estadoGeneral = diagInsights.find(i => i.tipo === 'riesgo_equipo')
+
+  // ── Diagnóstico del mes — bloques enriquecidos (R68–R73) ──────────────────
+  const diagUrgentes    = enrichedBlocks.filter(b => b.severity === 'critical' || b.severity === 'warning')
+  const diagAdicionales = enrichedBlocks.filter(b => b.severity === 'info' || b.severity === 'positive')
+  const diagCriticaCount = enrichedBlocks.filter(b => b.severity === 'critical').length
   const [mostrarAdicionales, setMostrarAdicionales] = useState(false)
 
-  // ── YTD chart data (mensual individual: año actual vs anterior) ──
-  // Must be before early return to respect Rules of Hooks
+  // [Ticket 3.B.2] ytdChart consume rango activo del store (monthStart/monthEnd).
+  // Default rango = (0, fechaRef.month) reproduce el comportamiento YTD-anchored
+  // pre-3.B.2 bit-exact. Si user mueve TopBar, los totales y barras siguen.
   const ytdChart = useMemo(() => {
-    const currentYear = selectedPeriod.year
+    const currentYear = maxDate.getTime() > 0 ? maxDate.getFullYear() : selectedPeriod.year
     const previousYear = currentYear - 1
-    const selectedMonth = selectedPeriod.month // 0-based
-    // El mes "en curso" real es el mes del dato más reciente (puede diferir del seleccionado)
-    const latestMonth = maxDate.getFullYear() === currentYear ? maxDate.getMonth() : selectedMonth
-    const maxDay = maxDate.getDate() // día hasta el que hay datos en el mes en curso
+    const latestMonth = maxDate.getFullYear() === currentYear ? maxDate.getMonth() : selectedPeriod.monthEnd
+    const maxDay = maxDate.getDate()
+    const monthStart = selectedPeriod.monthStart
+    const monthEnd = selectedPeriod.monthEnd
 
     const data: { month: string; actual: number; anterior: number; isPartial: boolean; daysElapsed: number; daysTotal: number }[] = []
     let totalActual = 0
     let totalAnterior = 0
 
-    for (let m = 0; m <= selectedMonth; m++) {
-      // Mes realmente parcial = el mes donde están los últimos datos (mes en curso)
+    for (let m = monthStart; m <= monthEnd; m++) {
       const isPartialMonth = m === latestMonth
       const daysInMonth = new Date(currentYear, m + 1, 0).getDate()
 
       const ventasActual = monthlyTotals[`${currentYear}-${m}`]?.uds ?? 0
-      // Same-day-range solo para el mes en curso (parcial); cerrados se comparan completos
       const ventasAnterior = isPartialMonth
         ? (monthlyTotalsSameDay[`${previousYear}-${m}`]?.uds ?? 0)
         : (monthlyTotals[`${previousYear}-${m}`]?.uds ?? 0)
@@ -1443,20 +1546,21 @@ export default function EstadoComercialPage() {
       })
     }
     return { data, totalActual, totalAnterior, maxDay }
-  }, [monthlyTotals, monthlyTotalsSameDay, selectedPeriod.year, selectedPeriod.month, maxDate])
+  }, [monthlyTotals, monthlyTotalsSameDay, selectedPeriod.year, selectedPeriod.monthStart, selectedPeriod.monthEnd, maxDate])
 
-  // ── YTD chart en dólares (solo si has_venta_neta) ──
+  // [Ticket 3.B.2] ytdChartUSD: mismo patrón rango-aware que ytdChart (UDS).
   const ytdChartUSD = useMemo(() => {
     if (!dataAvailability.has_venta_neta) return null
-    const currentYear = selectedPeriod.year
+    const currentYear = maxDate.getTime() > 0 ? maxDate.getFullYear() : selectedPeriod.year
     const previousYear = currentYear - 1
-    const selectedMonth = selectedPeriod.month
-    const latestMonth = maxDate.getFullYear() === currentYear ? maxDate.getMonth() : selectedMonth
+    const latestMonth = maxDate.getFullYear() === currentYear ? maxDate.getMonth() : selectedPeriod.monthEnd
     const maxDay = maxDate.getDate()
+    const monthStart = selectedPeriod.monthStart
+    const monthEnd = selectedPeriod.monthEnd
     const data: { month: string; actual: number; anterior: number; isPartial: boolean; daysElapsed: number; daysTotal: number }[] = []
     let totalActual = 0
     let totalAnterior = 0
-    for (let m = 0; m <= selectedMonth; m++) {
+    for (let m = monthStart; m <= monthEnd; m++) {
       const isPartialMonth = m === latestMonth
       const daysInMonth = new Date(currentYear, m + 1, 0).getDate()
       const ventasActual = monthlyTotals[`${currentYear}-${m}`]?.neta ?? 0
@@ -1468,7 +1572,55 @@ export default function EstadoComercialPage() {
       data.push({ month: MESES_CORTO[m], actual: ventasActual, anterior: ventasAnterior, isPartial: isPartialMonth, daysElapsed: isPartialMonth ? maxDay : daysInMonth, daysTotal: daysInMonth })
     }
     return { data, totalActual, totalAnterior, maxDay }
-  }, [monthlyTotals, monthlyTotalsSameDay, selectedPeriod.year, selectedPeriod.month, maxDate, dataAvailability.has_venta_neta])
+  }, [monthlyTotals, monthlyTotalsSameDay, selectedPeriod.year, selectedPeriod.monthStart, selectedPeriod.monthEnd, maxDate, dataAvailability.has_venta_neta])
+
+  // R103: derivación local — metasCerradas cruza monthlyTotals (pre-computado) + metas + deferredVendorAnalysis; no itera ventas crudas
+  const metasCerradas = useMemo(() => {
+    if (!teamStats || !metas || metas.length === 0) return null
+
+    const currentMonth = selectedPeriod.month // 0-indexed
+    const currentYear = selectedPeriod.year
+    const vendorNames = new Set(
+      (deferredVendorAnalysis ?? []).map((v: any) => v.vendedor)
+    )
+    const isUSD = tipoMetaActivo === 'usd' && dataAvailability.has_venta_neta
+
+    let metaAcum = 0
+    let ventaAcum = 0
+    const mesesCerrados: string[] = []
+    const MESES_C = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
+
+    for (let m = 0; m < currentMonth; m++) {
+      const metasMes = metas.filter(
+        (mt: any) => mt.mes === m + 1 && mt.anio === currentYear && mt.vendedor && vendorNames.has(mt.vendedor) && !mt.supervisor && !mt.categoria
+      )
+      const metaMes = metasMes.reduce((s: number, mt: any) => s + (isUSD ? (mt.meta_usd ?? 0) : (mt.meta_uds ?? mt.meta ?? 0)), 0)
+
+      const mtKey = `${currentYear}-${m}`
+      const mtData = monthlyTotals[mtKey]
+      const ventaMes = isUSD ? (mtData?.neta ?? 0) : (mtData?.uds ?? 0)
+
+      if (metaMes > 0) {
+        metaAcum += metaMes
+        ventaAcum += ventaMes
+        mesesCerrados.push(MESES_C[m])
+      }
+    }
+
+    if (metaAcum === 0) return null
+
+    const cumpl = (ventaAcum / metaAcum) * 100
+
+    return {
+      cumplimiento: cumpl,
+      metaAcum,
+      ventaAcum,
+      mesesLabel: mesesCerrados.length <= 3
+        ? mesesCerrados.join('–')
+        : `${mesesCerrados[0]}–${mesesCerrados[mesesCerrados.length - 1]}`,
+      mesesCount: mesesCerrados.length,
+    }
+  }, [teamStats, metas, selectedPeriod, deferredVendorAnalysis, tipoMetaActivo, dataAvailability, monthlyTotals])
 
   if (!teamStats) {
     if (sales.length === 0) return null // el useEffect redirige a /cargar
@@ -1526,7 +1678,7 @@ export default function EstadoComercialPage() {
   // Derived card metrics
   const dormidosRec      = clientesDormidos.filter(c => c.recovery_label === 'alta' || c.recovery_label === 'recuperable')
   const activosMes       = new Set(salesActual.filter(s => s.cliente).map(s => s.cliente)).size
-  const valorRiesgoClien = clientesDormidos.reduce((s, c) => s + c.valor_historico, 0)
+  const valorRiesgoClien = clientesDormidos.reduce((s, c) => s + c.valor_yoy_usd, 0)
   const canalPrincipal   = [...canalAnalysis].sort((a, b) => b.participacion_pct - a.participacion_pct)[0] ?? null
   const canalesActivos   = canalAnalysis.filter(c => c.activo_periodo).length
   const canalesEnCaida   = canalAnalysis.filter(c => c.tendencia === 'caida' || c.tendencia === 'desaparecido').length
@@ -1536,7 +1688,7 @@ export default function EstadoComercialPage() {
   const lentoMov         = categoriasInventario.filter(c => c.clasificacion === 'lento_movimiento').length
   const normalInv        = categoriasInventario.filter(c => c.clasificacion === 'normal').length
 
-  const ytdVar  = teamStats.variacion_ytd_equipo
+  const ytdVar  = teamStats.variacion_ytd_equipo_uds_pct
   const ytdAnno = maxDate.getFullYear()
 
   const ytdDiff = ytdChart.totalActual - ytdChart.totalAnterior
@@ -1551,8 +1703,7 @@ export default function EstadoComercialPage() {
   const activeYtdUp = activeYtdDiff >= 0
   const activeYtdPct = activeYtdChart.totalAnterior > 0 ? ((activeYtdDiff / activeYtdChart.totalAnterior) * 100) : null
 
-  const rawMesLabel = new Date(selectedPeriod.year, selectedPeriod.month, 1).toLocaleDateString('es-MX', { month: 'long', year: 'numeric' })
-  const mesLabel = rawMesLabel.charAt(0).toUpperCase() + rawMesLabel.slice(1)
+  const mesLabel = formatPeriodLabel(selectedPeriod.year, selectedPeriod.monthStart, selectedPeriod.monthEnd)
 
   // proyección de ingresos: misma lógica diaria que proyeccion_cierre en unidades
   const proyeccion_neta = dataAvailability.has_venta_neta && estadoMes.diasTranscurridos > 0
@@ -1560,10 +1711,10 @@ export default function EstadoComercialPage() {
     : 0
   // YTD en dólares: usar los campos _neto calculados en el motor (suma directa de venta_neta)
   const ytd_neto = dataAvailability.has_venta_neta
-    ? vendorAnalysis.reduce((sum, v) => sum + (v.ytd_actual_neto ?? 0), 0)
+    ? vendorAnalysis.reduce((sum, v) => sum + (v.ytd_actual_usd ?? 0), 0)
     : 0
   const ytd_anterior_neto = dataAvailability.has_venta_neta
-    ? vendorAnalysis.reduce((sum, v) => sum + (v.ytd_anterior_neto ?? 0), 0)
+    ? vendorAnalysis.reduce((sum, v) => sum + (v.ytd_anterior_usd ?? 0), 0)
     : 0
 
   // FIX 2: fecha de comparación YTD año anterior
@@ -1576,7 +1727,6 @@ export default function EstadoComercialPage() {
   const cumplimientoFinal = metaActiva > 0
     ? (proyActiva / metaActiva) * 100
     : (teamStats?.cumplimiento_equipo ?? 0)
-
 
   const fmtBig = (n: number) =>
     n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M`
@@ -1630,10 +1780,14 @@ export default function EstadoComercialPage() {
         style={{ animationDelay: '0ms' }}
       >
         <span className="text-[13px] font-semibold" style={{ color: 'var(--sf-t2)' }}>
-          {configuracion.empresa}
+          {empresaName}
         </span>
         {urgentPendingCount > 0 ? (
-          <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.2)' }}>
+          <span
+            className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold"
+            style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.2)', cursor: 'help' }}
+            title="Hallazgos con severidad crítica o de advertencia pendientes de revisión."
+          >
             ⚠ Atención — {urgentPendingCount} {urgentPendingCount === 1 ? 'diagnóstico urgente' : 'diagnósticos urgentes'}
           </span>
         ) : insights.length > 0 ? (
@@ -1641,68 +1795,15 @@ export default function EstadoComercialPage() {
             ✓ En orden
           </span>
         ) : null}
-        {/* Month selector */}
-        <div className="sf-no-print" ref={monthDropRef}>
-          <button
-            ref={monthBtnRef}
-            onClick={() => {
-              if (!monthDropOpen && monthBtnRef.current) {
-                const r = monthBtnRef.current.getBoundingClientRect()
-                setMonthDropRect({ top: r.bottom + 6, left: r.left, width: r.width })
-              }
-              setMonthDropOpen(v => !v)
-            }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors"
-            style={{ background: 'var(--sf-inset)', color: 'var(--sf-t2)', border: '1px solid var(--sf-border)' }}
-          >
-            <Calendar className="w-3.5 h-3.5" style={{ color: 'var(--sf-t4)' }} />
-            {MESES_LARGO[selectedPeriod.month].charAt(0).toUpperCase() + MESES_LARGO[selectedPeriod.month].slice(1)} {selectedPeriod.year}
-            <ChevronDown className="w-3 h-3" style={{ color: 'var(--sf-t4)', transform: monthDropOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
-          </button>
-          {monthDropOpen && monthDropRect && createPortal(
-            <div
-              id="sf-month-portal"
-              style={{
-                position: 'fixed',
-                top: monthDropRect.top,
-                left: monthDropRect.left,
-                minWidth: Math.max(monthDropRect.width, 160),
-                maxHeight: 300,
-                overflowY: 'auto',
-                zIndex: 9999,
-                background: 'var(--sf-card)',
-                border: '1px solid var(--sf-border)',
-                borderRadius: 12,
-                boxShadow: '0 20px 40px rgba(0,0,0,0.35)',
-              }}
-            >
-              <div className="p-1.5 flex flex-col gap-0.5">
-                {availableMonths.map(({ year, month }) => {
-                  const isSelected = year === selectedPeriod.year && month === selectedPeriod.month
-                  const label = MESES_LARGO[month].charAt(0).toUpperCase() + MESES_LARGO[month].slice(1)
-                  return (
-                    <button
-                      key={`${year}-${month}`}
-                      onClick={() => {
-                        setSelectedPeriod({ year, month })
-                        setMonthDropOpen(false)
-                      }}
-                      className="w-full px-3 py-1.5 rounded-lg text-[12px] font-medium text-left flex items-center justify-between transition-colors cursor-pointer"
-                      style={{
-                        background: isSelected ? 'var(--sf-green-bg)' : 'transparent',
-                        color: isSelected ? 'var(--sf-green)' : 'var(--sf-t3)',
-                      }}
-                    >
-                      {label}
-                      {isSelected && <span style={{ color: 'var(--sf-green)', fontSize: 10 }}>✓</span>}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>,
-            document.body
-          )}
-        </div>
+        {/* Período activo (legible). El selector vive en TopBar (Ticket 2.3.4). */}
+        <span
+          data-testid="period-badge"
+          className="sf-no-print flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
+          style={{ background: 'var(--sf-inset)', color: 'var(--sf-t2)', border: '1px solid var(--sf-border)' }}
+        >
+          <Calendar className="w-3.5 h-3.5" style={{ color: 'var(--sf-t4)' }} />
+          {mesLabel}
+        </span>
         <span
           className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px]"
           style={{ background: 'var(--sf-inset)', color: 'var(--sf-t4)' }}
@@ -1713,18 +1814,28 @@ export default function EstadoComercialPage() {
       </div>
 
       {/* ── KPI CARDS ──────────────────────────────────────────────────────── */}
-      <div className="intel-fade grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6" style={{ animationDelay: '30ms' }}>
-        {/* Card 1 — VENTAS YTD + variación vs año anterior */}
+      <div className="intel-fade grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6" style={{ animationDelay: '30ms' }}>
+
+        {/* ── Card 1 — VENTA ACUMULADA ── */}
         {(() => {
           const mainUds  = ytdChart.totalActual
           const mainNeto = ytd_neto
-          const varPct   = activeYtdPct
-          const fechaRefAnterior = `${maxDate.getDate()} ${MESES_CORTO[maxDate.getMonth()].toLowerCase()}`
-          const kpiUSD = tipoMetaActivo === 'usd' && dataAvailability.has_venta_neta && mainNeto > 0
+          const kpiUSD   = tipoMetaActivo === 'usd' && dataAvailability.has_venta_neta && mainNeto > 0
+
+          // R64: monto YTD y % YTD deben ser de la misma ventana.
+          // ytdAnterior ya es YTD same-day (monthlyTotalsSameDay para el mes parcial).
+          const ytdAnterior = kpiUSD ? ytd_anterior_neto : ytdChart.totalAnterior
+          const ytdActual   = kpiUSD ? mainNeto : mainUds
+          // % YTD vs mismo período año anterior (misma ventana que el monto)
+          const varPctYTD = ytdAnterior > 0
+            ? ((ytdActual - ytdAnterior) / ytdAnterior) * 100
+            : null
+          const yoyYear      = selectedPeriod.year - 1
+
           return (
             <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
-              <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t5)' }}>
-                Ventas {selectedPeriod.year} — acumulado al día {teamStats.dias_transcurridos}
+              <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--sf-t5)' }}>
+                Venta acumulada {selectedPeriod.year}
               </p>
               {kpiUSD ? (
                 <p className="text-2xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-t1)' }}>
@@ -1735,29 +1846,37 @@ export default function EstadoComercialPage() {
                   {fmtBig(mainUds)}<span className="text-sm font-normal ml-1" style={{ color: 'var(--sf-t5)' }}>uds</span>
                 </p>
               )}
-              {varPct != null && (
-                <p className="text-base font-semibold mt-1.5" style={{ color: varPct >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
-                  {varPct >= 0 ? '+' : ''}{varPct.toFixed(1)}% <span className="text-xs" style={{ color: 'var(--sf-t5)', fontWeight: 400 }}>vs 1 ene–{fechaRefAnterior} {selectedPeriod.year - 1}</span>
+              {varPctYTD != null && (
+                <p className="text-sm font-semibold mt-2" style={{ color: varPctYTD >= 0 ? 'var(--sf-green)' : 'var(--sf-red)' }}>
+                  {varPctYTD >= 0 ? '+' : ''}{varPctYTD.toFixed(1)}%
+                  <span className="text-xs font-normal ml-1" style={{ color: 'var(--sf-t5)' }}>
+                    {/* [Ticket 3.B.2 + 3.B.2.1] Rango activo compacto (sin año, ya está en el header pill). */}
+                    Acumulado {formatPeriodLabel(selectedPeriod.year, selectedPeriod.monthStart, selectedPeriod.monthEnd, { includeYear: false })} día {teamStats.dias_transcurridos} vs mismo período {yoyYear}
+                  </span>
+                </p>
+              )}
+              {ytdAnterior > 0 && (
+                <p className="text-xs mt-1.5" style={{ color: 'var(--sf-t4)' }}>
+                  Año ant. (mismo período):{' '}
+                  <span style={{ color: 'var(--sf-t3)' }}>
+                    {kpiUSD ? `${configuracion.moneda}${fmtBig(ytdAnterior)}` : `${fmtBig(ytdAnterior)} uds`}
+                  </span>
                 </p>
               )}
             </div>
           )
         })()}
 
-        {/* Card 2 — PROYECCIÓN CIERRE */}
+        {/* ── Card 2 — PROYECCIÓN DEL MES ── */}
         {(() => {
-          const hasNeta = dataAvailability.has_venta_neta
           const mesNombre = MESES_CORTO[selectedPeriod.month].toUpperCase()
-          const card2USD = tipoMetaActivo === 'usd' && hasNeta
-          const mtdVal = card2USD ? estadoMes.ingreso_actual : estadoMes.actual
-          const proyVal = card2USD ? proyeccion_neta : estadoMes.proyeccion_cierre
+          const card2USD  = tipoMetaActivo === 'usd' && dataAvailability.has_venta_neta
+          const mtdVal    = card2USD ? estadoMes.ingreso_actual : estadoMes.actual
+          const proyVal   = card2USD ? proyeccion_neta : estadoMes.proyeccion_cierre
           return (
             <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
-              <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t5)' }}>
-                Proyección de cierre — {mesNombre} {selectedPeriod.year}
-              </p>
-              <p className="text-sm mt-0.5 mb-1" style={{ color: 'var(--sf-t3)' }}>
-                Llevas {card2USD ? `${configuracion.moneda}${fmtBig(mtdVal)}` : `${mtdVal.toLocaleString()} uds`} en {teamStats.dias_transcurridos} días
+              <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--sf-t5)' }}>
+                Proyección — {mesNombre}
               </p>
               <p className="text-2xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-green)' }}>
                 {card2USD
@@ -1765,39 +1884,191 @@ export default function EstadoComercialPage() {
                   : <>{Math.round(proyVal).toLocaleString('es-SV')}<span className="text-sm font-normal ml-1" style={{ color: 'var(--sf-t5)' }}>uds</span></>
                 }
               </p>
-              <p className="text-xs mt-1" style={{ color: 'var(--sf-t4)' }}>
-                proyección al día {teamStats.dias_totales}
+              <p className="text-xs mt-2" style={{ color: 'var(--sf-t4)' }}>
+                Venta al día {teamStats.dias_transcurridos}:{' '}
+                <span style={{ color: 'var(--sf-t3)' }}>
+                  {card2USD ? `${configuracion.moneda}${fmtBig(mtdVal)}` : `${fmtBig(mtdVal)} uds`}
+                </span>
               </p>
             </div>
           )
         })()}
 
-        {/* Card 3 — META DEL MES */}
-        <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
-          <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--sf-t5)' }}>
-            Meta — {MESES_CORTO[selectedPeriod.month].toUpperCase()}
-          </p>
-          {teamStats?.meta_equipo ? (
-            <>
-              <p className="text-2xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: cumplimientoFinal >= 100 ? 'var(--sf-green)' : cumplimientoFinal >= 70 ? 'var(--sf-t1)' : 'var(--sf-red)' }}>
-                {Math.round(cumplimientoFinal)}%
-              </p>
-              <p className="text-sm mt-1" style={{ color: 'var(--sf-t2)' }}>
-                {tipoMetaActivo === 'usd' && dataAvailability.has_venta_neta
-                  ? `Meta: ${configuracion.moneda}${fmtBig(metaActiva)}`
-                  : `Meta: ${Math.round(metaActiva).toLocaleString()} uds`
-                }
-              </p>
-              <div className="mt-2 rounded-full overflow-hidden" style={{ height: 4, background: 'var(--sf-inset)' }}>
-                <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(cumplimientoFinal, 100)}%`, background: cumplimientoFinal >= 100 ? 'var(--sf-green)' : cumplimientoFinal >= 70 ? '#eab308' : 'var(--sf-red)' }} />
+        {/* ── Card 3 — MESES CERRADOS ── */}
+        {(() => {
+          if (!metasCerradas) {
+            return (
+              <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
+                <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--sf-t5)' }}>
+                  Meses cerrados
+                </p>
+                <p className="text-sm mt-1" style={{ color: 'var(--sf-t5)' }}>Sin meta configurada</p>
               </div>
-              <p className="text-[10px] mt-1.5 italic" style={{ color: 'var(--sf-t4)' }}>Así proyectas cerrar el mes</p>
-            </>
-          ) : (
+            )
+          }
+          const color3 = metasCerradas.cumplimiento >= 100 ? 'var(--sf-green)' : 'var(--sf-red)'
+          const isUSD3 = tipoMetaActivo === 'usd' && dataAvailability.has_venta_neta
+          const ventaFmt = isUSD3
+            ? `${configuracion.moneda}${fmtBig(metasCerradas.ventaAcum)}`
+            : `${fmtBig(Math.round(metasCerradas.ventaAcum))} uds`
+          const metaFmt = isUSD3
+            ? `${configuracion.moneda}${fmtBig(metasCerradas.metaAcum)}`
+            : `${fmtBig(Math.round(metasCerradas.metaAcum))} uds`
+          return (
+            <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
+              <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--sf-t5)' }}>
+                Meses cerrados — {metasCerradas.mesesLabel}
+              </p>
+              <p className="text-2xl font-bold" style={{ fontFamily: "'DM Mono', monospace", color: color3 }}>
+                {Math.round(metasCerradas.cumplimiento)}%
+              </p>
+              <p className="text-xs mt-2" style={{ color: 'var(--sf-t4)' }}>
+                Venta: <span style={{ color: 'var(--sf-t2)', fontWeight: 600 }}>{ventaFmt}</span>
+                <span className="mx-1.5" style={{ color: 'var(--sf-border)' }}>·</span>
+                Meta: <span style={{ color: 'var(--sf-t3)' }}>{metaFmt}</span>
+              </p>
+            </div>
+          )
+        })()}
+
+        {/* ── Card 4 — MES ACTUAL ── */}
+        <div className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
+          <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--sf-t5)' }}>
+            Mes actual — {MESES_CORTO[selectedPeriod.month].toUpperCase()}
+          </p>
+          {teamStats?.meta_equipo ? (() => {
+            const isUSD4   = tipoMetaActivo === 'usd' && dataAvailability.has_venta_neta
+            const vendido4 = isUSD4 ? estadoMes.ingreso_actual : estadoMes.actual
+            const proy4    = isUSD4 ? proyeccion_neta : proyFinal
+            const realPct  = metaActiva > 0 ? (vendido4 / metaActiva) * 100 : 0
+            const barColor = realPct >= 100 ? 'var(--sf-green)' : realPct >= 70 ? '#eab308' : 'var(--sf-red)'
+            const proyColor = cumplimientoFinal >= 100 ? 'var(--sf-green)' : 'var(--sf-t2)'
+            const fmt4 = (n: number) => isUSD4
+              ? `${configuracion.moneda}${fmtBig(n)}`
+              : `${fmtBig(n)} uds`
+            // Dual-layer bar: scale to projection so vendido and projection are both visible
+            const scale       = Math.max(cumplimientoFinal, 100)
+            const vendidoW    = (realPct / scale) * 100
+            const proyW       = Math.min((cumplimientoFinal / scale) * 100, 100)
+            const metaTickPos = (100 / scale) * 100  // where meta falls in the scaled bar
+            return (
+              <>
+                {/* Meta — referencia */}
+                <div className="flex justify-between items-baseline">
+                  <span className="text-xs" style={{ color: 'var(--sf-t5)' }}>Meta</span>
+                  <span className="text-sm font-semibold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-t4)' }}>{fmt4(metaActiva)}</span>
+                </div>
+                {/* Vendido */}
+                <div className="flex justify-between items-baseline mt-1.5">
+                  <span className="text-xs font-medium" style={{ color: 'var(--sf-t2)' }}>Vendido</span>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-[10px]" style={{ color: barColor }}>{Math.round(realPct)}%</span>
+                    <span className="text-base font-bold" style={{ fontFamily: "'DM Mono', monospace", color: 'var(--sf-t1)' }}>{fmt4(vendido4)}</span>
+                  </div>
+                </div>
+                {/* Dual progress bar */}
+                <div className="relative mt-2 mb-2 rounded-full overflow-hidden" style={{ height: 6, background: 'var(--sf-inset)' }}>
+                  {/* Projection layer (faint) */}
+                  <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${proyW}%`, background: `color-mix(in srgb, var(--sf-green) 22%, transparent)` }} />
+                  {/* Vendido layer (solid) */}
+                  <div className="absolute inset-y-0 left-0 rounded-full transition-all" style={{ width: `${vendidoW}%`, background: barColor }} />
+                  {/* Meta tick — only visible when projection > meta */}
+                  {cumplimientoFinal > 105 && (
+                    <div className="absolute inset-y-0" style={{ left: `${metaTickPos}%`, width: 2, marginLeft: -1, background: 'var(--sf-t5)' }} />
+                  )}
+                </div>
+                {/* Proyección */}
+                <div className="flex justify-between items-baseline">
+                  <span className="text-xs font-medium" style={{ color: proyColor }}>Proyección</span>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-[10px]" style={{ color: 'var(--sf-t4)' }}>{Math.round(cumplimientoFinal)}%</span>
+                    <span className="text-base font-bold" style={{ fontFamily: "'DM Mono', monospace", color: proyColor }}>{fmt4(proy4)}</span>
+                  </div>
+                </div>
+              </>
+            )
+          })() : (
             <p className="text-sm mt-1" style={{ color: 'var(--sf-t5)' }}>Sin meta configurada</p>
           )}
         </div>
+
       </div>
+
+      {/* ── ESTADO GENERAL ──────────────────────────────────────────────────── */}
+      {estadoGeneral && (
+        <div
+          className="intel-fade rounded-xl p-5 mb-6"
+          style={{
+            background: 'var(--sf-card)',
+            border: '1px solid var(--sf-border)',
+            borderLeft: `3px solid ${estadoGeneral.esPositivo ? 'var(--sf-green)' : 'var(--sf-amber)'}`,
+          }}
+        >
+          {/* Header */}
+          <div className="flex items-start justify-between mb-4">
+            <div className="flex items-start gap-2.5">
+              <span className="text-base mt-0.5">{estadoGeneral.emoji}</span>
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-[10px] font-bold uppercase tracking-[0.12em]" style={{ color: 'var(--sf-t5)' }}>
+                    Estado general
+                  </span>
+                  <span className="text-[13px] font-semibold" style={{ color: 'var(--sf-t1)' }}>
+                    {estadoGeneral.titulo}
+                  </span>
+                </div>
+                {(estadoGeneral.conclusion || estadoGeneral.titulo) && (
+                  <p className="text-[11px] leading-snug" style={{ color: 'var(--sf-t3)', margin: 0 }}>
+                    {estadoGeneral.conclusion ?? estadoGeneral.titulo}
+                  </p>
+                )}
+              </div>
+            </div>
+            {estadoGeneral.señalesConvergentes != null && (
+              <span
+                className="shrink-0 text-[11px] px-2 py-0.5 rounded-full"
+                style={{ background: 'var(--sf-inset)', color: 'var(--sf-t3)', cursor: 'help' }}
+                title="Cantidad de hallazgos independientes que apuntan al mismo problema o conclusión."
+              >
+                {estadoGeneral.señalesConvergentes} señales convergentes
+              </span>
+            )}
+          </div>
+
+          {/* Bloques temáticos */}
+          <div className="mb-4">
+            {estadoGeneral.descripcion.split('§§§').filter(Boolean).map((bloque, i, arr) => (
+              <div
+                key={i}
+                style={{
+                  padding: '0.75rem 1rem',
+                  marginBottom: i < arr.length - 1 ? '0.5rem' : 0,
+                  background: 'var(--sf-inset)',
+                  borderRadius: '0.5rem',
+                  borderLeft: '2px solid var(--sf-border)',
+                }}
+              >
+                <p style={{ color: 'var(--sf-t2)', fontSize: '0.82rem', lineHeight: '1.65', margin: 0 }}>
+                  {bloque}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          {/* Acción sugerida */}
+          <div className="flex items-start justify-between gap-4 pt-2" style={{ borderTop: '1px solid var(--sf-border-subtle)' }}>
+            <p className="text-[12px]" style={{ color: 'var(--sf-t3)' }}>
+              <span style={{ color: 'var(--sf-t5)' }}>→</span>{' '}
+              {estadoGeneral.accion?.texto ?? estadoGeneral.accion_sugerida}
+            </p>
+            {estadoGeneral.accion?.ejecutableEn && (
+              <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-full whitespace-nowrap" style={{ background: 'var(--sf-inset)', color: 'var(--sf-t4)' }}>
+                {estadoGeneral.accion.ejecutableEn.replace(/_/g, ' ')}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="space-y-8">
 
@@ -1928,36 +2199,77 @@ export default function EstadoComercialPage() {
         </div>
       </div>
 
-      {/* ── DIAGNÓSTICO DEL MES (v2: tarjetas individuales) ─────────────── */}
-      {diagInsights.length > 0 && (
+      {/* ── ESTADO GENERAL DE LA EMPRESA (PR-FIX.7 — prosa convergente) ────── */}
+      <EstadoGeneralEmpresa />
+
+      {/* ── PANEL EJECUTIVO [Z.9.5] — ATENCIÓN ── */}
+      {EXECUTIVE_COMPRESSION_ENABLED && _execAttention.length > 0 && (
+        <section className="intel-fade space-y-2" style={{ animationDelay: '50ms' }}>
+          <div className="flex items-center gap-3 pb-1">
+            <span className="text-[13px] font-semibold uppercase tracking-wider text-[var(--sf-text-muted)]">
+              HALLAZGOS EJECUTIVOS — ATENCIÓN
+            </span>
+            <span className="text-[12px] font-medium px-2 py-0.5 rounded-full bg-[var(--sf-bg)] border border-[var(--sf-border)] text-[var(--sf-text-muted)]">
+              {_execAttention.length} {_execAttention.length === 1 ? 'hallazgo' : 'hallazgos'}
+            </span>
+          </div>
+          {_execAttention.map(p => (
+            <ExecutiveProblemCard key={p.problemId} problem={p} />
+          ))}
+        </section>
+      )}
+
+      {/* ── PANEL EJECUTIVO [Z.9.5] — OPORTUNIDAD ── */}
+      {EXECUTIVE_COMPRESSION_ENABLED && _execOpportunity.length > 0 && (
+        <section className="intel-fade space-y-2" style={{ animationDelay: '75ms' }}>
+          <div className="flex items-center gap-3 pb-1">
+            <span className="text-[13px] font-semibold uppercase tracking-wider text-[var(--sf-text-muted)]">
+              HALLAZGOS EJECUTIVOS — OPORTUNIDAD
+            </span>
+            <span className="text-[12px] font-medium px-2 py-0.5 rounded-full bg-[var(--sf-bg)] border border-[var(--sf-border)] text-[var(--sf-text-muted)]">
+              {_execOpportunity.length} {_execOpportunity.length === 1 ? 'hallazgo' : 'hallazgos'}
+            </span>
+          </div>
+          {_execOpportunity.map(p => (
+            <ExecutiveProblemCard key={p.problemId} problem={p} />
+          ))}
+        </section>
+      )}
+
+      {/* ── DIAGNÓSTICO DEL MES — R68–R73 (cards enriquecidas v1.9.0) ────────── */}
+      {enrichedBlocks.length > 0 && (
         <section className="intel-fade space-y-3" style={{ animationDelay: '100ms' }}>
           {/* Encabezado */}
           <div className="flex items-center gap-3 pb-1">
             <span className="text-[13px] font-semibold uppercase tracking-wider text-[var(--sf-text-muted)]">
-              DIAGNÓSTICO DEL MES
+              {EXECUTIVE_COMPRESSION_ENABLED && _executiveProblems.length > 0 ? 'OTROS HALLAZGOS' : 'DIAGNÓSTICO DEL MES'}
             </span>
             <span className="text-[12px] font-medium px-2 py-0.5 rounded-full bg-[var(--sf-bg)] border border-[var(--sf-border)] text-[var(--sf-text-muted)]">
-              {diagUrgentes.length + (mostrarAdicionales ? diagAdicionales.length : 0)} hallazgos
+              {enrichedBlocks.length} hallazgos
             </span>
-            {diagCriticaCount > 0 && (
-              <span className="text-[12px] font-semibold px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">
-                {diagCriticaCount} {diagCriticaCount === 1 ? 'urgente' : 'urgentes'}
+            {diagUrgentes.length > 0 && (
+              <span
+                className="text-[12px] font-semibold px-2 py-0.5 rounded-full bg-red-500/15 text-red-400"
+                style={{ cursor: 'help' }}
+                title="Hallazgos con severidad crítica o de advertencia."
+              >
+                {diagUrgentes.length} {diagUrgentes.length === 1 ? 'urgente' : 'urgentes'}
               </span>
             )}
           </div>
 
-          {/* Tarjetas urgentes — CRITICA y ALTA */}
+          {/* Bloques urgentes — CRITICAL y WARNING, orden por |delta| (R73) */}
           <div className="space-y-2.5">
-            {diagUrgentes.map((ins, idx) => (
-              <InsightCardNew
-                key={ins.id}
-                insight={ins}
-                defaultOpen={idx === 0 && ins.prioridad === 'CRITICA'}
+            {diagUrgentes.map((b, idx) => (
+              <DiagnosticBlockView
+                key={b.id}
+                block={b}
+                defaultExpanded={idx === 0 && b.severity === 'critical'}
               />
             ))}
           </div>
 
-          {/* Hallazgos adicionales — MEDIA */}
+          {/* Hallazgos adicionales — INFO / POSITIVE */}
           {diagAdicionales.length > 0 && (
             <>
               <button
@@ -1970,8 +2282,8 @@ export default function EstadoComercialPage() {
               </button>
               {mostrarAdicionales && (
                 <div className="space-y-2.5">
-                  {diagAdicionales.map(ins => (
-                    <InsightCardNew key={ins.id} insight={ins} />
+                  {diagAdicionales.map(b => (
+                    <DiagnosticBlockView key={b.id} block={b} defaultExpanded={false} />
                   ))}
                 </div>
               )}
@@ -1980,10 +2292,6 @@ export default function EstadoComercialPage() {
         </section>
       )}
 
-      {/* DiagnosticBlockView legacy (no renderizado, conservado para no romper imports) */}
-      {false && diagnosticBlocks.length > 0 && (
-        <DiagnosticBlockView block={diagnosticBlocks[0]} defaultExpanded={false} />
-      )}
 
 
       {/* Explorar Dimensiones removed — replaced by Pulso above */}
@@ -2142,7 +2450,7 @@ export default function EstadoComercialPage() {
                 ) : (
                   <>
                     <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 28, fontWeight: 400, color: 'var(--sf-amber)', lineHeight: 1 }}>
-                      {insights.filter(i => i.tipo === 'riesgo_producto').length}
+                      {insights.filter(i => i.tipo === 'riesgo_producto' || i.tipo === 'riesgo_inventario').length}
                     </div>
                     <div className="text-xs mt-1" style={{ color: 'var(--sf-t3)' }}>alertas de producto</div>
                     <div className="text-xs mt-2" style={{ color: 'var(--sf-t3)' }}>

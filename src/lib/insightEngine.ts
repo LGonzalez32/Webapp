@@ -27,6 +27,12 @@ import {
   sustituirJerga,
   contieneJerga,
   esConclusionValida,
+  validarInsight,
+  validarProporcionalidad,
+  validarBalance,
+  sanitizarNarrativa as sanitizarNarrativaStd,
+  validarCoherenciaTemporal,
+  detectarRedundancia,
 } from './insightStandard'
 
 // ────────────────────────────────────────────────────────────
@@ -240,8 +246,8 @@ export function buildCrossTables(
     const dy = fd.getDate()
 
     const vendedor = safeStr(s.vendedor) || '—'
-    const cliente = safeStr(s.cliente ?? s.codigo_cliente)
-    const producto = safeStr(s.producto ?? s.codigo_producto)
+    const cliente = safeStr(s.cliente)
+    const producto = safeStr(s.producto)
     const categoria = safeStr(s.categoria) || 'Sin categoría'
     const canal = safeStr(s.canal)
     const departamento = safeStr(s.departamento)
@@ -652,14 +658,23 @@ function vendedorMetaRiesgo(
       }))
       .sort((a, b) => b.valorPrevYTD - a.valorPrevYTD)
     const topDorm = dormVend[0]
-    const dormValor = topDorm ? topDorm.valorPrevYTD : 0
+    const dormValor = dormVend.reduce((s, d) => s + d.valorPrevYTD, 0)
 
     // Causa: dormido con valor alto o cliente que cayó fuerte
-    const causa = topDorm
-      ? `${topDorm.cliente} no compra hace ${topDorm.dias_sin_actividad} días (compraba ${fmtImp(dormValor, cross.hasVentaNeta)} en el mismo período del año pasado)`
-      : peor
-        ? `${peor.key} cayó ${fmtImp(Math.abs(peor.delta), cross.hasVentaNeta)} contra el año pasado`
-        : 'Caída de actividad en cuentas principales'
+    let causa: string
+    if (dormVend.length >= 3) {
+      const d1 = dormVend[0], d2 = dormVend[1]
+      causa = `${d1.cliente} no compra hace ${d1.dias_sin_actividad} días (${fmtImp(d1.valorPrevYTD, cross.hasVentaNeta)} en el mismo período del año pasado); ${d2.cliente} tampoco compra hace ${d2.dias_sin_actividad} días (${fmtImp(d2.valorPrevYTD, cross.hasVentaNeta)}) y ${dormVend.length - 2} más`
+    } else if (dormVend.length === 2) {
+      const d1 = dormVend[0], d2 = dormVend[1]
+      causa = `${d1.cliente} no compra hace ${d1.dias_sin_actividad} días (${fmtImp(d1.valorPrevYTD, cross.hasVentaNeta)} en el mismo período del año pasado); ${d2.cliente} tampoco compra hace ${d2.dias_sin_actividad} días (${fmtImp(d2.valorPrevYTD, cross.hasVentaNeta)})`
+    } else if (topDorm) {
+      causa = `${topDorm.cliente} no compra hace ${topDorm.dias_sin_actividad} días (compraba ${fmtImp(dormValor, cross.hasVentaNeta)} en el mismo período del año pasado)`
+    } else if (peor) {
+      causa = `${peor.key} cayó ${fmtImp(Math.abs(peor.delta), cross.hasVentaNeta)} contra el año pasado`
+    } else {
+      causa = 'Caída de actividad en cuentas principales'
+    }
 
     // Contraste portafolio
     const totalCartera = ytd.net
@@ -685,19 +700,26 @@ function vendedorMetaRiesgo(
       `Lleva ${fmtImp(meta.ventaActual, meta.tipoMeta === 'usd')} al día ${cross.diaDelMes} y necesita ${fmtImp(meta.gap, meta.tipoMeta === 'usd')} más en ${cross.diasEnMes - cross.diaDelMes} días para cerrar la meta.${churnFrase}`,
     ].filter(Boolean).join(' ')
 
-    const conclusion = topDorm
-      ? `Sin reactivar a ${topDorm.cliente} la meta queda fuera de alcance.`
-      : `El ritmo actual deja al vendedor ${fmtPct(80 - meta.pctProyeccion)} debajo del umbral de cumplimiento.`
+    const conclusion = dormVend.length >= 2
+      ? `Sin reactivar a estos ${dormVend.length} clientes la meta queda fuera de alcance.`
+      : topDorm
+        ? `Sin reactivar a ${topDorm.cliente} la meta queda fuera de alcance.`
+        : `El ritmo actual deja al vendedor ${fmtPct(80 - meta.pctProyeccion)} debajo del umbral de cumplimiento.`
 
     const entidades = [vendedor]
-    if (topDorm) entidades.push(topDorm.cliente)
-    else if (peor) entidades.push(peor.key)
+    if (dormVend.length > 0) {
+      dormVend.slice(0, 3).forEach(d => entidades.push(d.cliente))
+    } else if (peor) {
+      entidades.push(peor.key)
+    }
 
-    const accionTexto = topDorm
-      ? `Visita inmediata a ${topDorm.cliente} con la oferta usual; si responde, recupera ${fmtImp(dormValor, cross.hasVentaNeta)} del mismo período del año pasado.`
-      : peor
-        ? `Reunión esta semana con ${peor.key} para entender la caída de ${fmtImp(Math.abs(peor.delta), cross.hasVentaNeta)}.`
-        : `Llamada de seguimiento a sus 3 clientes principales para confirmar pedidos del cierre de mes.`
+    const accionTexto = dormVend.length >= 2
+      ? `Visita inmediata a ${dormVend[0].cliente} y ${dormVend[1].cliente} con la oferta usual; juntos representan ${fmtImp(dormVend[0].valorPrevYTD + dormVend[1].valorPrevYTD, cross.hasVentaNeta)} del mismo período del año pasado.`
+      : topDorm
+        ? `Visita inmediata a ${topDorm.cliente} con la oferta usual; si responde, recupera ${fmtImp(dormValor, cross.hasVentaNeta)} del mismo período del año pasado.`
+        : peor
+          ? `Reunión esta semana con ${peor.key} para entender la caída de ${fmtImp(Math.abs(peor.delta), cross.hasVentaNeta)}.`
+          : `Llamada de seguimiento a sus 3 clientes principales para confirmar pedidos del cierre de mes.`
 
     const cruces = ['ventas', 'vendedor', 'cliente', 'metas']
     if (dormVend.length > 0) cruces.push('dormidos')
@@ -709,7 +731,13 @@ function vendedorMetaRiesgo(
       tipo: 'riesgo_meta',
       prioridad: 'CRITICA',
       emoji: '⚠️',
-      titulo: `${vendedor} no llegará a su meta de ${mesNombre}`,
+      titulo: topDorm && dormVend.length >= 2
+        ? `${vendedor} pierde ritmo — ${dormVend.length} clientes dejaron de comprar`
+        : topDorm
+          ? `${vendedor} pierde ritmo — ${topDorm.cliente} lleva ${topDorm.dias_sin_actividad} días sin comprar`
+          : meta.pctProyeccion < 70
+            ? `${vendedor} no llegará a su meta de ${mesNombre}`
+            : `${vendedor} necesita acelerar para cerrar ${mesNombre}`,
       descripcion: narrativa,
       vendedor,
       valor_numerico: Math.round(meta.pctProyeccion),
@@ -911,7 +939,7 @@ function productoMuerto(
         respaldo: `${grupo.length} productos · ${fmtImp(totalPrev, cross.hasVentaNeta)} histórico`,
         ejecutableEn: 'esta_semana',
       },
-      contrastePortafolio: `${grupo.length} productos representan ${fmtPct(pctOf(totalPrev, cross.totalPrevYTD))} de las ventas históricas YTD del año pasado`,
+      contrastePortafolio: `${grupo.length} productos representan ${fmtPct(pctOf(totalPrev, cross.totalPrevYTD))} de las ventas históricas del período anterior`,
       cruces,
       inventarioContext: totalStock > 0 ? {
         stock: totalStock,
@@ -1008,7 +1036,7 @@ function inventarioDesabasto(
 
   return [{
     id: uid('inventario-desabasto'),
-    tipo: 'riesgo_producto',
+    tipo: 'riesgo_inventario',
     prioridad: 'CRITICA',
     emoji: '📉',
     titulo: urgentes.length > 0
@@ -1152,295 +1180,8 @@ function vendedorMejorMomento(
   return out
 }
 
-// Generador 5 — vendedorConcentracion
-function vendedorConcentracion(
-  cross: CrossTables,
-  metas: MetaRecord[],
-): CandidatoInterno[] {
-  const out: CandidatoInterno[] = []
 
-  // Bug 5 fix: umbral dinámico — si TODOS están concentrados, sólo alertar sobre extremos
-  // Paso 1: calcular pctTop1 de cada vendedor para obtener mediana del equipo
-  type Row = {
-    vendedor: string
-    ytd: typeof cross.vendorYTD extends Map<string, infer V> ? V : never
-    sorted: Array<[string, number]>
-    pctTop1: number
-    pctTop2: number
-  }
-  const rows: Row[] = []
-  for (const [vendedor, ytd] of cross.vendorYTD) {
-    if (ytd.clients.size === 0 || ytd.net <= 0) continue
-    const sorted = [...ytd.clients.entries()].sort((a, b) => b[1] - a[1])
-    const top1 = sorted[0]
-    const top2Sum = sorted.slice(0, 2).reduce((s, [, v]) => s + v, 0)
-    rows.push({
-      vendedor,
-      ytd,
-      sorted,
-      pctTop1: pctOf(top1[1], ytd.net),
-      pctTop2: pctOf(top2Sum, ytd.net),
-    })
-  }
-  if (rows.length === 0) return out
 
-  const pcts = rows.map(r => r.pctTop1).sort((a, b) => a - b)
-  const medianaTop1 = pcts[Math.floor(pcts.length / 2)] ?? 0
-  const p75Top1 = pcts[Math.floor(pcts.length * 0.75)] ?? 0
-
-  // Si la mediana del equipo ya está concentrada (>35%), subir umbral dinámicamente al P75
-  const umbralTop1 = medianaTop1 > 35 ? Math.max(40, p75Top1) : 40
-  const umbralTop2 = 60
-
-  for (const row of rows) {
-    const { vendedor, ytd, sorted, pctTop1, pctTop2 } = row
-    const top1 = sorted[0]
-
-    // Pre-calcular meta para regla "concentrado Y meta en riesgo"
-    const mtdEarly = cross.vendorMTD.get(vendedor)
-    const metaEarly = mtdEarly ? resolverMetaMes(vendedor, metas, cross.fechaRef, mtdEarly.net, mtdEarly.uds, cross.diaDelMes, cross.diasEnMes) : null
-    const metaEnRiesgo = metaEarly ? metaEarly.pctProyeccion < 80 : false
-
-    // Sólo si: top1 > umbralTop1 OR top2 > umbralTop2 OR (concentrado moderado Y meta en riesgo)
-    const moderado = pctTop1 >= 35 || pctTop2 >= 50
-    const cumple = pctTop1 >= umbralTop1 || pctTop2 >= umbralTop2 || (moderado && metaEnRiesgo)
-    if (!cumple) continue
-
-    const meta = metaEarly
-    const cumpleMeta = meta ? meta.pctProyeccion >= 95 : null
-    const cruces = ['ventas', 'vendedor', 'cliente']
-    if (meta) cruces.push('metas')
-
-    const concentMsg = pctTop1 >= 35
-      ? `${top1[0]} concentra ${fmtPct(pctTop1)} de su cartera`
-      : `${sorted[0][0]} y ${sorted[1][0]} concentran ${fmtPct(pctTop2)} de su cartera`
-
-    const narrativa = [
-      `${vendedor}: ${concentMsg}.`,
-      cumpleMeta === true
-        ? `Cumple su meta proyectada (${fmtPct(meta!.pctProyeccion)}), pero su negocio depende de muy pocos clientes.`
-        : cumpleMeta === false
-          ? `Además proyecta cerrar el mes en ${fmtPct(meta!.pctProyeccion)} de meta.`
-          : `Esto lo hace vulnerable a cualquier cambio de esos clientes.`,
-      `Si ${top1[0]} reduce un 30% sus compras, el vendedor pierde ${fmtImp(top1[1] * 0.3, cross.hasVentaNeta)} YTD.`,
-    ].join(' ')
-
-    const conclusion = cumpleMeta === true
-      ? `Está cumpliendo, pero un movimiento de ${top1[0]} pone en riesgo todo su año.`
-      : `La concentración amplifica cualquier caída de ${top1[0]}.`
-
-    out.push({
-      id: uid('concentracion'),
-      tipo: 'cruzado',
-      prioridad: 'ALTA',
-      emoji: '🎯',
-      titulo: `${vendedor} depende demasiado de ${top1[0]}`,
-      descripcion: narrativa,
-      vendedor,
-      cliente: top1[0],
-      valor_numerico: Math.round(pctTop1),
-      impacto_economico: {
-        valor: top1[1],
-        descripcion: `${fmtImp(top1[1], cross.hasVentaNeta)} concentrados en un solo cliente`,
-        tipo: 'riesgo',
-      },
-      conclusion,
-      accion: {
-        texto: `Identificar y abrir 2 clientes nuevos del mismo perfil que ${top1[0]} este mes para reducir dependencia.`,
-        entidades: [vendedor, top1[0]],
-        respaldo: `${fmtPct(pctTop1)} de la cartera en ${top1[0]}`,
-        ejecutableEn: 'este_mes',
-      },
-      contrastePortafolio: `${top1[0]} = ${fmtPct(pctTop1)} de la cartera del vendedor; los siguientes 2 clientes apenas suman ${fmtPct(pctOf(sorted.slice(1, 3).reduce((s, [, v]) => s + v, 0), ytd.net))}`,
-      cruces,
-      metaContext: meta ? {
-        metaMes: Math.round(meta.metaMes),
-        cumplimiento: Math.round(meta.cumplimiento),
-        gap: Math.round(meta.gap),
-        proyeccion: Math.round(meta.proyeccion),
-        tipoMeta: meta.tipoMeta,
-      } : undefined,
-      esPositivo: false,
-      esAccionable: true,
-      señalesConvergentes: 1 + (cumpleMeta === false ? 1 : 0),
-      __impactoAbs: top1[1],
-      __crucesCount: cruces.length,
-      __esAccionable: true,
-      __esPositivo: false,
-    })
-  }
-  return out
-}
-
-// Generador 6 — departamentoCaida
-function departamentoCaida(cross: CrossTables): CandidatoInterno[] {
-  const out: CandidatoInterno[] = []
-
-  // Variaciones negativas
-  const variaciones: Array<{ dept: string; ytd: number; prev: number; varPct: number; delta: number }> = []
-  for (const [dept, ytd] of cross.deptYTD) {
-    const prev = cross.deptPrevYTD.get(dept)?.net ?? 0
-    if (prev <= 0) continue
-    const varPct = ((ytd.net - prev) / prev) * 100
-    if (varPct >= 0) continue
-    variaciones.push({ dept, ytd: ytd.net, prev, varPct, delta: ytd.net - prev })
-  }
-  if (variaciones.length === 0) return out
-
-  // Percentil 75 de las caídas (las más severas)
-  variaciones.sort((a, b) => a.varPct - b.varPct)
-  const idxP75 = Math.floor(variaciones.length * 0.25)
-  const umbral = variaciones[idxP75]?.varPct ?? -100
-
-  for (const item of variaciones) {
-    if (item.varPct > umbral) continue
-    const ytd = cross.deptYTD.get(item.dept)!
-    if (ytd.vendors.size === 0) continue
-    const topVendedor = [...ytd.vendors.entries()].sort((a, b) => b[1] - a[1])[0][0]
-    const vMTD = cross.vendorMTD.get(topVendedor)
-    const vendorVarYTD = (() => {
-      const v = cross.vendorYTD.get(topVendedor)?.net ?? 0
-      const p = cross.vendorPrevYTD.get(topVendedor)?.net ?? 0
-      return p > 0 ? ((v - p) / p) * 100 : 0
-    })()
-
-    // ¿Mercado o ejecución?
-    // Si el vendedor cae más fuerte que el departamento, es ejecución; si menos, es mercado
-    const tipo = Math.abs(vendorVarYTD) > Math.abs(item.varPct) ? 'ejecución' : 'mercado'
-    const cruces = ['ventas', 'departamento', 'vendedor']
-    if (vMTD) cruces.push('cliente')
-
-    const narrativa = [
-      `${item.dept} cae ${fmtPct(Math.abs(item.varPct))} YTD (de ${fmtImp(item.prev, cross.hasVentaNeta)} a ${fmtImp(item.ytd, cross.hasVentaNeta)}).`,
-      `${topVendedor} es el principal vendedor de la zona y su variación personal es ${fmtPct(vendorVarYTD)}.`,
-      tipo === 'ejecución'
-        ? `Como cae más rápido que el departamento, la causa apunta a ejecución del vendedor.`
-        : `Como cae menos que el departamento, la causa apunta al mercado de la zona.`,
-    ].join(' ')
-
-    const conclusion = tipo === 'ejecución'
-      ? `Hay que trabajar con ${topVendedor} en su gestión, no tratar la zona como problema externo.`
-      : `Es un problema de mercado en ${item.dept}, requiere estrategia distinta a la de otras zonas.`
-
-    out.push({
-      // Bug 7 fix: NO setear vendedor (evita ser deduplicado contra insights individuales del vendedor)
-      id: uid('depto-caida'),
-      tipo: 'cruzado',
-      prioridad: 'ALTA',
-      emoji: '📉',
-      titulo: `${item.dept} cae ${fmtPct(Math.abs(item.varPct))} YTD`,
-      descripcion: narrativa,
-      valor_numerico: Math.round(Math.abs(item.varPct)),
-      impacto_economico: {
-        valor: Math.abs(item.delta),
-        descripcion: `${fmtImp(Math.abs(item.delta), cross.hasVentaNeta)} de caída anual`,
-        tipo: 'perdida',
-      },
-      conclusion,
-      accion: {
-        texto: tipo === 'ejecución'
-          ? `Acompañar a ${topVendedor} en visitas a sus 3 cuentas principales esta semana.`
-          : `Redefinir estrategia comercial para ${item.dept} con incentivos específicos.`,
-        entidades: [item.dept, topVendedor],
-        respaldo: `${fmtPct(Math.abs(item.varPct))} caída YTD`,
-        ejecutableEn: 'esta_semana',
-      },
-      contrastePortafolio: `${item.dept} pesa ${fmtPct(pctOf(item.ytd, cross.totalYTD))} del total YTD`,
-      cruces,
-      esPositivo: false,
-      esAccionable: true,
-      señalesConvergentes: 2,
-      __impactoAbs: Math.abs(item.delta),
-      __crucesCount: cruces.length,
-      __esAccionable: true,
-      __esPositivo: false,
-    })
-  }
-  return out
-}
-
-// Generador 7 — vendedorCarteraPequeña
-function vendedorCarteraPequeña(
-  cross: CrossTables,
-  metas: MetaRecord[],
-): CandidatoInterno[] {
-  const out: CandidatoInterno[] = []
-  for (const [vendedor, ytd] of cross.vendorYTD) {
-    if (ytd.clients.size >= 4) continue
-
-    // ¿Su departamento principal está en caída?
-    const topDept = [...ytd.depts.entries()].sort((a, b) => b[1] - a[1])[0]
-    const deptYTD = topDept ? cross.deptYTD.get(topDept[0])?.net ?? 0 : 0
-    const deptPrev = topDept ? cross.deptPrevYTD.get(topDept[0])?.net ?? 0 : 0
-    const deptVar = deptPrev > 0 ? ((deptYTD - deptPrev) / deptPrev) * 100 : 0
-    if (deptVar >= -2) continue // solo si la zona también cae
-
-    const mtd = cross.vendorMTD.get(vendedor)
-    const meta = mtd ? resolverMetaMes(vendedor, metas, cross.fechaRef, mtd.net, mtd.uds, cross.diaDelMes, cross.diasEnMes) : null
-
-    // Productos perdidos
-    const prev = cross.vendorPrevYTD.get(vendedor)
-    const ausentesProd = clientesAusentes(prev?.prods, ytd.prods).slice(0, 2)
-    const ausentesCli = clientesAusentes(prev?.clients, ytd.clients).slice(0, 2)
-
-    const cruces = ['ventas', 'vendedor', 'cliente', 'departamento']
-    if (meta) cruces.push('metas')
-    if (ausentesProd.length > 0) cruces.push('producto')
-
-    const narrativa = [
-      `${vendedor} trabaja con sólo ${ytd.clients.size} clientes activos${topDept ? ` en ${topDept[0]}` : ''}, una zona que también cae ${fmtPct(Math.abs(deptVar))} YTD.`,
-      ausentesCli.length > 0 ? `Perdió clientes históricos: ${ausentesCli.map(a => a.cliente).join(', ')}.` : '',
-      ausentesProd.length > 0 ? `Productos que dejó de mover: ${ausentesProd.map(a => a.cliente).join(', ')}.` : '',
-      meta ? `Su meta del mes proyecta cerrar en ${fmtPct(meta.pctProyeccion)}.` : '',
-    ].filter(Boolean).join(' ')
-
-    const conclusion = meta && meta.pctProyeccion < 80
-      ? `Cartera reducida, zona en caída y meta en riesgo: necesita expansión inmediata.`
-      : `Cartera reducida en zona estancada — cualquier baja amenaza el cierre del año.`
-
-    out.push({
-      id: uid('cartera-pequeña'),
-      tipo: 'riesgo_vendedor',
-      prioridad: 'ALTA',
-      emoji: '🔍',
-      titulo: `${vendedor} con cartera demasiado pequeña`,
-      descripcion: narrativa,
-      vendedor,
-      valor_numerico: ytd.clients.size,
-      impacto_economico: {
-        valor: ytd.net,
-        descripcion: `${fmtImp(ytd.net, cross.hasVentaNeta)} concentrados en ${ytd.clients.size} clientes`,
-        tipo: 'riesgo',
-      },
-      conclusion,
-      accion: {
-        texto: `Definir 5 prospectos concretos en ${topDept ? topDept[0] : 'su zona'} y agendar visitas de apertura este mes.`,
-        entidades: [vendedor, ...(topDept ? [topDept[0]] : [])],
-        respaldo: `${ytd.clients.size} clientes activos vs zona cayendo ${fmtPct(Math.abs(deptVar))}`,
-        ejecutableEn: 'este_mes',
-      },
-      contrastePortafolio: topDept
-        ? `${topDept[0]} cae ${fmtPct(Math.abs(deptVar))} YTD; este vendedor representa ${fmtPct(pctOf(ytd.net, deptYTD))} de la zona`
-        : undefined,
-      cruces,
-      metaContext: meta ? {
-        metaMes: Math.round(meta.metaMes),
-        cumplimiento: Math.round(meta.cumplimiento),
-        gap: Math.round(meta.gap),
-        proyeccion: Math.round(meta.proyeccion),
-        tipoMeta: meta.tipoMeta,
-      } : undefined,
-      esPositivo: false,
-      esAccionable: true,
-      señalesConvergentes: 2 + (ausentesCli.length > 0 ? 1 : 0),
-      __impactoAbs: ytd.net,
-      __crucesCount: cruces.length,
-      __esAccionable: true,
-      __esPositivo: false,
-    })
-  }
-  return out
-}
 
 // Generador 8 — productoOportunidad
 function productoOportunidad(
@@ -1573,10 +1314,90 @@ function productoOportunidad(
   return out
 }
 
+// ── Sanitizador de narrativa para equipoContexto ──────────────────────────────
+function sanitizarNarrativa(texto: string, ctx: { diaDelMes: number; diasEnMes: number }): string {
+  let result = texto;
+
+  // ── 1. CONCORDANCIA TEMPORAL ──
+  // Si el mes NO ha cerrado, reemplazar verbos en pasado que implican cierre
+  if (ctx.diaDelMes < ctx.diasEnMes) {
+    result = result
+      .replace(/\bcerró al\b/g, 'lleva el')
+      .replace(/\bcerró con\b/g, 'lleva')
+      .replace(/\bcerró en\b/g, 'va en')
+      .replace(/\bcerraron al\b/g, 'llevan el')
+      .replace(/\bcerraron con\b/g, 'llevan')
+      .replace(/\bal cierre del mes\b/g, 'a día de hoy')
+      .replace(/\bel mes cerró\b/g, 'el mes va')
+      .replace(/\bterminó con\b/g, 'lleva')
+      .replace(/\bterminaron con\b/g, 'llevan');
+  }
+
+  // ── 2. CONCORDANCIA GRAMATICAL SINGULAR/PLURAL ──
+  result = result.replace(
+    /(\w+(?:\s+y\s+\w+)+)\s+es\s+la\s+más/g,
+    '$1 son las más'
+  );
+  result = result.replace(
+    /(\w+(?:\s+y\s+\w+)+)\s+es\s+el\s+más/g,
+    '$1 son los más'
+  );
+
+  // "con NombreÚnico — llevan" → "lleva" (singular)
+  result = result.replace(
+    /con\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)*)\s+—\s+llevan\b/g,
+    (match, nombre) => {
+      if (!nombre.includes(' y ')) {
+        return `con ${nombre} — lleva`;
+      }
+      return match;
+    }
+  );
+
+  // "[nombre sin 'y'] — llevan" → "lleva"
+  result = result.replace(
+    /([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){0,3})\s+—\s+llevan\b(?!.*\by\b)/g,
+    (match, nombre) => {
+      if (!nombre.includes(' y ')) {
+        return match.replace('llevan', 'lleva');
+      }
+      return match;
+    }
+  );
+
+  // ── 3. REDUNDANCIAS ──
+  // Si dos bloques consecutivos empiezan con "En productos", renombrar el segundo
+  const parts = result.split('§§§');
+  for (let i = 1; i < parts.length; i++) {
+    if (parts[i].trimStart().startsWith('En productos') &&
+        parts[i - 1].includes('En productos')) {
+      parts[i] = parts[i].replace(/^(\s*)En productos,/, '$1A nivel de categorías,');
+    }
+  }
+  result = parts.join('§§§');
+
+  return result;
+}
+
+// R63 — Severidad léxica acotada por magnitud
+function lexSev(pct: number): string {
+  const abs = Math.abs(pct)
+  const pos = pct >= 0
+  if (abs < 5)  return 'se mantiene'
+  if (abs < 15) return pos ? 'crece' : 'cae'
+  if (abs < 30) return pos ? 'sube notablemente' : 'retrocede'
+  if (abs < 50) return pos ? 'se dispara' : 'colapsa'
+  return pos ? 'se dispara con fuerza' : 'colapsa drásticamente'
+}
+
 // Generador 9 — equipoContexto
 function equipoContexto(
   cross: CrossTables,
   metas: MetaRecord[],
+  vendorAnalysis: VendorAnalysis[] = [],
+  categoriaAnalysis: CategoriaAnalysis[] = [],
+  canalAnalysis: CanalAnalysis[] = [],
+  supervisorAnalysis: SupervisorAnalysis[] = [],
 ): CandidatoInterno[] {
   const variacion = cross.totalPrevYTD > 0
     ? ((cross.totalYTD - cross.totalPrevYTD) / cross.totalPrevYTD) * 100
@@ -1615,17 +1436,243 @@ function equipoContexto(
     else if (dy.net < prev) depsCaen++
   }
 
-  const narrativa = [
-    `La empresa lleva ${fmtImp(cross.totalYTD, cross.hasVentaNeta)} YTD (${variacion >= 0 ? '+' : ''}${fmtPct(variacion)} vs mismo período del año pasado).`,
-    `En el mes en curso lleva ${fmtImp(cross.totalMTD, cross.hasVentaNeta)}, ${variacionMTD >= 0 ? '+' : ''}${fmtPct(variacionMTD)} contra el año anterior.`,
-    `${creciendo} vendedores crecen, ${cayendo} caen.`,
-    totalConMeta > 0 ? `${cumplenMeta} de ${totalConMeta} cumplen meta proyectada.` : '',
-    `${depsCrecen} zonas con crecimiento, ${depsCaen} zonas en caída.`,
-  ].filter(Boolean).join(' ')
+  // ── Storytelling narrative ────────────────────────────────────
+  let narrativa: string
+  let conclusion: string
+  let accionTexto: string
+  let accionEntidades: string[]
+  let crucesCalc: string[] = ['ventas', 'vendedor', 'metas', 'departamento', 'cliente']
+  let señalesCalc = 4
 
-  const conclusion = variacion >= 0
-    ? `El año va arriba pero el ritmo del mes ${variacionMTD >= 0 ? 'lo confirma' : 'es más débil que lo esperado'}.`
-    : `El año va abajo y la mayoría del equipo todavía no compensa la caída.`
+  if (vendorAnalysis.length === 0) {
+    // Fallback al comportamiento original
+    narrativa = [
+      `La empresa lleva ${fmtImp(cross.totalYTD, cross.hasVentaNeta)} YTD (${variacion >= 0 ? '+' : ''}${fmtPct(variacion)} vs mismo período del año pasado).`,
+      `En el mes en curso lleva ${fmtImp(cross.totalMTD, cross.hasVentaNeta)}, ${variacionMTD >= 0 ? '+' : ''}${fmtPct(variacionMTD)} contra el año anterior.`,
+      `${creciendo} vendedores crecen, ${cayendo} caen.`,
+      totalConMeta > 0 ? `${cumplenMeta} de ${totalConMeta} cumplen meta proyectada.` : '',
+      `${depsCrecen} zonas con crecimiento, ${depsCaen} zonas en caída.`,
+    ].filter(Boolean).join(' ')
+
+    conclusion = variacion >= 0
+      ? `El año va arriba pero el ritmo del mes ${variacionMTD >= 0 ? 'lo confirma' : 'es más débil que lo esperado'}.`
+      : `El año va abajo y la mayoría del equipo todavía no compensa la caída.`
+
+    accionTexto = cayendo > creciendo
+      ? `Reunión de revisión con los ${cayendo} vendedores en caída esta semana antes de definir cierre de mes.`
+      : `Mantener seguimiento a los ${creciendo} vendedores en crecimiento para asegurar el ritmo de cierre.`
+    accionEntidades = ['equipo']
+  } else {
+    // ── Datos de clientes y productos ──
+    const clientesActivos = cross.clientYTD.size
+    const clientesPrev = cross.clientPrevYTD.size
+    const varClientes = clientesPrev > 0 ? ((clientesActivos - clientesPrev) / clientesPrev * 100) : 0
+
+    const productosActivos = cross.prodYTD.size
+    const productosPrev = cross.prodPrevYTD.size
+    const varProductos = productosPrev > 0 ? ((productosActivos - productosPrev) / productosPrev * 100) : 0
+
+    // Concentración: top 3 clientes vs total
+    let topClientesPct = 0
+    if (cross.clientYTD.size > 0 && cross.totalYTD > 0) {
+      const clientArr = Array.from(cross.clientYTD.values()).map(b => b.net).sort((a, b) => b - a)
+      const top3 = clientArr.slice(0, 3).reduce((s, v) => s + v, 0)
+      topClientesPct = (top3 / cross.totalYTD) * 100
+    }
+
+    const enRiesgo = vendorAnalysis.filter(v => v.riesgo === 'riesgo' || v.riesgo === 'critico')
+
+    // R56/R57: elegir la unidad más representativa (dinero si existe, si no unidades)
+    const pickYtdVar = (v: VendorAnalysis) => v.variacion_ytd_usd_pct ?? v.variacion_ytd_uds_pct ?? 0
+    const topPerformer = vendorAnalysis.reduce((best, v) =>
+      pickYtdVar(v) > pickYtdVar(best) ? v : best
+    , vendorAnalysis[0])
+
+    // ── Bloque 1: Apertura y equipo ──
+    let bloque1: string
+    const topVar = pickYtdVar(topPerformer)
+
+    if (enRiesgo.length > 0 && topVar > 5) {
+      const peorRiesgo = enRiesgo.reduce((worst, v) =>
+        (v.cumplimiento_pct ?? 0) < (worst.cumplimiento_pct ?? 0) ? v : worst
+      , enRiesgo[0])
+      const peorRiesgoCumpl = (peorRiesgo.cumplimiento_pct ?? 0).toFixed(1)
+      const peorRiesgoVar = Math.abs(pickYtdVar(peorRiesgo)).toFixed(1)
+      bloque1 = `El negocio está aguantando, pero con focos claros de atención. Lo positivo: ${topPerformer.vendedor} sigue siendo motor de crecimiento del equipo. Lo preocupante: ${peorRiesgo.vendedor} no logra remontar — cerró al ${peorRiesgoCumpl}% de meta y ya acumula ${peorRiesgoVar}% de caída en el año, lo que empieza a pesar en el resultado general.`
+    } else if (creciendo >= cayendo && variacion >= 0) {
+      const topSorted = vendorAnalysis
+        .slice()
+        .sort((a, b) => pickYtdVar(b) - pickYtdVar(a))
+        .slice(0, 2)
+      if (topSorted.length >= 2) {
+        const v1Pct = pickYtdVar(topSorted[0]).toFixed(1)
+        const v2Pct = pickYtdVar(topSorted[1]).toFixed(1)
+        bloque1 = `El equipo viene con buen ritmo. ${topSorted[0].vendedor} y ${topSorted[1].vendedor} están empujando el resultado con subidas de ${v1Pct}% y ${v2Pct}% respectivamente, y la mayoría está en línea con la meta.`
+      } else {
+        const v1Pct = pickYtdVar(topSorted[0]).toFixed(1)
+        bloque1 = `El equipo viene con buen ritmo. ${topSorted[0].vendedor} está empujando el resultado con una subida de ${v1Pct}%, y la mayoría está en línea con la meta.`
+      }
+    } else {
+      const bottom2 = vendorAnalysis
+        .slice()
+        .sort((a, b) => (a.cumplimiento_pct ?? 0) - (b.cumplimiento_pct ?? 0))
+        .slice(0, 2)
+      const minCumpl = Math.min(bottom2[0].cumplimiento_pct ?? 0, bottom2[1]?.cumplimiento_pct ?? 100)
+      const names = bottom2.length >= 2
+        ? `${bottom2[0].vendedor} y ${bottom2[1].vendedor}`
+        : bottom2[0].vendedor
+      bloque1 = `El equipo está en una fase complicada. Solo ${creciendo} de ${creciendo + cayendo} vendedores crecen contra el año pasado, y ${names} son los más rezagados — ambos por debajo del ${minCumpl.toFixed(1)}% de meta.`
+    }
+
+    // Enriquecer bloque1 con contexto de supervisor si hay uno en riesgo claro
+    // R64: usar YTD UDS (ytd_actual_uds/ytd_anterior_uds) — no variacion_pct que es MTD
+    if (supervisorAnalysis.length > 0 && bloque1) {
+      const supConYTD = supervisorAnalysis
+        .map(s => {
+          const ytdPct = s.ytd_anterior_uds > 0
+            ? ((s.ytd_actual_uds - s.ytd_anterior_uds) / s.ytd_anterior_uds) * 100
+            : null
+          return { ...s, ytdPct }
+        })
+        .filter(s => s.vendedores_criticos > 0 || (s.ytdPct !== null && s.ytdPct < -10))
+        .sort((a, b) => (a.ytdPct ?? 0) - (b.ytdPct ?? 0))
+      if (supConYTD.length > 0) {
+        const sup = supConYTD[0]
+        const ytdLabel = sup.ytdPct !== null
+          ? ` (${sup.ytdPct >= 0 ? '+' : ''}${sup.ytdPct.toFixed(1)}% YTD)`
+          : ''
+        bloque1 += ` La zona de ${sup.supervisor}${ytdLabel} es la que más presiona el resultado${sup.vendedores_criticos > 0 ? ` con ${sup.vendedores_criticos} vendedor${sup.vendedores_criticos > 1 ? 'es' : ''} en zona crítica` : ''}.`
+      }
+    }
+
+    // ── Bloque 2: Territorio y canales ──
+    const deptVars: Array<{ dept: string; varPct: number }> = []
+    for (const [dept, dy] of cross.deptYTD) {
+      const prevNet = cross.deptPrevYTD.get(dept)?.net ?? 0
+      if (prevNet <= 0) continue
+      deptVars.push({ dept, varPct: ((dy.net - prevNet) / prevNet) * 100 })
+    }
+
+    // R64: canal YTD desde cross tables (misma ventana/métrica que el resto del bloque)
+    const canalYTDVars: Array<{ canal: string; varPct: number }> = []
+    for (const [canal, cy] of cross.canalYTD) {
+      const prev = cross.canalPrevYTD.get(canal)?.net ?? 0
+      if (prev > 0) canalYTDVars.push({ canal, varPct: ((cy.net - prev) / prev) * 100 })
+    }
+    canalYTDVars.sort((a, b) => a.varPct - b.varPct)
+
+    let bloque2 = ''
+    if (deptVars.length >= 2) {
+      const bestDept = deptVars.reduce((b, d) => d.varPct > b.varPct ? d : b)
+      const worstDept = deptVars.reduce((w, d) => d.varPct < w.varPct ? d : w)
+      let canalPart = ''
+      if (canalYTDVars.length >= 2) {
+        const canalCaida = canalYTDVars[0]
+        const canalEstable = canalYTDVars[canalYTDVars.length - 1]
+        canalPart = ` En canales (YTD), ${canalCaida.canal} ${lexSev(canalCaida.varPct)} un ${Math.abs(canalCaida.varPct).toFixed(1)}% mientras ${canalEstable.canal} ${lexSev(canalEstable.varPct)} — vale la pena entender qué está pasando distinto en cada uno.`
+      } else if (canalYTDVars.length === 1) {
+        const c = canalYTDVars[0]
+        canalPart = ` El canal ${c.canal} ${lexSev(c.varPct)} un ${Math.abs(c.varPct).toFixed(1)}% en el año.`
+      }
+      bloque2 = `Territorialmente, ${bestDept.dept} (+${bestDept.varPct.toFixed(1)}%) está compensando la caída de ${worstDept.dept} (${worstDept.varPct.toFixed(1)}%), que se ha convertido en la zona más débil.${canalPart}`
+    } else if (canalYTDVars.length >= 2) {
+      const canalCaida = canalYTDVars[0]
+      const canalEstable = canalYTDVars[canalYTDVars.length - 1]
+      bloque2 = `En canales (YTD), ${canalCaida.canal} ${lexSev(canalCaida.varPct)} un ${Math.abs(canalCaida.varPct).toFixed(1)}% mientras ${canalEstable.canal} ${lexSev(canalEstable.varPct)} — vale la pena entender qué está pasando distinto en cada uno.`
+    }
+
+    // ── Bloque 3: Portafolio y clientes ──
+    let bloque3 = ''
+    if (clientesActivos > 0) {
+      const varClienteStr = varClientes >= 0 ? `+${varClientes.toFixed(1)}%` : `${varClientes.toFixed(1)}%`
+      const concentracionComentario = topClientesPct > 40
+        ? 'una concentración que conviene diversificar'
+        : topClientesPct > 0 && topClientesPct < 25
+          ? 'buena distribución de riesgo'
+          : ''
+      const clientePart = `La base de clientes se mantiene con ${clientesActivos} activos (${varClienteStr} vs año anterior).${
+        topClientesPct > 0
+          ? ` Los 3 principales representan el ${topClientesPct.toFixed(1)}% de la venta${concentracionComentario ? ` — ${concentracionComentario}` : ''}.`
+          : ''
+      }`
+      const productoPart = productosActivos > 0
+        ? ` En productos, ${productosActivos} SKUs activos${varProductos !== 0 ? ` (${varProductos >= 0 ? '+' : ''}${varProductos.toFixed(1)}% vs año anterior)` : ''}.`
+        : ''
+      bloque3 = clientePart + productoPart
+    }
+
+    // ── Bloque 4: Categorías (solo si hay algo que decir) ──
+    let bloque4 = ''
+    const catsCaida = categoriaAnalysis
+      .filter(c => c.variacion_pct < -2 && (c.tendencia === 'caida' || c.tendencia === 'colapso'))
+      .sort((a, b) => a.variacion_pct - b.variacion_pct)
+      .slice(0, 2)
+    const catsCrecen = categoriaAnalysis
+      .filter(c => c.variacion_pct > 1)
+      .sort((a, b) => b.variacion_pct - a.variacion_pct)
+      .slice(0, 2)
+
+    if (catsCaida.length > 0 && catsCrecen.length > 0) {
+      const caenNames = catsCaida.map(c => c.categoria).join(' y ')
+      const crecenNames = catsCrecen.map(c => `${c.categoria} (+${c.variacion_pct.toFixed(1)}%)`).join(' y ')
+      bloque4 = `A nivel de categorías, ${crecenNames} ${catsCrecen.length > 1 ? 'crecen' : 'crece'} mientras ${caenNames} ${catsCaida.length > 1 ? 'caen' : 'cae'} — el patrón sugiere que los problemas están concentrados en zonas y canales específicos, no en todo el equipo.`
+    } else if (catsCaida.length > 0) {
+      const catNames = catsCaida.map(c => c.categoria).join(' y ')
+      bloque4 = `A nivel de categorías, ninguna creció este mes — ${catNames} ${catsCaida.length > 1 ? 'son las más afectadas' : 'es la más afectada'}. El patrón sugiere que los problemas son transversales.`
+    } else if (catsCrecen.length > 0) {
+      const crecenNames = catsCrecen.map(c => `${c.categoria} (+${c.variacion_pct.toFixed(1)}%)`).join(' y ')
+      bloque4 = `A nivel de categorías, ${crecenNames} ${catsCrecen.length > 1 ? 'lideran' : 'lidera'} el crecimiento — una señal de que hay demanda activa en el mercado.`
+    }
+
+    // ── Conclusion ──
+    if (variacion > 3 && creciendo > cayendo) {
+      conclusion = 'Buen ritmo — el reto es sostenerlo.'
+    } else if (variacion < -3 || cayendo > creciendo) {
+      conclusion = 'Hay que actuar rápido antes de que la tendencia se consolide.'
+    } else {
+      conclusion = 'El negocio aguanta pero necesita atención focalizada.'
+    }
+
+    // ── Acción ──
+    const canalCaidaFuerte = canalAnalysis.find(c => c.variacion_pct < -8)
+    if (enRiesgo.length > 0) {
+      const nombres = enRiesgo.slice(0, 2).map(v => v.vendedor)
+      const semanas = enRiesgo.slice(0, 2).reduce((max, v) => Math.max(max, v.semanas_bajo_promedio), 0)
+      accionTexto = `Revisar el plan de cierre con ${nombres.join(' y ')} — llevan ${semanas} semana${semanas !== 1 ? 's' : ''} bajo el promedio.`
+      accionEntidades = nombres
+    } else if (canalCaidaFuerte) {
+      accionTexto = `Investigar la caída en ${canalCaidaFuerte.canal} — está arrastrando el resultado general.`
+      accionEntidades = [canalCaidaFuerte.canal]
+    } else {
+      accionTexto = `Mantener el ritmo — ${topPerformer.vendedor} está tirando del equipo.`
+      accionEntidades = [topPerformer.vendedor]
+    }
+
+    // ── Cruces dinámicos ──
+    crucesCalc = ['ventas', 'vendedor', 'metas', 'departamento']
+    if (cross.clientYTD.size > 0) crucesCalc.push('cliente')
+    if (cross.prodYTD.size > 0) crucesCalc.push('producto')
+    if (canalAnalysis.length > 0) crucesCalc.push('canal')
+    if (categoriaAnalysis.length > 0) crucesCalc.push('categoria')
+    if (supervisorAnalysis.length > 0) crucesCalc.push('supervisor')
+
+    // ── Señales convergentes dinámicas ──
+    señalesCalc = 0
+    if (enRiesgo.length > 0) señalesCalc++
+    if (depsCaen > 0) señalesCalc++
+    if (canalAnalysis.some(c => c.variacion_pct < -5)) señalesCalc++
+    if (categoriaAnalysis.some(c => c.tendencia === 'caida' && c.variacion_pct < -2)) señalesCalc++
+    if (varClientes < -5) señalesCalc++
+    if (topClientesPct > 40) señalesCalc++
+
+    // ── Armar narrativa completa ──
+    narrativa = sanitizarNarrativa(
+      [bloque1, bloque2, bloque3, bloque4].filter(Boolean).join('§§§'),
+      { diaDelMes: cross.diaDelMes, diasEnMes: cross.diasEnMes }
+    )
+  }
+
+  accionTexto = sanitizarNarrativa(accionTexto, { diaDelMes: cross.diaDelMes, diasEnMes: cross.diasEnMes })
 
   return [{
     id: uid('equipo-contexto'),
@@ -1642,20 +1689,18 @@ function equipoContexto(
     },
     conclusion,
     accion: {
-      texto: cayendo > creciendo
-        ? `Reunión de revisión con los ${cayendo} vendedores en caída esta semana antes de definir cierre de mes.`
-        : `Mantener seguimiento al ${creciendo} vendedores en crecimiento para asegurar el ritmo de cierre.`,
-      entidades: ['equipo'],
+      texto: accionTexto,
+      entidades: accionEntidades,
       respaldo: `${creciendo} crecen / ${cayendo} caen / ${depsCrecen} zonas crecen`,
       ejecutableEn: 'esta_semana',
     },
     contrastePortafolio: `${creciendo + cayendo} vendedores con historial comparable; ${cumplenMeta}/${totalConMeta} en cumplimiento`,
-    cruces: ['ventas', 'vendedor', 'metas', 'departamento', 'cliente'],
+    cruces: crucesCalc,
     esPositivo: variacion >= 0,
     esAccionable: false, // contexto, no acción individual
-    señalesConvergentes: 4,
+    señalesConvergentes: señalesCalc,
     __impactoAbs: Math.abs(cross.totalYTD - cross.totalPrevYTD),
-    __crucesCount: 5,
+    __crucesCount: crucesCalc.length,
     __esAccionable: false,
     __esPositivo: variacion >= 0,
   }]
@@ -2201,7 +2246,7 @@ function inventarioSobrestock(
 
   return [{
     id: uid('sobrestock'),
-    tipo: 'riesgo_producto',
+    tipo: 'riesgo_inventario',
     prioridad: 'MEDIA',
     emoji: '📦',
     titulo: `Sobrestock en ${sobrestock.length} producto${sobrestock.length > 1 ? 's' : ''}`,
@@ -2423,6 +2468,186 @@ function canalContexto(cross: CrossTables): CandidatoInterno[] {
 
 const PRIO_RANK: Record<InsightPrioridad, number> = { CRITICA: 0, ALTA: 1, MEDIA: 2, BAJA: 3 }
 
+// ── Agrupación de insights similares ──────────────────────────
+// Combina insights del mismo tipo en una sola alerta consolidada.
+// Se ejecuta DESPUÉS de detectarRedundancia y ANTES del sort final.
+function agruparInsightsSimilares(validados: any[]): any[] {
+  // --- GRUPO 1: Concentración de cartera ---
+  // [Z.6 F2.2 — deprecation] detector desactivado; este bloque es no-op en runtime
+  const concentracion = validados.filter(c => c.id.startsWith('concentracion'))
+  const noConcentracion = validados.filter(c => !c.id.startsWith('concentracion'))
+
+  if (concentracion.length >= 2) {
+    concentracion.sort((a, b) => (b.valor_numerico ?? 0) - (a.valor_numerico ?? 0))
+
+    const resumenLinea = `${concentracion.length} vendedores tienen su venta concentrada en muy pocos clientes. Si alguno de esos clientes baja sus compras, el impacto es inmediato.`
+
+    const detalleLineas = concentracion.map(c => {
+      const meta = c.metaContext ? ` Meta: ${c.metaContext.cumplimiento}%.` : ''
+      const pct = c.valor_numerico ?? 0
+      return `• ${c.vendedor}: ${c.cliente} concentra ${pct}% de su cartera.${meta}`
+    })
+
+    const narrativa = resumenLinea + '§§§' + detalleLineas.join('§§§')
+
+    const PRIO_RANK_LOCAL: Record<string, number> = { CRITICA: 0, ALTA: 1, MEDIA: 2, BAJA: 3 }
+    const mejorPrio = concentracion.reduce((best, c) =>
+      (PRIO_RANK_LOCAL[c.prioridad] ?? 3) < (PRIO_RANK_LOCAL[best] ?? 3) ? c.prioridad : best
+    , concentracion[0].prioridad)
+
+    const conclusion = `Es un patrón del equipo, no casos aislados — ${concentracion.length} de los vendedores activos dependen de 1-2 clientes para sostener su resultado.`
+
+    const todosVendedores = concentracion.map(c => c.vendedor)
+    const accion = {
+      texto: `Revisar plan de diversificación de cartera con ${todosVendedores.slice(0, 2).join(' y ')}${todosVendedores.length > 2 ? ` y ${todosVendedores.length - 2} más` : ''}.`,
+      entidades: todosVendedores,
+      respaldo: concentracion.map(c => `${c.vendedor}: ${c.valor_numerico}% en ${c.cliente}`).join('; '),
+      ejecutableEn: 'esta_semana'
+    }
+
+    const maxImpacto = concentracion.reduce((max, c) =>
+      Math.abs(c.impacto_economico?.valor ?? 0) > Math.abs(max?.valor ?? 0) ? c.impacto_economico : max
+    , concentracion[0].impacto_economico)
+
+    const allCruces = [...new Set(concentracion.flatMap(c => c.cruces ?? []))]
+
+    const agrupado = {
+      ...concentracion[0],
+      id: 'grupo-concentracion',
+      titulo: `${concentracion.length} vendedores con cartera concentrada`,
+      descripcion: narrativa,
+      prioridad: mejorPrio,
+      conclusion,
+      accion,
+      impacto_economico: maxImpacto,
+      cruces: allCruces,
+      vendedor: todosVendedores.join(', '),
+      cliente: concentracion.map(c => c.cliente).join(', '),
+      valor_numerico: Math.max(...concentracion.map(c => c.valor_numerico ?? 0)),
+      contrastePortafolio: concentracion.map(c => c.contrastePortafolio).filter(Boolean).join(' | '),
+      señalesConvergentes: concentracion.reduce((sum, c) => sum + (c.señalesConvergentes ?? 0), 0),
+      __impactoAbs: Math.max(...concentracion.map(c => c.__impactoAbs ?? 0)),
+      __esPositivo: false,
+      __esAccionable: true,
+      __subInsights: concentracion,
+    }
+
+    noConcentracion.push(agrupado)
+    validados = noConcentracion
+  }
+
+  // --- GRUPO 2: Mejor momento + Positivo estable ---
+  const momentoPositivo = validados.filter(c => c.id.startsWith('mejor-momento') || c.id.startsWith('positivo-estable'))
+  const noMomento = validados.filter(c => !c.id.startsWith('mejor-momento') && !c.id.startsWith('positivo-estable'))
+
+  if (momentoPositivo.length >= 2) {
+    momentoPositivo.sort((a, b) => (b.valor_numerico ?? 0) - (a.valor_numerico ?? 0))
+
+    const resumenLinea = `${momentoPositivo.length} vendedores están en su mejor momento este año — son el motor de crecimiento del equipo.`
+
+    const detalleLineas = momentoPositivo.map(c => {
+      const pct = c.valor_numerico ?? 0
+      const meta = c.metaContext ? ` Meta: ${c.metaContext.cumplimiento}%.` : ''
+      return `• ${c.vendedor}: crece ${pct > 0 ? '+' : ''}${pct}% en el acumulado del año.${meta}`
+    })
+
+    const narrativa = resumenLinea + '§§§' + detalleLineas.join('§§§')
+    const todosVendedores = momentoPositivo.map(c => c.vendedor)
+
+    const conclusion = `El equipo tiene un núcleo fuerte: ${todosVendedores.slice(0, 2).join(' y ')} lideran el crecimiento. Su patrón de venta puede servir de referencia para el resto.`
+
+    const accion = {
+      texto: `Documentar las prácticas de ${todosVendedores[0]} y replicarlas con el equipo.`,
+      entidades: todosVendedores,
+      respaldo: momentoPositivo.map(c => `${c.vendedor}: +${c.valor_numerico}%`).join('; '),
+      ejecutableEn: 'este_mes'
+    }
+
+    const maxImpacto = momentoPositivo.reduce((max, c) =>
+      Math.abs(c.impacto_economico?.valor ?? 0) > Math.abs(max?.valor ?? 0) ? c.impacto_economico : max
+    , momentoPositivo[0].impacto_economico)
+
+    const allCruces = [...new Set(momentoPositivo.flatMap(c => c.cruces ?? []))]
+
+    const agrupado = {
+      ...momentoPositivo[0],
+      id: 'grupo-mejor-momento',
+      tipo: 'hallazgo',
+      titulo: `${momentoPositivo.length} vendedores en su mejor momento`,
+      descripcion: narrativa,
+      prioridad: 'MEDIA' as const,
+      emoji: '🚀',
+      conclusion,
+      accion,
+      impacto_economico: maxImpacto,
+      cruces: allCruces,
+      vendedor: todosVendedores.join(', '),
+      valor_numerico: Math.max(...momentoPositivo.map(c => c.valor_numerico ?? 0)),
+      contrastePortafolio: momentoPositivo.map(c => c.contrastePortafolio).filter(Boolean).join(' | '),
+      señalesConvergentes: momentoPositivo.reduce((sum, c) => sum + (c.señalesConvergentes ?? 0), 0),
+      __impactoAbs: Math.max(...momentoPositivo.map(c => c.__impactoAbs ?? 0)),
+      __esPositivo: true,
+      __esAccionable: false,
+      __subInsights: momentoPositivo,
+    }
+
+    noMomento.push(agrupado)
+    validados = noMomento
+  }
+
+  // --- GRUPO 3: co-declive + sustitucion de la misma categoría ---
+  const coDeclive = validados.filter(c => c.id.startsWith('co-declive') || c.id.startsWith('productos-muertos-cat'))
+  const sustitucion = validados.filter(c => c.id.startsWith('sustitucion'))
+
+  for (const co of coDeclive) {
+    // Extraer categoría del título ("N productos de CATEGORÍA dejaron")
+    // o de la descripción para co-declive ("N productos en caída simultánea")
+    let catCo = ''
+    const matchCatTitulo = co.titulo?.match(/productos?\s+de\s+(\w+)\s+/i)
+    if (matchCatTitulo) {
+      catCo = matchCatTitulo[1].toLowerCase()
+    } else {
+      const matchCatDesc = co.descripcion?.match(/categ[oó]r[ií]a\s+(\w+)/i)
+        ?? co.descripcion?.match(/de\s+(\w+)\s+(?:dejaron|caen|cayeron)/i)
+      if (matchCatDesc) catCo = matchCatDesc[1].toLowerCase()
+    }
+    if (!catCo) continue
+
+    const sust = sustitucion.find(s => {
+      const matchS = s.titulo?.match(/preferencia\s+en\s+(\w+)/i)
+      return matchS && matchS[1].toLowerCase() === catCo
+    })
+
+    if (!sust) continue
+
+    const categoria = catCo.charAt(0).toUpperCase() + catCo.slice(1)
+
+    const narrativa = co.descripcion + '§§§' +
+      `La otra cara de la moneda: ${sust.descripcion?.split('. ').slice(0, 2).join('. ')}.`
+
+    const conclusion = `Es una migración interna dentro de ${categoria} — los clientes cambiaron de producto, no dejaron de comprar la categoría.`
+
+    const accion = {
+      texto: sust.accion?.texto ?? co.accion?.texto ?? `Revisar el catálogo de ${categoria} y ajustar inventario.`,
+      entidades: [...new Set([...(co.accion?.entidades ?? []), ...(sust.accion?.entidades ?? [])])],
+      respaldo: `${co.accion?.respaldo ?? ''}; ${sust.accion?.respaldo ?? ''}`.trim().replace(/^;\s*/, '').replace(/;\s*$/, ''),
+      ejecutableEn: co.accion?.ejecutableEn ?? 'este_mes'
+    }
+
+    co.titulo = `Migración interna en ${categoria}: ${co.titulo?.match(/(\d+)\s+productos?/)?.[1] ?? 'varios'} productos caen, otro absorbe la demanda`
+    co.descripcion = narrativa
+    co.conclusion = conclusion
+    co.accion = accion
+    co.contrastePortafolio = [co.contrastePortafolio, sust.contrastePortafolio].filter(Boolean).join(' | ')
+    co.señalesConvergentes = (co.señalesConvergentes ?? 0) + (sust.señalesConvergentes ?? 0)
+    co.__subInsights = [co, sust]
+
+    validados = validados.filter(c => c !== sust)
+  }
+
+  return validados
+}
+
 function pipeline(candidatos: CandidatoInterno[], cross: CrossTables): Insight[] {
   if (candidatos.length === 0) return []
 
@@ -2485,6 +2710,7 @@ function pipeline(candidatos: CandidatoInterno[], cross: CrossTables): Insight[]
   // Issue 6 fix: orden de preferencia por id-prefix para resolver empates de prioridad.
   const PREF_ID: Array<{ prefix: string; rank: number }> = [
     { prefix: 'meta-riesgo', rank: 0 },
+    // [Z.6 F2.2 — deprecation] prefijos legacy, no emitidos en runtime (R126)
     { prefix: 'cartera-pequeña', rank: 1 },
     { prefix: 'concentracion', rank: 2 },
     { prefix: 'mejor-momento', rank: 3 },
@@ -2553,28 +2779,64 @@ function pipeline(candidatos: CandidatoInterno[], cross: CrossTables): Insight[]
     dedup.push(c)
   }
 
-  // C1: cruces mínimos — CRITICA ≥ 3, ALTA ≥ 2
+  // ═══ Validación formal con insightStandard ═══
+  const configValidacion = {
+    diaDelMes: cross.diaDelMes,
+    comparacionTipo: 'YTD' as const,
+    percentileRank: 50,
+  }
+  const preValidados: CandidatoInterno[] = []
   for (const c of dedup) {
+    if (c.tipo === 'riesgo_equipo') {
+      preValidados.push(c)
+      continue
+    }
+    const key = c.tipo === 'riesgo_meta' ? 'meta' : 'otros'
+    let g = cacheGrupos.get(key)
+    if (!g) { g = grupoImpactos(c.tipo); cacheGrupos.set(key, g) }
+    const pr = percentilEnGrupo(c.__impactoAbs, g)
+    const resultado = validarInsight({
+      cruces: c.cruces,
+      __crucesCount: c.__crucesCount,
+      __impactoAbs: c.__impactoAbs,
+      __esPositivo: c.__esPositivo,
+      descripcion: sustituirJerga(c.descripcion ?? ''),
+      conclusion: c.conclusion ? sustituirJerga(c.conclusion) : undefined,
+      contrastePortafolio: sustituirJerga(c.contrastePortafolio ?? ''),
+      __esAccionable: c.__esAccionable,
+      accion: c.accion ? {
+        texto: sustituirJerga(c.accion.texto),
+        entidadesInvolucradas: c.accion.entidades,
+        respaldoNumerico: sustituirJerga(c.accion.respaldo),
+        ejecutableEn: c.accion.ejecutableEn as 'inmediato' | 'esta_semana' | 'este_mes',
+      } : undefined,
+      entityType: c.tipo,
+      entityId: c.id,
+      metaContext: c.metaContext,
+      inventarioContext: c.inventarioContext,
+    }, { ...configValidacion, percentileRank: pr })
+    if (resultado.aprobado) {
+      // validarInsight solo valida — la prioridad la gestiona el pipeline
+      preValidados.push(c)
+    }
+  }
+
+  // C1: cruces mínimos — CRITICA ≥ 3, ALTA ≥ 2
+  for (const c of preValidados) {
     const n = (c.cruces?.length ?? c.__crucesCount ?? 0)
     if (c.prioridad === 'CRITICA' && n < 3) c.prioridad = 'ALTA'
     if (c.prioridad === 'ALTA' && n < 2) c.prioridad = 'MEDIA'
   }
 
   // C4: contraste portafolio para CRITICA/ALTA
-  for (const c of dedup) {
+  for (const c of preValidados) {
     if ((c.prioridad === 'CRITICA' || c.prioridad === 'ALTA') && !c.contrastePortafolio) {
       c.prioridad = 'MEDIA'
     }
   }
 
-  // C6/L4: validar acción concreta
-  let validados = dedup.filter(c => {
-    const a = c.accion
-    if (!a || !a.texto || !a.texto.trim()) return false
-    if (!a.entidades || a.entidades.length === 0) return false
-    if (!a.respaldo || !a.respaldo.trim()) return false
-    return true
-  })
+  // C6/L4: acción concreta ya validada dentro de validarInsight (con accion: c.accion)
+  let validados = [...preValidados]
 
   // L1: limpiar jerga (sustituir) y verificar
   validados = validados.filter(c => {
@@ -2586,11 +2848,20 @@ function pipeline(candidatos: CandidatoInterno[], cross: CrossTables): Insight[]
     return !contieneJerga(blob).tieneJerga
   })
 
-  // L2: conclusion no genérica
-  validados = validados.filter(c => esConclusionValida(c.conclusion ?? ''))
+  // ═══ Coherencia temporal del lenguaje ═══
+  for (const c of validados) {
+    const coherencia = validarCoherenciaTemporal(
+      [c.descripcion, c.conclusion, c.accion?.texto].filter(Boolean).join(' '),
+      cross.diaDelMes,
+      cross.diasEnMes,
+    )
+    if (!coherencia.coherente && coherencia.problema === 'certeza_prematura') {
+      if (c.prioridad === 'CRITICA') c.prioridad = 'ALTA'
+      else if (c.prioridad === 'ALTA') c.prioridad = 'MEDIA'
+    }
+  }
 
-  // L3: narrativa autocontenida
-  validados = validados.filter(c => !!c.descripcion && c.descripcion.trim().length > 30)
+  // L2/L3: ya validados dentro de validarInsight — no filtrar de nuevo
 
   // F1 v1.1: si no es accionable → cap MEDIA
   for (const c of validados) {
@@ -2652,19 +2923,43 @@ function pipeline(candidatos: CandidatoInterno[], cross: CrossTables): Insight[]
     }
   }
 
-  // E2: balance — al menos 1 positivo por cada 4 negativos; promover positivos de BAJA si faltan
-  const negativos = validados.filter(c => !c.__esPositivo).length
-  const positivos = validados.filter(c => c.__esPositivo).length
-  const positivosNecesarios = Math.ceil(negativos / 4)
-  if (positivos < positivosNecesarios) {
-    const candidatosPromover = validados
-      .filter(c => c.__esPositivo && c.prioridad === 'BAJA')
-      .sort((a, b) => b.__impactoAbs - a.__impactoAbs)
-    const aPromover = positivosNecesarios - positivos
-    for (let i = 0; i < Math.min(aPromover, candidatosPromover.length); i++) {
-      candidatosPromover[i].prioridad = 'MEDIA'
+  // ═══ Validar proporcionalidad vs tamaño del negocio ═══
+  for (const c of validados) {
+    const prop = validarProporcionalidad(c.__impactoAbs, cross.totalYTD, c.prioridad)
+    if (!prop.proporcional) {
+      c.prioridad = prop.prioridadSugerida
     }
   }
+
+  // ═══ Balance positivos/negativos usando Standard ═══
+  const balance = validarBalance(validados.map(c => ({ esPositivo: c.__esPositivo })))
+  if (!balance.balanceado) {
+    if (balance.sugerencia === 'cap_negativos') {
+      // No hay positivos reales — limitar negativos a 8 máximo
+      const negArr = validados.filter(c => !c.__esPositivo)
+      const posArr = validados.filter(c => c.__esPositivo)
+      validados = [...posArr, ...negArr.slice(0, 8)]
+    } else if (balance.positivosFaltantes > 0) {
+      // Promover positivos BAJA a MEDIA para que sean más visibles
+      const candidatosPromover = validados
+        .filter(c => c.__esPositivo && c.prioridad === 'BAJA')
+        .sort((a, b) => b.__impactoAbs - a.__impactoAbs)
+      const aPromover = balance.positivosFaltantes
+      for (let i = 0; i < Math.min(aPromover, candidatosPromover.length); i++) {
+        candidatosPromover[i].prioridad = 'MEDIA'
+      }
+    }
+  }
+
+  // ═══ Eliminar insights redundantes ═══
+  const redundancias = detectarRedundancia(validados)
+  if (redundancias.length > 0) {
+    const aDescartar = new Set<object>(redundancias.map(r => r.descartar as object))
+    validados = validados.filter(c => !aDescartar.has(c))
+  }
+
+  // --- Paso de agrupación: combinar insights similares ---
+  validados = agruparInsightsSimilares(validados)
 
   // Ordenar: prioridad → impacto desc
   validados.sort((a, b) => {
@@ -2686,20 +2981,25 @@ function pipeline(candidatos: CandidatoInterno[], cross: CrossTables): Insight[]
 
   // Convertir a Insight (eliminar campos internos)
   return validados.map(c => {
+    const ctxSanitize = { diaDelMes: cross.diaDelMes, diasEnMes: cross.diasEnMes }
     const out: Insight = {
       id: c.id,
       tipo: c.tipo,
       prioridad: c.prioridad,
       emoji: c.emoji,
-      titulo: c.titulo,
-      descripcion: c.descripcion,
+      titulo: sustituirJerga(c.titulo),
+      descripcion: c.descripcion.includes('§§§')
+        ? c.descripcion.split('§§§').map((p: string) => sanitizarNarrativaStd(p.trim(), ctxSanitize)).join('§§§')
+        : sanitizarNarrativaStd(c.descripcion, ctxSanitize),
       vendedor: c.vendedor,
       cliente: c.cliente,
       producto: c.producto,
       valor_numerico: c.valor_numerico,
       accion_sugerida: c.accion?.texto,
       impacto_economico: c.impacto_economico,
-      conclusion: c.conclusion,
+      conclusion: c.conclusion ? (c.conclusion.includes('§§§')
+        ? c.conclusion.split('§§§').map((p: string) => sanitizarNarrativaStd(p.trim(), ctxSanitize)).join('§§§')
+        : sanitizarNarrativaStd(c.conclusion, ctxSanitize)) : c.conclusion,
       accion: c.accion,
       contrastePortafolio: c.contrastePortafolio,
       cruces: c.cruces,
@@ -2759,35 +3059,47 @@ export function generateInsights(
   // GAP 4: churn baseline por vendedor — calcular UNA vez
   const churnMap = calcularChurnVendedor(cross)
 
-  // 3) Llamar a cada generador en orden documentado
+  // 3) Llamar a cada generador — detectores eliminados/migrados:
+  //    L2a: inventarioDesabasto, equipoContexto, productoSustitucion,
+  //      productoCoDeclive, inventarioSobrestock, canalContexto, vendedorPositivoEstable.
+  //    L2b.1: productoMuerto → product_dead (motor 2, emite card propia con USD).
+  //    L2b.2: productoOportunidad → enriquecimiento prospeccion_cross_sell en
+  //      proportion_shift (motor 2). NARRATIVA únicamente, no emite impactoUSD propio.
+  //
+  // [PR-L2b.2-fix] Motor 1 productoOportunidad SIGUE llamándose como PUENTE LEGACY
+  // porque alimenta el agregado `productos` de buildRichProductSection con impactoUSD
+  // estimado (ticket × prospectos). Cuando motor 2 emita proportion_shift+prospeccion
+  // como cards propias con USD ≥ $500 de potencial, este puente se retira en PR-L4.
   const inv = categoriasInventario ?? []
   const candidatos: CandidatoInterno[] = []
   candidatos.push(...vendedorMetaRiesgo(cross, metas, clientesDormidos, churnMap))
   if (dataAvailability.has_producto) {
-    candidatos.push(...productoMuerto(cross, inv))
+    // [PR-L2b.2-fix] puente legacy — retiro programado en PR-L4
     candidatos.push(...productoOportunidad(cross, inv))
-    candidatos.push(...productoSustitucion(cross, inv))
-    // GAP 5: nuevo generador productoCoDeclive (después de sustitución, antes de inventario)
-    candidatos.push(...productoCoDeclive(cross, inv))
-  }
-  if (dataAvailability.has_inventario) {
-    candidatos.push(...inventarioDesabasto(cross, inv))
-    candidatos.push(...inventarioSobrestock(cross, inv))
   }
   candidatos.push(...vendedorMejorMomento(cross, metas))
-  if (dataAvailability.has_cliente) {
-    candidatos.push(...vendedorConcentracion(cross, metas))
-  }
   if (dataAvailability.has_departamento) {
-    candidatos.push(...departamentoCaida(cross))
-    candidatos.push(...vendedorCarteraPequeña(cross, metas))
+    // [PR-L2b.3] departamentoCaida migrado a motor 2 como enriquecimiento
+    // split_ejecucion_vs_mercado sobre candidates trend(down) + meta_gap en
+    // dimensión departamento. Gate preservado; PR-L4: evaluar consolidación
+    // si no hay otro detector que lo requiera.
   }
-  candidatos.push(...equipoContexto(cross, metas))
   candidatos.push(...vendedorSeñalTemprana(cross, metas, churnMap))
-  candidatos.push(...vendedorPositivoEstable(cross, metas))
   candidatos.push(...vendedorEstancado(cross, metas))
-  if (dataAvailability.has_canal) {
-    candidatos.push(...canalContexto(cross))
+
+  // [PR-L2a/L2b.1/L2b.2] telemetría revertible
+  if (import.meta.env.DEV) {
+    const porTipo: Record<string, number> = {}
+    for (const c of candidatos) {
+      const t = (c as { tipo?: string }).tipo ?? 'unknown'
+      porTipo[t] = (porTipo[t] ?? 0) + 1
+    }
+    console.debug('[PR-L2a] motor1 post-eliminacion:', {
+      detectores_activos: 5,  // 4 migraciones pendientes + 1 puente legacy (productoOportunidad)
+      puente_legacy: ['productoOportunidad'],
+      candidatos_generados: candidatos.length,
+      por_tipo: porTipo,
+    })
   }
 
   // 4) Pipeline

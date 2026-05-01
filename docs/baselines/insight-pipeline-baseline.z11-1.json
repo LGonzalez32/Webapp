@@ -1,0 +1,138 @@
+{
+  "version": "z11-1",
+  "captured_at": "2026-04-26T23:03:47.408Z",
+  "branch": "motorinsights",
+  "scope": "Z.11.1 runtime validation. Re-run of Z.11.0 capture protocol against the same Los Pinos demo scenario, with 3 quirurgical changes applied.",
+  "validation": {
+    "tsc": { "command": "npx tsc --noEmit", "errors": 0 },
+    "vitest": { "command": "npx vitest run", "files": 5, "tests_total": 105, "tests_passing": 105, "snapshots_regenerated": 4 }
+  },
+  "applied_changes": [
+    {
+      "id": "z11.1-c1",
+      "file": "src/lib/insightStandard.ts",
+      "lines": "2697-2718",
+      "kind": "feat(gate)",
+      "summary": "Z.12 pareto rescue por materialidad alta",
+      "code_excerpt": "const highMateriality = usdAbs >= ventaTotal * MATERIALITY_HIGH; const pareto = esParetoReal || isRootStrong || ctx.paretoList.length === 0 || isNonMonetary || highMateriality;",
+      "rationale": "Candidatos con USD >= 10% del negocio pasan Pareto sin importar lista top ni cross. Magnitud absoluta es razon ejecutiva suficiente."
+    },
+    {
+      "id": "z11.1-c2",
+      "file": "src/lib/insight-engine.ts",
+      "lines": "4641-4644",
+      "kind": "fix(gate)",
+      "summary": "Reconcile Z11_ROOT_STRONG_TYPES with Z12_ROOT_STRONG_TYPES",
+      "added_members": ["stock_risk", "stock_excess"],
+      "rationale": "Asimetria documentada en Z.11.0: stock_* eran root-strong en Z.12 pero no en Z.11. Sin justificacion."
+    },
+    {
+      "id": "z11.1-c3",
+      "file": "src/lib/insight-engine.ts",
+      "lines": "7130-7142",
+      "kind": "refactor(usd)",
+      "summary": "Migrate inline resolver to resolveImpactoUsd canonical",
+      "replaced": "45-line inline resolver with type-by-type if/else",
+      "with": "single call to resolveImpactoUsd(c) destructured to { usd, source }",
+      "side_effect": "step 4 (typed amount via calcularImpactoValor) now active — recovers USD for cliente_dormido/cliente_perdido and detail.memberChange for change_point/contribution"
+    }
+  ],
+  "delta_vs_z11_0": {
+    "z11": {
+      "entrada":          { "before": 23,    "after": 23,    "delta": 0    },
+      "sobreviven":       { "before": 16,    "after": 17,    "delta": 1    },
+      "suprimidos":       { "before": 7,     "after": 6,     "delta": -1   },
+      "pass_rate":        { "before": 0.696, "after": 0.739, "delta_pp": 4.3 }
+    },
+    "z12": {
+      "input":            { "before": 16,    "after": 17,    "delta": 1    },
+      "surviving":        { "before": 9,     "after": 11,    "delta": 2    },
+      "suppressed":       { "before": 7,     "after": 6,     "delta": -1   },
+      "relaxed_survivors":{ "before": 2,     "after": 2,     "delta": 0    },
+      "pass_rate":        { "before": 0.563, "after": 0.647, "delta_pp": 8.4 }
+    },
+    "store_insights_length":  { "before": 8, "after": 10, "delta": 2 },
+    "worker_blocks_final":    { "before": 4, "after": 4,  "delta": 0 },
+    "cards_visible_dashboard":{ "before": 6, "after": 7,  "delta": 1 },
+    "productos_unicos_feed":  { "before": 2, "after": 4,  "delta": 2 }
+  },
+  "case_validation": [
+    {
+      "case": "stock_excess Cacahuates 100g",
+      "stage": "Z.11",
+      "usd": 7930,
+      "pct_business": 0.193,
+      "z11_0_status": "suprimido sin-usd|cross-pobre(0)|tipo-debil(stock_excess)",
+      "z11_1_status": "superviviente",
+      "rescued_by": "Z11_ROOT_STRONG_TYPES reconciliation (c2)"
+    },
+    {
+      "case": "stock_risk Té Helado 500ml",
+      "stage": "Z.12",
+      "usd": 6665,
+      "pct_business": 0.163,
+      "z11_0_status": "suprimido pareto (16% del negocio descartado por no estar en lista Pareto top)",
+      "z11_1_status": "superviviente",
+      "rescued_by": "Z.12 high-materiality pareto rescue (c1)"
+    },
+    {
+      "case": "co_decline Palomitas 80g",
+      "stage": "Z.12",
+      "usd": 7633,
+      "pct_business": 0.186,
+      "z11_0_status": "suprimido pareto",
+      "z11_1_status": "superviviente",
+      "rescued_by": "Z.12 high-materiality pareto rescue (c1)"
+    },
+    {
+      "case": "cliente_dormido Supermercado López",
+      "stage": "Z.12",
+      "usd": 1633.26,
+      "pct_business": 0.0398,
+      "z11_0_status": "suprimido pareto+narrativeCoherence",
+      "z11_1_status": "sigue suprimido",
+      "expected": true,
+      "reason": "<10% high-materiality, falla narrative independientemente. Trabajo Z.11.3 (politica tipos terminales)."
+    },
+    {
+      "case": "cliente_perdido Tienda El Progreso",
+      "stage": "Z.12",
+      "usd": 819.12,
+      "pct_business": 0.0199,
+      "z11_0_status": "suprimido materiality+pareto",
+      "z11_1_status": "sigue suprimido",
+      "expected": true,
+      "reason": "<2% floor de materiality. Trabajo Z.11.3."
+    }
+  ],
+  "z11_residual_suppressions_legitimate": [
+    { "tid": "meta_gap",     "metric": "cumplimiento_meta", "member": "Limpieza",         "regla": "sin-usd|cross-pobre(1)", "root_cause": "calcularImpactoValor for meta_gap returns null (insightStandard.ts:1882). Sprint Z.11.2." },
+    { "tid": "meta_gap",     "metric": "cumplimiento_meta", "member": "Refrescos",        "regla": "sin-usd|cross-pobre(1)", "root_cause": "idem" },
+    { "tid": "meta_gap",     "metric": "cumplimiento_meta", "member": "Lácteos",          "regla": "sin-usd|cross-pobre(1)", "root_cause": "idem" },
+    { "tid": "change_point", "metric": "ticket_promedio",   "member": "Snacks",           "regla": "usd-trivial($8)|cross-pobre(0)|accion-generica", "root_cause": "$8 USD is noise. Legit suppression." },
+    { "tid": "change_point", "metric": "ticket_promedio",   "member": "Miguel Ángel Díaz","regla": "usd-trivial($7)|accion-generica", "root_cause": "idem" },
+    { "tid": "contribution", "metric": "num_transacciones", "member": "Autoservicio",     "regla": "usd-medio($75)|cross-pobre(0)", "root_cause": "$75 = 0.18% del negocio. Legit." }
+  ],
+  "z105_source_dist_delta": {
+    "non_monetary":  { "before": 7, "after": 4 },
+    "detail_monto":  { "before": 0, "after": 4, "note": "NEW — paso 4 typed amount activo via resolveImpactoUsd migration" },
+    "recuperable":   { "before": 5, "after": 5 },
+    "unavailable":   { "before": 3, "after": 2 },
+    "cross_varAbs":  { "before": 6, "after": 6 },
+    "gap_meta":      { "before": 2, "after": 2 }
+  },
+  "label_refinement_in_z11": {
+    "before": "tipo-debil(change_point), tipo-debil(contribution) for usd==null cases",
+    "after":  "usd-trivial($7-8), usd-medio($75) — USD now found via paso 4 of resolveImpactoUsd",
+    "implication": "Resolver migration is structurally rescuing information; suppressions remaining are now based on USD magnitude, not on inability to resolve."
+  },
+  "exit_criteria": {
+    "tests_green": { "target": "105/105", "actual": "105/105", "met": true },
+    "tsc_zero":    { "target": 0, "actual": 0, "met": true },
+    "z11_pass_rate": { "target": 0.75, "actual": 0.739, "met": false, "delta_pp": -1.1, "explanation": "Conservative target. Residual suppressions are legitimate (meta_gap formula null, real noise). True ceiling without Z.11.2 work." },
+    "z12_surviving":  { "target": 11, "actual": 11, "met": true },
+    "stock_risk_te_helado_z12_survives":      { "target": true, "actual": true, "met": true },
+    "stock_excess_cacahuates_z11_survives":   { "target": true, "actual": true, "met": true }
+  },
+  "verdict": "Z.11.1 cerrado por verificacion. 3/4 criterios cumplidos. Z.11 pass rate marginal por -1.1pp explicado por meta_gap formula faltante (Z.11.2). El cambio 3 (resolver migration) entrego beneficio estructural inesperado: 3 candidatos rescatados de non_monetary a detail_monto via paso 4 typed amount."
+}

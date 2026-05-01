@@ -105,11 +105,11 @@ export function buildShareText({
   if (teamStats) {
     const kpis: string[] = []
 
-    if (teamStats.ytd_actual_equipo != null) {
-      const varPct = teamStats.variacion_ytd_equipo != null
-        ? ` (${fmtPct(teamStats.variacion_ytd_equipo)} vs año anterior)`
+    if (teamStats.ytd_actual_equipo_uds != null) {
+      const varPct = teamStats.variacion_ytd_equipo_uds_pct != null
+        ? ` (${fmtPct(teamStats.variacion_ytd_equipo_uds_pct)} vs año anterior)`
         : ''
-      kpis.push(`YTD: ${fmt(teamStats.ytd_actual_equipo)} uds${varPct}`)
+      kpis.push(`YTD: ${fmt(teamStats.ytd_actual_equipo_uds)} uds${varPct}`)
     }
 
     if (teamStats.proyeccion_equipo != null) {

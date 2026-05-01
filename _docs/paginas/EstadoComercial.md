@@ -8,6 +8,11 @@ updated: 2026-03-29
 
 # EstadoComercial — Dashboard Principal
 
+> **Nota Z.11:** esta pagina corre motor 2 page-side para diagnostic blocks,
+> mientras `analysisWorker.ts` corre motor 2 para `store.insights`. Antes de
+> tocar gate/ranker/listas, reconciliar ambos runtimes en
+> `docs/BASELINE-Z11-0.md`.
+
 **Ruta**: `/dashboard`
 **LOC**: 1740
 **IA**: Sí — inline por insight + chat bridges
@@ -45,4 +50,4 @@ updated: 2026-03-29
 - Light mode: Sí
 - Dark mode: Sí
 
-Ver: [[Frontend]], [[Motor de Insights]], [[System Prompt]]
+Ver: [[Frontend]], `docs/MANIFIESTO-MOTOR-INSIGHTS.md`, `docs/ROADMAP-Z11-PIPELINE-BASELINE.md`, [[System Prompt]]

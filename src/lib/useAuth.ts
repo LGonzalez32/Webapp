@@ -4,6 +4,12 @@ import { useAuthStore } from '../store/authStore'
 import { useOrgStore } from '../store/orgStore'
 import { getUserOrg } from './orgService'
 
+// QW6 — supabase.auth.onAuthStateChange fires on every token refresh and on
+// every mount of useAuth. Without this guard, each fire issues an UPDATE on
+// profiles even when the email did not change, producing the 14+ duplicate
+// /profiles writes observed in the network panel.
+const lastSyncedEmail = new Map<string, string>()
+
 function hydrateOrg(userId: string, email?: string) {
   getUserOrg(userId).then(result => {
     if (result.org) {
@@ -14,8 +20,9 @@ function hydrateOrg(userId: string, email?: string) {
     }
   }).catch(() => {})
 
-  // Sync email to profiles for member display
-  if (email) {
+  // Sync email to profiles for member display — only when it actually changed.
+  if (email && lastSyncedEmail.get(userId) !== email) {
+    lastSyncedEmail.set(userId, email)
     supabase.from('profiles').update({ email }).eq('id', userId).then(() => {})
   }
 }

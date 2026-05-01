@@ -2,7 +2,8 @@ import { useMemo, useState, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { cn } from '../../lib/utils'
 import { useDemoPath } from '../../lib/useDemoPath'
-import { salesInPeriod, prevPeriod } from '../../lib/analysis'
+import { salesInPeriod, salesInRange, salesInRangeYoYSameDay, prevPeriod } from '../../lib/analysis'
+import { formatPeriodLabel } from '../../lib/periods'
 import { useAppStore } from '../../store/appStore'
 import type { VendorAnalysis, Insight, InsightTipo, SaleRecord, ClienteDormido, DataAvailability } from '../../types'
 
@@ -26,7 +27,8 @@ const PRIORIDAD_BORDER: Record<string, string> = {
 const TIPO_PILL: Partial<Record<InsightTipo, { label: string; color: string; bg: string }>> = {
   riesgo_vendedor: { label: 'VENDEDOR',  color: '#60A5FA', bg: '#60A5FA15' },
   riesgo_cliente:  { label: 'CLIENTE',   color: '#4ADE80', bg: '#4ADE8015' },
-  riesgo_producto: { label: 'CATEGORÍA', color: '#FFB800', bg: '#FFB80015' },
+  riesgo_producto:   { label: 'CATEGORÍA',  color: '#FFB800', bg: '#FFB80015' },
+  riesgo_inventario: { label: 'INVENTARIO', color: '#F97316', bg: '#F9731615' },
   riesgo_meta:     { label: 'META',      color: '#FFB800', bg: '#FFB80015' },
   riesgo_equipo:   { label: 'EQUIPO',    color: '#60A5FA', bg: '#60A5FA15' },
   hallazgo:        { label: 'HALLAZGO',  color: '#22D3EE', bg: '#22D3EE15' },
@@ -59,7 +61,7 @@ interface Props {
   vendedor: VendorAnalysis
   insights: Insight[]
   sales: SaleRecord[]
-  selectedPeriod: { year: number; month: number }
+  selectedPeriod: { year: number; monthStart: number; monthEnd: number }
   allVendorAnalysis: VendorAnalysis[]
   clientesDormidos: ClienteDormido[]
   dataAvailability?: DataAvailability
@@ -71,12 +73,17 @@ interface Props {
 function useRecomendaciones(
   v: VendorAnalysis,
   sales: SaleRecord[],
-  selectedPeriod: { year: number; month: number },
+  selectedPeriod: { year: number; monthStart: number; monthEnd: number },
   allVendors: VendorAnalysis[]
 ) {
   return useMemo(() => {
-    const { year, month } = selectedPeriod
+    // [Ticket 2.4.2] B1 estricto: month=monthEnd preserva semántica sequential
+    // de los labels "el mes pasado" / "vs el mes anterior" en recs[].body.
+    // En rango multi-mes el mismatch sutil se acepta como deuda — ver BACKLOG.
+    const { year, monthStart, monthEnd } = selectedPeriod
+    const month = monthEnd
     const prev = prevPeriod(year, month)
+    void monthStart // no usado directamente; el rango se ignora deliberadamente
 
     const vendorSales = sales.filter((s) => s.vendedor === v.vendedor)
     const periodVS = salesInPeriod(vendorSales, year, month)
@@ -335,6 +342,12 @@ export default function VendedorPanel({
     has_producto: false,
     has_categoria: false,
     has_inventario: false,
+    has_departamento: false,
+    has_unidades: false,
+    has_precio_unitario: false,
+    has_subcategoria: false,
+    has_proveedor: false,
+    has_costo_unitario: false,
   }
 
   // USD values computed from raw sales when global metric is USD
@@ -343,7 +356,7 @@ export default function VendedorPanel({
   const moneda = configuracion.moneda
   const ventaNetaPeriodo = useMemo(() => {
     if (!showUSD) return null
-    return salesInPeriod(sales.filter(s => s.vendedor === v.vendedor), selectedPeriod.year, selectedPeriod.month)
+    return salesInRange(sales.filter(s => s.vendedor === v.vendedor), selectedPeriod.year, selectedPeriod.monthStart, selectedPeriod.monthEnd)
       .reduce((a, s) => a + (s.venta_neta ?? 0), 0)
   }, [showUSD, sales, v.vendedor, selectedPeriod])
   const proyeccionNeta = useMemo(() => {
@@ -364,7 +377,7 @@ export default function VendedorPanel({
   }, [sales, v.vendedor, da.has_supervisor])
 
   const rCfg = RIESGO_CONFIG[v.riesgo]
-  const mesLabel = MESES[selectedPeriod.month]
+  const mesLabel = formatPeriodLabel(selectedPeriod.year, selectedPeriod.monthStart, selectedPeriod.monthEnd)
 
   // Color proyección basado en cumplimiento
   const proyColor = (() => {
@@ -543,10 +556,13 @@ export default function VendedorPanel({
 
           {/* ── Top Productos del período ──────────────────────────────────── */}
           {da.has_producto && (() => {
-            const periodSales = salesInPeriod(sales, selectedPeriod.year, selectedPeriod.month).filter(s => s.vendedor === v.vendedor)
+            const periodSales = salesInRange(sales, selectedPeriod.year, selectedPeriod.monthStart, selectedPeriod.monthEnd).filter(s => s.vendedor === v.vendedor)
             const maxDay = periodSales.reduce((mx, s) => Math.max(mx, new Date(s.fecha).getDate()), 0)
-            const prevCutoff = new Date(selectedPeriod.year - 1, selectedPeriod.month, maxDay, 23, 59, 59, 999)
-            const prevPeriodSales = salesInPeriod(sales, selectedPeriod.year - 1, selectedPeriod.month).filter(s => s.vendedor === v.vendedor && s.fecha <= prevCutoff)
+            // [Ticket 2.4.2] YoY rango: salesInRangeYoYSameDay acumula meses
+            // intermedios completos + cutoff same-day en monthEnd. Coherente con
+            // CONTEXT.md "MTD vs MTD same-day, YTD vs YTD same-day".
+            const prevPeriodSales = salesInRangeYoYSameDay(sales, selectedPeriod.year, selectedPeriod.monthStart, selectedPeriod.monthEnd, maxDay)
+              .filter(s => s.vendedor === v.vendedor)
             const map = new Map<string, { unidades: number; neta: number }>()
             for (const s of periodSales) {
               if (!s.producto) continue
@@ -574,7 +590,7 @@ export default function VendedorPanel({
                       <th style={{ paddingBottom: 4, textAlign: 'left' }}>Producto</th>
                       <th style={{ paddingBottom: 4, textAlign: 'right' }}>{selectedPeriod.year}</th>
                       <th style={{ paddingBottom: 4, textAlign: 'right' }}>{selectedPeriod.year - 1}</th>
-                      <th style={{ paddingBottom: 4, textAlign: 'right' }}>Var %</th>
+                      <th style={{ paddingBottom: 4, textAlign: 'right' }}>Variación %</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -613,7 +629,7 @@ export default function VendedorPanel({
 
           {/* ── Clientes dormidos ────────────────────────────────────────────── */}
           {dormidos.length > 0 && (() => {
-            const impactoTotal = dormidos.reduce((a, d) => a + d.valor_historico, 0)
+            const impactoTotal = dormidos.reduce((a, d) => a + d.valor_yoy_usd, 0)
             return (
               <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--sf-border)' }}>
                 <div className="flex items-center justify-between mb-3">
@@ -644,8 +660,8 @@ export default function VendedorPanel({
                         </div>
                         <p className="text-[11px] leading-relaxed" style={{ color: 'var(--sf-t3)' }}>{d.recovery_explicacion}</p>
                         <div className="flex items-center justify-between text-[10px]" style={{ color: 'var(--sf-t5)' }}>
-                          <span>{d.dias_sin_actividad} días sin comprar · {d.compras_historicas} compras</span>
-                          {d.valor_historico > 0 && <span>{d.valor_historico.toLocaleString()} uds hist.</span>}
+                          <span>{d.dias_sin_actividad} días sin comprar · {d.transacciones_yoy} transacciones vs año anterior</span>
+                          {d.valor_yoy_usd > 0 && <span>{d.valor_yoy_usd.toLocaleString()} hist.</span>}
                         </div>
                         <div style={{ height: 3, background: 'var(--sf-border)', borderRadius: 999, overflow: 'hidden' }}>
                           <div style={{ height: '100%', width: `${d.recovery_score}%`, background: barColor, borderRadius: 999 }} />
@@ -821,17 +837,18 @@ function fmtK(n: number): string {
 function TendenciaMensual({ sales, vendedor, selectedPeriod }: {
   sales: SaleRecord[]
   vendedor: string
-  selectedPeriod: { year: number; month: number }
+  selectedPeriod: { year: number; monthStart: number; monthEnd: number }
 }) {
   const data = useMemo(() => {
     const vendorSales = sales.filter(s => s.vendedor === vendedor)
     if (vendorSales.length === 0) return []
 
-    const { year, month } = selectedPeriod
+    // [Ticket 2.4.2] B1: el ancla del bucket más reciente es monthEnd (último mes del rango).
+    const { year, monthEnd } = selectedPeriod
     const buckets: { key: string; label: string; current: number; prev: number }[] = []
 
     for (let i = 5; i >= 0; i--) {
-      let m = month - i
+      let m = monthEnd - i
       let y = year
       while (m < 0) { m += 12; y-- }
       const label = MESES[m]
@@ -901,23 +918,17 @@ function TendenciaMensual({ sales, vendedor, selectedPeriod }: {
 function ClientesPrincipales({ sales, vendedor, selectedPeriod, clientesDormidos }: {
   sales: SaleRecord[]
   vendedor: string
-  selectedPeriod: { year: number; month: number }
+  selectedPeriod: { year: number; monthStart: number; monthEnd: number }
   clientesDormidos: ClienteDormido[]
 }) {
   const { clientes, total, concentracion } = useMemo(() => {
-    const { year, month } = selectedPeriod
-    const periodSales = sales.filter(s => {
-      if (s.vendedor !== vendedor || !s.cliente) return false
-      const d = new Date(s.fecha)
-      return d.getFullYear() === year && d.getMonth() === month
-    })
+    const { year, monthStart, monthEnd } = selectedPeriod
+    // B2: rango actual; YoY same-day-range vía helper (cutoff en monthEnd).
+    const periodSales = salesInRange(sales, year, monthStart, monthEnd)
+      .filter(s => s.vendedor === vendedor && s.cliente)
     const maxDay = periodSales.reduce((mx, s) => Math.max(mx, new Date(s.fecha).getDate()), 0)
-    const prevCutoff = new Date(year - 1, month, maxDay, 23, 59, 59, 999)
-    const prevSales = sales.filter(s => {
-      if (s.vendedor !== vendedor || !s.cliente) return false
-      const d = new Date(s.fecha)
-      return d.getFullYear() === year - 1 && d.getMonth() === month && s.fecha <= prevCutoff
-    })
+    const prevSales = salesInRangeYoYSameDay(sales, year, monthStart, monthEnd, maxDay)
+      .filter(s => s.vendedor === vendedor && s.cliente)
 
     const agg: Record<string, number> = {}
     periodSales.forEach(s => {
@@ -963,7 +974,7 @@ function ClientesPrincipales({ sales, vendedor, selectedPeriod, clientesDormidos
             <th style={{ paddingBottom: 4, textAlign: 'right' }}>{selectedPeriod.year}</th>
             <th style={{ paddingBottom: 4, textAlign: 'right' }}>{selectedPeriod.year - 1}</th>
             <th style={{ paddingBottom: 4, textAlign: 'right' }}>%</th>
-            <th style={{ paddingBottom: 4, textAlign: 'right' }}>Var %</th>
+            <th style={{ paddingBottom: 4, textAlign: 'right' }}>Variación %</th>
           </tr>
         </thead>
         <tbody>

@@ -10,6 +10,7 @@ import { useAppStore } from '../../store/appStore'
 import { useAuthStore } from '../../store/authStore'
 import { useOrgStore } from '../../store/orgStore'
 import { supabase } from '../../lib/supabaseClient'
+import { cleanupClientState } from '../../lib/cleanupClientState'
 
 interface NavItem {
   label: string
@@ -20,7 +21,7 @@ interface NavItem {
 export default function Sidebar() {
   const location = useLocation()
   const navigate = useNavigate()
-  const { configuracion, resetAll } = useAppStore()
+  const { configuracion } = useAppStore()
   const { user } = useAuthStore()
   const org = useOrgStore(s => s.org)
   const currentRole = useOrgStore(s => s.currentRole)
@@ -40,8 +41,8 @@ export default function Sidebar() {
 
   const handleLogout = async () => {
     if (isDemo) { navigate('/'); return }
+    await cleanupClientState()
     await supabase.auth.signOut()
-    resetAll()
     navigate('/login')
   }
 
@@ -99,10 +100,13 @@ export default function Sidebar() {
         className={cn(
           'flex items-center rounded-lg text-sm font-medium transition-all',
           mini ? 'justify-center p-2.5' : 'gap-3 px-4 py-2.5',
-          active ? 'font-bold' : 'hover:bg-[var(--sf-hover)]'
+          active ? 'font-semibold' : 'hover:bg-[var(--sf-hover)]'
         )}
+        // [Z.P1.11.b/V2] Active = fondo warm muted + texto t1. Antes estaba todo
+        // verde (fondo + texto + icono), sobrecargando el acento de marca.
+        // Ahora el verde queda como acento sutil solo en el icono.
         style={active
-          ? { background: 'var(--sf-green-bg)', color: 'var(--sf-green)' }
+          ? { background: 'var(--sf-green-bg)', color: 'var(--sf-green)', boxShadow: 'inset 3px 0 0 var(--sf-green)' }
           : { color: 'var(--sf-t4)' }
         }
       >
@@ -127,12 +131,13 @@ export default function Sidebar() {
           </button>
         ) : (
           <>
-            <Link to={`${prefix}/dashboard`} className="flex items-center gap-2.5 min-w-0" onClick={() => setIsOpen(false)}>
-              <div className="w-8 h-8 bg-[#00D68F] rounded-lg flex items-center justify-center shrink-0">
-                <Zap className="w-4 h-4 text-white dark:text-[#020C18]" />
-              </div>
+            <Link to={`${prefix}/dashboard`} className="flex items-center gap-2 min-w-0" onClick={() => setIsOpen(false)}>
+              {/* [Z.P1.11.b/V2] Logo: ⚡ verde como ícono pequeño sin caja sólida.
+                  Texto SalesFlow en t1 700 (no font-black 900 verde). El verde queda
+                  como acento sutil del ícono, no como bloque cromático dominante. */}
+              <Zap className="w-5 h-5 shrink-0 text-[var(--sf-green)]" />
               <div className="min-w-0">
-                <span className="text-lg font-black text-[#00D68F] tracking-tight">SalesFlow</span>
+                <span className="text-lg font-bold tracking-tight" style={{ color: 'var(--sf-t1)' }}>SalesFlow</span>
                 {(org?.name ?? configuracion.empresa) && (
                   <p className="text-[10px] font-medium leading-tight truncate max-w-[140px]" style={{ color: 'var(--sf-t6)' }}>
                     {org?.name ?? configuracion.empresa}
@@ -189,9 +194,12 @@ export default function Sidebar() {
             <p className="text-[11px] font-medium truncate" style={{ color: 'var(--sf-t6)' }} title={user.email}>
               {user.email}
             </p>
+            {/* [Z.P1.11.b/V2] Badge owner pasa de verde (ornamental, redundante con
+                CTA + estados) a warm neutro. Admin/editor/viewer mantienen sus
+                acentos semánticos: cada rol distinguible sin saturar verde. */}
             <span className={`inline-block text-[9px] font-semibold px-1.5 py-0.5 rounded ${
               (currentRole ?? 'owner') === 'owner'
-                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                ? 'bg-[var(--sf-hover)] text-[var(--sf-t2)] border border-[var(--sf-border)]'
                 : currentRole === 'admin'
                   ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
                   : currentRole === 'editor'
@@ -257,6 +265,7 @@ export default function Sidebar() {
           isOpen ? 'translate-x-0' : '-translate-x-full'
         )}
         style={{ background: 'var(--sf-sidebar)', borderRight: '1px solid var(--sf-border-subtle)' }}
+        aria-hidden={!isOpen ? 'true' : undefined}
       >
         <SidebarContent />
       </aside>

@@ -1,97 +1,343 @@
-Actualiza CLAUDE.md con los siguientes cambios exactos. Usa str_replace para cada sección afectada. NO reescribas el archivo completo.
-
-=== CAMBIO 1: Versión en el título ===
-
-Cambiar:
-## v2.3 | React + TypeScript + Zustand + Recharts + Vite
-
-Por:
+# SalesFlow — Monitor de Riesgo Comercial
 ## v2.0 | React + TypeScript + Zustand + Recharts + Vite
 
-=== CAMBIO 2: Datos demo ===
+---
 
-Cambiar la sección ## DATOS DEMO completa:
+## PRODUCTO
+B2B SaaS para empresas con equipos de ventas. Detecta riesgos comerciales
+antes de que afecten resultados. NO es un dashboard BI, es un motor de decisiones.
 
-Antes:
-## DATOS DEMO
+---
 
-Empresa: Los Pinos S.A.
-8 vendedores, 12 productos, 11 clientes, 18 meses historial
-3 canales: Mostrador, Visita directa, Teléfono
-Inventario demo: 5 categorías activas
+## STACK FRONTEND (activo)
+- React 19 + TypeScript + Vite
+- Zustand v5 (persist v3, key: salesflow-storage)
+- Recharts para gráficas
+- Tailwind v4 (sin tailwind.config.js)
+- react-router-dom v7
+- Lucide React para iconos
+- Sonner para toasts
+- PapaParse + XLSX para archivos
+- Zod para validación
 
-Por:
-## DATOS DEMO
+## STACK BACKEND (construido, no conectado al frontend)
+- Python FastAPI en /backend
+- Modelos: NAIVE, ETS, SARIMA, ENSEMBLE
+- NO tocar backend salvo instrucción explícita
 
-Empresa: Los Pinos S.A.
-8 vendedores, 20 productos, 30 clientes, 93,155 filas de ventas
-Rango: Enero 2024 – Abril 2026 (fecha ref: Abr 9, 2026)
-4 categorías: Refrescos, Lácteos, Limpieza, Snacks
-3 canales: Mayoreo, Mostrador, Autoservicio
-3 supervisores, 10 departamentos (El Salvador)
+## SERVICIOS EXTERNOS
+- DeepSeek API (chat): https://api.deepseek.com/chat/completions
+  Modelos: deepseek-chat, deepseek-reasoner
+  API key: configuracion.deepseek_api_key (en store)
+- Supabase: configurado pero NO activo en frontend
 
-=== CAMBIO 3: Insights ===
+---
 
-Cambiar:
-## LOS 20 INSIGHTS (insightEngine.ts)
+## ARQUITECTURA FRONTEND
 
-Por:
-## INSIGHTS (insightEngine.ts)
+### Flujo de datos
+1. Upload → fileParser.ts → setSales/setMetas/setInventory
+2. useAnalysis.ts → detectDataAvailability → computeCommercialAnalysis
+   → computeCategoriasInventario → generateInsights → store
+3. Páginas leen del store via useAppStore()
+4. TopBar cambia selectedPeriod → isProcessed=false → re-análisis
 
-Y cambiar el contenido de esa sección:
+### Store (appStore.ts)
+PERSISTIDO: selectedPeriod, configuracion, orgId
+SOLO MEMORIA: vendorAnalysis, teamStats, insights, clientesDormidos,
+  concentracionRiesgo, categoriasInventario, forecastData, isProcessed, isLoading
 
-Antes:
-Prioridades: CRITICA > ALTA > MEDIA > BAJA
-fechaReferencia propagada a todos los detectores.
-Insights con impacto_economico (solo si has_venta_neta):
-  #1 Meta en Peligro, #9 Concentración Sistémica,
-  #15 Equipo No Cerrará Meta, #19 Doble Riesgo,
-  #20 Caída Explicada
+### Análisis
+- fechaReferencia = SIEMPRE max(sales.fecha), NUNCA new Date()
+- YTD: comparación homóloga (1 ene año actual vs 1 ene año anterior)
+- Inventario: PM3 de 3 meses CERRADOS antes de selectedPeriod
 
-Por:
-Prioridades: CRITICA > ALTA > MEDIA > BAJA
-fechaReferencia propagada a todos los detectores.
-~26 detectores activos con cross-table analysis (vendedores × clientes × productos × inventario).
-Todos los detectores usan same-day-range para comparaciones YoY.
-Insights con impacto_economico (solo si has_venta_neta):
-  Meta en Peligro, Concentración Sistémica, Equipo No Cerrará Meta,
-  Doble Riesgo, Caída Explicada
-
-=== CAMBIO 4: Agregar sección de reglas críticas de negocio ===
-
-Después de la sección ## ARQUITECTURA FRONTEND y antes de ## REGLAS DE DESARROLLO, agregar esta sección nueva:
+---
 
 ## REGLAS DE NEGOCIO CRÍTICAS
 
 ### Comparaciones de períodos (ABSOLUTO — nunca romper)
-- Solo 2 tipos válidos de comparación:
-  - YTD: Jan 1 a fechaReferencia del año actual vs mismo rango año anterior
-  - MTD YoY: día 1 al día N del mes actual vs mismo rango del mismo mes año anterior
-- NUNCA comparar un período parcial (ej: 9 días) contra un mes completo (30 días)
-- Cuando isCurrentMonth=true: filtrar año anterior con getDate() <= diasTranscurridos
+- YTD: Jan 1 a fechaReferencia año actual vs mismo rango año anterior
+- MTD YoY: día 1 al día N del mes actual vs mismo rango del mismo mes año anterior
+- NUNCA comparar período parcial contra mes completo
+- isCurrentMonth=true: filtrar año anterior con getDate() <= diasTranscurridos
 
 ### recoveryScore
-- Existe internamente en vendorAnalysis para ordenar/priorizar
-- NUNCA mostrar el número x/100 al usuario en ninguna UI
+- Interno en vendorAnalysis — NUNCA mostrar el número x/100 en UI
 - Mostrar solo: etiqueta en español + texto de acción contextual
 
-### tipoMetaActivo
-- Valores: 'uds' | 'usd'
-- Todos los KPIs, cards y tablas deben mostrar SOLO el tipo activo
+### tipoMetaActivo ('uds' | 'usd')
+- Todos los KPIs, cards y tablas muestran SOLO el tipo activo
 - No mezclar métricas en la misma vista
 
 ### Componentes — DO NOT TOUCH (salvo instrucción explícita)
-- PulsoPanel.tsx (Content components ya enriquecidos con cross-table)
-- VendedorPanel.tsx (análisis correcto)
-- AnalysisDrawer.tsx (soporta analysisContent JSX además de texto plano)
-- El chat / asistente virtual
+- PulsoPanel.tsx, VendedorPanel.tsx, AnalysisDrawer.tsx
+- El chat / asistente virtual (ChatPage.tsx, chatService.ts, ChatBot.tsx, ChatMessage.tsx)
+- Botón `chatQuestion` — NO modificar el trigger del asistente
 - La apariencia de las PULSO cards en el dashboard
 
-### Componentes UI reutilizables (usar siempre en lugar de <select>/<input> nativos)
-- src/components/ui/SFSelect.tsx — select estilizado con chevron propio
-- src/components/ui/SFSearch.tsx — input de búsqueda con icono integrado
+### Componentes UI reutilizables (siempre en lugar de nativos)
+- src/components/ui/SFSelect.tsx — select estilizado
+- src/components/ui/SFSearch.tsx — input de búsqueda
 
-=== VERIFICACIÓN ===
+---
 
-Al terminar: confirma qué secciones editaste y muestra el diff de cada str_replace.
-tsc --noEmit no aplica para archivos .md, pero confirma que el archivo queda bien formado.
+## REGLAS DE DESARROLLO
+
+### Edición de código
+- Usar str_replace, NO reescribir archivos completos
+- Leer SOLO las funciones afectadas, no el archivo entero
+- Cambios quirúrgicos únicamente
+- tsc --noEmit debe dar 0 errores al terminar
+
+### Lo que NO tocar salvo instrucción explícita
+- backend/ (Python FastAPI — no conectado)
+- supabase/ (migraciones — no activo)
+- forecastApi.ts, errorHandler.ts (código muerto)
+
+### Dependencias
+- NO instalar librerías nuevas sin preguntar
+- NO usar react-markdown ni librerías de parsing externas
+- Tailwind v4: no tiene tailwind.config.js, usa @tailwindcss/vite
+
+---
+
+## PÁGINAS ACTIVAS (9 rutas)
+/dashboard      → EstadoComercialPage
+/vendedores     → VendedoresPage
+/rendimiento    → RendimientoPage
+/clientes       → ClientesPage (condicional has_cliente)
+/rotacion       → RotacionPage (condicional has_inventario)
+/metas          → MetasPage (condicional has_metas)
+/chat           → ChatPage (DeepSeek conectado)
+/cargar         → UploadPage
+/configuracion  → ConfiguracionPage
+
+---
+
+## INSIGHTS (motor activo)
+
+- Motor activo: `src/lib/insight-engine.ts` (motor 2).
+- Motor 1 legado: `src/lib/insightEngine.ts` queda intacto; no tocarlo salvo
+  instruccion explicita.
+- Prioridades: CRITICA > ALTA > MEDIA > BAJA.
+- `fechaReferencia` debe venir de `max(sales.fecha)`.
+- Same-day-range para comparaciones YoY.
+- Trabajo activo: `docs/ROADMAP-Z11-PIPELINE-BASELINE.md`.
+
+---
+
+## MOTOR DE INSIGHTS — OWNERSHIP DOCUMENTAL Y READ ORDER
+
+> **Sprint activo Z.11.0 - baseline real.** Antes de tocar gate, ranker,
+> builders, listas root-strong o normalizacion USD, leer y cerrar
+> `docs/ROADMAP-Z11-PIPELINE-BASELINE.md` y completar
+> `docs/BASELINE-Z11-0.md`.
+>
+> Z.11.0 es forense/documental: no cambia codigo funcional, no regenera
+> snapshots y no toca `src/lib/insightEngine.ts`.
+>
+> **Fase 0 (timing del refactor).** El refactor lógico grande del motor va
+> **después** de estabilizar docs + gate, en este orden estricto:
+> 1. CLAUDE.md (este archivo) actualizado con ownership y read order ← **hecho**
+> 2. PROJECT_MAP.md degradado/eliminado como fuente de verdad ← **hecho**
+> 3. Golden-master test del motor actual (snapshot del output con dataset demo) ← **hecho** (`src/lib/__tests__/insight-engine.golden.test.ts`)
+> 4. `docs/MANIFIESTO-MOTOR-INSIGHTS.md` reescrito como tabla de proceso ← **hecho** (v3.0.0, 258 líneas, contrato operativo). Histórico v2.x movido a `docs/historico/MANIFIESTO-MOTOR-INSIGHTS-Z9-Z13-HISTORICO.md`
+> 5. `docs/GLOSARIO-MOTOR-INSIGHTS.md` creado ("dónde va cada cosa") ← **hecho** (232 líneas, regla "≤ 5 líneas por entrada")
+> 6. Gate movido a `insightStandard.ts` (`evaluateInsightCandidate` / `shouldInsightPass`)
+>    sin cambio funcional ← **6A hecho** (Z.12 bi-nivel: 4 reglas, regex genéricas, root-strong, USD sources).
+>    **6B diferido**: filtro-ruido, proporcionalidad, dedup, cascadas, integración inv/metas, etc. Mezclan mutación + enriquecimiento + dedup; migrarlas ahora antes del refactor lógico es trabajo de plomería que se va a tirar. Quedan en `filtrarConEstandar` como orquestación.
+> 7. Refactor lógico del motor.
+>
+>    **Fase 7.1 — Two-stage gate-aware ranker (revertido).** Hipótesis: el
+>    ranker selecciona 10 y 4 mueren en el gate; agregando una segunda etapa
+>    gate-aware sobre un pool intermedio se mejoraría pass rate. Resultado:
+>    `gatePassInIntermediate: 0` en USD y UDS. Diagnóstico real: la regla
+>    Z.12 r3 (coherencia monetaria) excluye sistemáticamente los tipos del
+>    pool regular (`trend`/`change`/`contribution`/etc.) porque tienen
+>    `impacto_usd_source ∈ {non_monetary, unavailable}`. Los gate-passers
+>    salen casi todos por `ALWAYS_PROTECTED_CAPS`. Conclusión: el ranker no
+>    es el bottleneck; r3 sí.
+>
+>    **Fase 7.2 — Gate failure audit (✅).** Snapshot estructural en
+>    `src/lib/__tests__/insight-engine.gate-audit.test.ts`. Hallazgos:
+>    cero candidatos del pool seleccionado fallan r3 (refuta hipótesis
+>    7.1). r2 (Pareto) y r4 (narrativa) son los dominantes; la mayoría
+>    falla múltiples reglas a la vez. `onlyMonetaryCoherenceFails: 0`
+>    en USD y UDS.
+>
+>    **Fase 7.3 — Audit cualitativo (✅).** Se agregó `failingItems[]`
+>    al snapshot del audit. Reveló dos categorías: (a) bug de copy
+>    "La caída se concentra" en candidatos `direction='up'` y (b)
+>    señales perdidas por `contribution +` no-Pareto (ej. María Castillo).
+>
+>    **Fase 7.4 — Fix narrativa direction-aware (✅ calidad, ❌ pass rate).**
+>    `cross-context.ts:enriquecerCandidate` ahora elige la frase auxiliar
+>    según `direction` del candidato (no según `varPct` del cliente).
+>    Bug de copy resuelto. **Lección registrada:** la expectativa de que
+>    `narrativeCoherence` fails bajaría fue incorrecta — el gate r4 fallaba
+>    por `accion: null` + materiality fail simultáneo, no por la regex
+>    anti-genérica disparada por la contradicción interna. Counts del
+>    gate sin cambio. Goldens regenerados.
+>
+>    **Fase 7.5-A — Contribution positive audit (✅).** Sub-snapshot
+>    `contributionPositiveAudit` en el audit. María Castillo cumple los
+>    5 criterios estrechos (score 1.0, severity CRITICA, share 3.09%);
+>    UDS no tiene casos. Patrón único, no sistémico.
+>
+>    **Fase 7.5-B — Excepción contribution-up (✅).** `evaluateInsightCandidate`
+>    rescata r2 (Pareto) cuando un crecimiento positivo cumple los 6 criterios
+>    estrechos (contribution+direction=up+score≥0.95+ALTA/CRITICA+share≥1%+source válido).
+>    `reason='relaxed:exception_contribution_up'` distinguible. Resultado:
+>    USD pool tras gate 6→7, UDS sin cambio. Contador
+>    `gateRescuedByContributionUpException` en audit para monitoreo.
+>
+> **Fase 7 cerrada.** Backlog explícito (no continuación inmediata):
+>   - **7.6 ✅ HECHO** (Sprints D1 + F1 + G2). `NARRATIVE_TEMPLATES` extendido
+>     con templates para `trend`, `change`, `cliente_dormido`, `cross_delta`
+>     y `contribution`. Bucket `relaxed` del `gateAuditByMode` queda en `{}`
+>     para USD y UDS pools. `cliente_dormido` y `cross_delta` requirieron
+>     wiring inline en sus special builders (no entran al registry loop).
+>     Todas las acciones respetan `Z12_GENERIC_ACTION_RE` (verificado por
+>     audit en `insight-engine.gate-audit.test.ts`).
+>   - **7.7 (siguiente)** — atacar el bucket `fail` que queda. Post-7.6
+>     persisten ~4-5 candidatos `change`/`trend`/`outlier`/`contribution`
+>     fallando solo por `materiality` (impacto USD bajo). Templates no
+>     resuelven esto — requiere repensar el threshold (¿share del negocio
+>     en lugar de USD absoluto? ¿gradiente por severity?). Diferido hasta
+>     decisión de producto.
+>
+> **Regla post-6A:** todo cambio que afecte pass/fail va en `evaluateInsightCandidate()` o helpers de `insightStandard.ts`. Cambios de generación/detección/ranker pueden vivir en `insight-engine.ts` mientras respeten el gate.
+>
+> Mientras una fase no esté cerrada, no avanzar a la siguiente.
+
+### Fuente de verdad por dominio
+
+| Dominio | Archivo canónico | Notas |
+|---|---|---|
+| **Pass/fail de un insight** | `src/lib/insightStandard.ts` → `evaluateInsightCandidate(c, ctx)` / `shouldInsightPass(c, ctx)` | Gate canónico Z.12 movido en Fase 6A. `filtrarConEstandar` (en insight-engine.ts:3791) queda como orquestador array-level que precomputa contexto y aplica mutación `_z122_relaxed`. Reglas extra (filtro-ruido, proporcionalidad, dedup, cascadas) siguen orquestadas en filtrarConEstandar — migración pendiente Fase 6B. |
+| **Roadmap activo Z.11** | `docs/ROADMAP-Z11-PIPELINE-BASELINE.md` | Fuente de verdad para reconciliar baseline worker/page, duplicacion USD y listas Z.11/Z.12 antes de fixes funcionales. |
+| **Baseline Z.11.0** | `docs/BASELINE-Z11-0.md` | Artefacto humano de la tabla unica del pipeline. Se completa durante Z.11.0. |
+| **Pipeline completo del motor** | `docs/MANIFIESTO-MOTOR-INSIGHTS.md` | Tabla canónica de 10 etapas + invariantes. La baseline numerica queda en reconciliacion hasta cerrar Z.11.0. Histórico v2.x en `docs/historico/`. |
+| **Dónde va cada cosa** | `docs/GLOSARIO-MOTOR-INSIGHTS.md` | Mapa compacto (232 líneas, regla "≤ 5 líneas por entrada") de métricas, dimensiones, detectores, registries, narrativa. Primera parada para "¿dónde agrego X?". |
+| **Detectores y candidatos** | `src/lib/insight-engine.ts` | Genera candidatos. NO debería decidir pass/fail — eso es de insightStandard.ts. Migración pendiente (Fase 6). |
+| **Cadenas de causalidad / problema ejecutivo** | `src/lib/decision-engine.ts` | Z.9 framework (InsightChains, ExecutiveProblems). Consume insights ya filtrados. |
+| **Registros** | `insight-registry.ts` (motor principal), `metricRegistry.ts` / `dimensionRegistry.ts` / `insightTypeRegistry.ts` (cross/telemetría) | **Coexisten — no consolidar todavía.** El glosario aclarará cuál manda para qué cuando se cree. |
+| **Mapa del repo** | (pendiente decisión) | `src/PROJECT_MAP.md` deja de ser fuente de verdad en Fase 2. Se reduce a stub o se elimina. |
+
+### Read order recomendado para tareas del motor
+
+Antes de tocar lógica de insights, leer en este orden (para minimizar tokens):
+
+1. **`docs/ROADMAP-Z11-PIPELINE-BASELINE.md`** — si el trabajo toca motor/gate/ranker/insights.
+2. **`docs/BASELINE-Z11-0.md`** — si Z.11.0 aun no esta cerrado, no ejecutar fixes funcionales.
+3. **`docs/GLOSARIO-MOTOR-INSIGHTS.md`** — para saber dónde vive lo que vas a tocar.
+4. **`docs/MANIFIESTO-MOTOR-INSIGHTS.md`** — para entender qué etapa del pipeline estás afectando.
+5. **`src/lib/insightStandard.ts`** — para entender las reglas pass/fail vigentes.
+6. **Archivo concreto de la tarea** — leer con offset/limit, nunca completo.
+
+Si la tarea es "agregar detector nuevo": glosario → manifiesto → `insight-engine.ts` (sección de detectores) → `insightStandard.ts` (qué reglas debe satisfacer el output).
+Si la tarea es "ajustar umbral / regla de filtrado": glosario → `insightStandard.ts` directo.
+Si la tarea es "cambiar narrativa o UI de bloque": leer `narrative-builder.ts` / `diagnostic-actions.ts`, NO insightStandard.
+
+### Reglas de propiedad
+
+- **No moveer reglas de pass/fail fuera de `insightStandard.ts`** una vez completada la Fase 6. Si una regla nueva vive en `insight-engine.ts`, es deuda y debe migrarse.
+- **No agregar nuevos registries** sin antes documentar el solapamiento con los 4 existentes en el glosario.
+- **No reescribir `insight-engine.ts` por afán de limpieza** mientras Fase 0–6 no estén cerradas. El refactor grande tiene su fase propia (7).
+
+---
+
+## DATOS DEMO
+Empresa: Los Pinos S.A.
+8 vendedores, 20 productos, 30 clientes, 93,155 filas de ventas
+Rango: Enero 2024 – Abril 2026 | 4 categorías | 3 canales | 10 departamentos (El Salvador)
+
+---
+
+## DEUDA TÉCNICA
+- Conectar backend Python forecast a RendimientoPage
+- Supabase Auth + RLS (antes del primer cliente pagador)
+- MetasPage: expandir para dimensiones producto/cliente/canal
+
+---
+
+## RESPONSE STYLE
+- Chat: máx. 5 líneas resumiendo archivos cambiados. Detalle va en los archivos.
+- No hacer dumps de código en el chat — usar Edit/Write directamente.
+- Análisis extensos → escribir en archivo .md, no en el chat.
+
+## BUILD & VERIFICATION
+- Después de editar .ts/.tsx: correr `npx tsc --noEmit` y confirmar 0 errores.
+- Si tsc falla: diagnosticar y corregir antes de continuar.
+
+## REFACTORING RULES
+- Preservar edge-cases, fallbacks y error paths a menos que se indique eliminarlos.
+- Si se eliminó algo no pedido explícitamente: restaurar o preguntar primero.
+
+## PERFORMANCE WORK
+- Medir tiempo actual antes de optimizar (console.time o similar).
+- Solo conservar el cambio si los números mejoran. Si es más lento: revertir.
+
+## TOKEN & CONTEXT EFFICIENCY (crítico)
+- NO releer un archivo después de Edit/Write — el harness ya valida el cambio.
+- Archivos grandes (leer SIEMPRE con offset/limit, nunca completos):
+  - src/lib/insight-engine.ts (6773 líneas)
+  - src/lib/insightEngine.ts (3107)
+  - src/pages/EstadoComercialPage.tsx (2650)
+  - src/lib/insightStandard.ts (2454)
+  - src/lib/analysis.ts (1830)
+  - src/pages/ChatPage.tsx (1662)
+  - src/lib/fileParser.ts (1628)
+- Para "buscar dónde se usa X" o exploración con >3 queries: usar Agent (Explore), no Grep+Read en serie.
+- Edits masivos: fragmentar en varios Edit en paralelo. NUNCA un Write gigante (dispara Output Token Limit).
+- Después de cada fase Z.X: invocar /regression-sweep para detectar fallbacks/edge-cases removidos sin querer.
+
+---
+
+## PRODUCTION READINESS (Sprint I — 2026-05-01)
+
+### Backend chat: auth + tier-aware quota (I2)
+- `/api/v1/chat` y `/api/v1/chat/stream` exigen `Authorization: Bearer <jwt>`
+  (Supabase JWT validado contra `auth.users`).
+- Quota tier-aware via env vars (`PLAN_TRIAL_DAILY`, `PLAN_ESENCIAL_DAILY`,
+  etc.). Modificable sin redeploy/migration. Defaults en `quota.py:PLAN_DEFAULTS`.
+- Admin bypass: emails en `ADMIN_EMAILS` (CSV) saltan toda verificación —
+  no consumen quota ni bloquean.
+- Atomicidad: tabla `chat_usage(user_id, date, count)` + RPC
+  `try_consume_chat_quota(user_id, daily, monthly)` con `SELECT FOR UPDATE`
+  (migration `011_chat_usage.sql`).
+- Frontend: `chatService.ts` usa `getAuthHeaders()` que lee `supabase.auth.getSession().access_token`.
+- Pricing reference: trial 5/50, esencial 10/200, profesional 50/unlimited,
+  empresa unlimited/unlimited (todos modificables via env).
+
+### Storage wrapper anti-leak demo (G1)
+- `appStore.ts` partialize devuelve `{}` en `dataSource === 'demo'` y el
+  storage wrapper no-opea `setItem` cuando state es demo o vacío.
+- Cubierto por `cleanup-and-storage.test.ts` y `demo-storage-isolation.test.ts`.
+
+### ErrorBoundary global (I3)
+- `<ErrorBoundary>` wrappea `<App/>` en `main.tsx`. Workaround: el repo no
+  tiene `@types/react`, ErrorBoundary usa cast manual de `React.Component`.
+- Fallback con botones "Recargar" y "Limpiar caché y recargar"
+  (este último invoca `cleanupClientState`).
+
+### Audits read-only
+- `docs/AUDIT-RLS-H4.md` — todas las tablas `public` con RLS, policies en
+  `organizations` / `organization_members` / `alert_status` / `subscriptions`.
+- `docs/AUDIT-I1-FOLLOWUPS.md` — `profiles` y `subscriptions` clean,
+  Storage `org-data` con 4 policies path-aware.
+- `docs/AUDIT-CHAT-BACKEND-I2.md` — diagnóstico pre-fix del endpoint
+  abierto + recomendaciones (la fix ya aplicada).
+- `docs/PROD-DEPLOY-CHECKLIST.md` — checklist humano para deploy.
+
+### Env vars requeridas en Render (backend)
+```
+SUPABASE_URL, SUPABASE_SERVICE_KEY        # prerequisito (NUEVAS desde I2)
+DEEPSEEK_API_KEY, ALLOWED_ORIGINS         # ya existentes
+ADMIN_EMAILS                              # I2
+PLAN_TRIAL_DAILY/MONTHLY                  # I2 (5/50)
+PLAN_ESENCIAL_DAILY/MONTHLY               # I2 (10/200)
+PLAN_PROFESIONAL_DAILY/MONTHLY            # I2 (50/unlimited)
+PLAN_EMPRESA_DAILY/MONTHLY                # I2 (unlimited/unlimited)
+```

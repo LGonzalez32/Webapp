@@ -28,7 +28,7 @@ const TABS: FeatureTab[] = [
     bullets: [
       'Evolución YTD vs año pasado',
       'Proyección automática de cierre',
-      '29+ alertas de riesgo activas',
+      'Alertas de riesgo accionables',
     ],
     visual: () => (
       <div className="space-y-3">
@@ -462,7 +462,7 @@ const PLANS: PricingPlan[] = [
     features: [
       '1 usuario',
       'Hasta 10,000 registros',
-      '22 patrones de riesgo',
+      'Patrones de riesgo automáticos',
       'Chat IA (10 consultas/mes)',
       'Exportar PDF',
     ],
@@ -613,8 +613,8 @@ export default function LandingPage() {
                       <div className="text-[10px] text-slate-500">2 clientes dormidos - Recovery: difícil</div>
                     </div>
                     <div className="bg-amber-500/10 border-l-2 border-amber-500 rounded p-1.5">
-                      <div className="text-[9px] text-slate-300 font-medium">Equipo no cerrará la meta del mes</div>
-                      <div className="text-[10px] text-slate-500">Brecha: 23,473 uds de 46,057</div>
+                      <div className="text-[9px] text-slate-300 font-medium">Equipo en riesgo de no cerrar la meta</div>
+                      <div className="text-[10px] text-slate-500">Proyección por debajo del objetivo</div>
                     </div>
                   </div>
                 </div>
@@ -632,7 +632,7 @@ export default function LandingPage() {
           </p>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
             {[
-              { num: '22', label: 'Patrones de riesgo' },
+              { num: '30+', label: 'Patrones de riesgo' },
               { num: 'IA', label: 'Alertas accionables' },
               { num: '< 2 min', label: 'Resultados en minutos' },
               { num: '0', label: 'Curva de aprendizaje' },
@@ -651,7 +651,7 @@ export default function LandingPage() {
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16 sm:py-20">
           <div className="text-center mb-10">
             <h2 className="text-2xl sm:text-3xl font-bold" style={{ color: '#1a1a2e' }}>
-              Todo lo que incluye tu reporte
+              Funciones
             </h2>
             <p className="mt-2 text-base" style={{ color: '#64748b' }}>
               Un solo archivo. Todo este análisis.
@@ -728,7 +728,7 @@ export default function LandingPage() {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
             {[
               { step: 1, icon: Upload, title: 'Sube tu archivo', desc: 'Arrastra tu Excel o CSV de ventas. Compatible con cualquier sistema.' },
-              { step: 2, icon: Zap, title: 'Análisis automático', desc: 'SalesFlow detecta 22 patrones de riesgo en segundos, sin configuración.' },
+              { step: 2, icon: Zap, title: 'Análisis automático', desc: 'SalesFlow detecta docenas de patrones de riesgo en segundos, sin configuración.' },
               { step: 3, icon: Target, title: 'Actúa con confianza', desc: 'Recibe alertas claras con acciones concretas y análisis de IA.' },
             ].map((s) => (
               <div key={s.step} className="rounded-xl p-5 text-center" style={{ background: '#ffffff', border: '1px solid #e2e6ef' }}>

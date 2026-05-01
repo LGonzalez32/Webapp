@@ -7,3 +7,20 @@ dist/
 backend/.env
 backend/__pycache__/
 *.pyc
+
+# Local editor / agent state — no versionar
+.claude/settings.local.json
+.obsidian/
+
+# MCP local config (contiene project_ref de Supabase, no compartir)
+.mcp.json
+
+# Playwright outputs
+test-results/
+playwright-report/
+
+# Bitácora interna de fixes aplicados (notas de trabajo, no producto)
+audit/
+
+# Supabase CLI scratch
+supabase/.temp/

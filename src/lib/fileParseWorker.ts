@@ -12,6 +12,15 @@ import {
   inventorySchema,
   mapRow,
   detectMappedColumns,
+  detectIgnoredColumns,
+  detectDateConvention,
+  parseDateWithConvention,
+  getDimensionKeys,
+  buildObligatoriedadParseError,
+  buildEffectiveMappings,
+  computeMappingTrace,
+  normalizeStr,
+  smartDecodeText,
   zodErrorToSpanish,
   detectTipoMeta,
   parseMonthNum,
@@ -22,6 +31,8 @@ interface ParseWorkerInput {
   type: 'sales' | 'metas' | 'inventory'
   buffer: ArrayBuffer
   fileName: string
+  /** [Z.P1.10.b.1] Override del mapeo automático. Solo aplica para type='sales'. */
+  override?: import('../types').MappingOverride
 }
 
 interface ProgressMessage {
@@ -38,6 +49,11 @@ interface ResultMessage {
   columns?: string[]
   sheetName?: string
   discardedRows?: unknown[]
+  ignoredColumns?: string[]
+  dateAmbiguity?: { convention: 'dmy' | 'mdy' | 'ymd' | 'unknown'; evidence: string; ambiguous: boolean }
+  warnings?: Array<{ code: string; message: string; field?: string }>
+  /** [Z.P1.10.b.1] Trace de mapeo (canónico → header crudo). Solo en type='sales'. */
+  mapping?: Record<string, string>
   error?: unknown
   tipoMeta?: 'unidades' | 'venta_neta'
 }
@@ -45,7 +61,7 @@ interface ResultMessage {
 const ENCODING_PATTERN = /[\u00C3\u00C2\u00BF\u00B7\u00E9\u00F1\u00E1\u00ED\u00F3\u00FA]/
 
 self.onmessage = (event: MessageEvent<ParseWorkerInput>) => {
-  const { type, buffer, fileName } = event.data
+  const { type, buffer, fileName, override } = event.data
   const post = (msg: ProgressMessage | ResultMessage) =>
     (self as unknown as Worker).postMessage(msg)
 
@@ -69,19 +85,11 @@ self.onmessage = (event: MessageEvent<ParseWorkerInput>) => {
     let sheetName: string | undefined
 
     if (ext === 'csv') {
-      let text = new TextDecoder('utf-8').decode(buffer)
-      let results = Papa.parse<Record<string, unknown>>(text, { header: true, skipEmptyLines: true })
+      // [Z.P1.7.2] Usar smartDecodeText (fallback CP1252 si UTF-8 da mojibake)
+      const text = smartDecodeText(buffer)
+      const results = Papa.parse<Record<string, unknown>>(text, { header: true, skipEmptyLines: true })
       rows = results.data
       rawHeaders = (results.meta.fields ?? []) as string[]
-
-      const badHeaders = rawHeaders.filter((h) => ENCODING_PATTERN.test(h))
-      if (badHeaders.length > 0) {
-        // Reintentar con latin1
-        text = new TextDecoder('latin1').decode(buffer)
-        results = Papa.parse<Record<string, unknown>>(text, { header: true, skipEmptyLines: true })
-        rows = results.data
-        rawHeaders = (results.meta.fields ?? []) as string[]
-      }
     } else {
       post({ type: 'progress', phase: 'reading', percent: 10, detail: 'Descomprimiendo Excel...' })
       const workbook = XLSX.read(buffer, { type: 'array', cellDates: true })
@@ -122,24 +130,27 @@ self.onmessage = (event: MessageEvent<ParseWorkerInput>) => {
       return
     }
 
-    // Validar encoding (igual que readFileDataWithMeta original)
-    const badHeaders = rawHeaders.filter((h) => ENCODING_PATTERN.test(h))
-    const firstRowValues = Object.values(rows[0] ?? {}).map(String)
-    if (badHeaders.length > 0 || firstRowValues.some((v) => ENCODING_PATTERN.test(v))) {
-      post({
-        type: 'result',
-        success: false,
-        error: {
-          code: 'ENCODING_ISSUE',
-          sample: badHeaders.slice(0, 3),
-          message:
-            'El archivo tiene problemas de codificación de texto ' +
-            '(caracteres especiales como tildes o ñ mal interpretados). ' +
-            'Para corregirlo: en Excel, guarda como ' +
-            '"CSV UTF-8 (delimitado por comas)" en lugar de "CSV".',
-        },
-      })
-      return
+    // [Z.P1.7.2] Encoding validation relajado: smartDecodeText ya escogió el mejor decode
+    // para CSV. Solo bloqueamos XLSX (path distinto, XLSX.read no usa smartDecodeText).
+    if (ext !== 'csv') {
+      const badHeaders = rawHeaders.filter((h) => ENCODING_PATTERN.test(h))
+      const firstRowValues = Object.values(rows[0] ?? {}).map(String)
+      if (badHeaders.length > 0 || firstRowValues.some((v) => ENCODING_PATTERN.test(v))) {
+        post({
+          type: 'result',
+          success: false,
+          error: {
+            code: 'ENCODING_ISSUE',
+            sample: badHeaders.slice(0, 3),
+            message:
+              'El archivo tiene problemas de codificación de texto ' +
+              '(caracteres especiales como tildes o ñ mal interpretados). ' +
+              'Para corregirlo: en Excel, guarda como ' +
+              '"CSV UTF-8 (delimitado por comas)" en lugar de "CSV".',
+          },
+        })
+        return
+      }
     }
 
     post({
@@ -150,8 +161,19 @@ self.onmessage = (event: MessageEvent<ParseWorkerInput>) => {
     })
 
     // ── Paso 2: Mapping en chunks ───────────────────────────────────────────
-    const MAPPINGS =
-      type === 'sales' ? SALES_MAPPINGS : type === 'metas' ? META_MAPPINGS : INVENTORY_MAPPINGS
+    // [Z.P1.10.b.1] Para sales con override, se construyen mappings efectivos
+    // (forzados/ignorados según override + warnings de overrides inválidos).
+    let overrideWarnings: Array<{ code: string; message: string; field?: string }> = []
+    let MAPPINGS: Record<string, string[]>
+    if (type === 'sales') {
+      const built = buildEffectiveMappings(SALES_MAPPINGS, override ?? {}, rawHeaders)
+      MAPPINGS = built.mappings
+      overrideWarnings = built.warnings
+    } else if (type === 'metas') {
+      MAPPINGS = META_MAPPINGS
+    } else {
+      MAPPINGS = INVENTORY_MAPPINGS
+    }
 
     post({ type: 'progress', phase: 'validating', percent: 50, detail: 'Mapeando columnas...' })
 
@@ -172,6 +194,7 @@ self.onmessage = (event: MessageEvent<ParseWorkerInput>) => {
     }
 
     const foundKeys = detectMappedColumns(mappedRows, Object.keys(MAPPINGS))
+    const ignoredColumns = detectIgnoredColumns(rawHeaders, MAPPINGS)
 
     if (foundKeys.length === 0) {
       const preview = rawHeaders.slice(0, 8).join(', ') + (rawHeaders.length > 8 ? '…' : '')
@@ -187,31 +210,25 @@ self.onmessage = (event: MessageEvent<ParseWorkerInput>) => {
       return
     }
 
+    let dateConv: ReturnType<typeof detectDateConvention> | undefined
+    // [Z.P1.10.b.1] Sembrar con warnings de overrides inválidos (OVERRIDE_HEADER_NOT_FOUND)
+    const salesWarnings: Array<{ code: string; message: string; field?: string }> = type === 'sales' ? [...overrideWarnings] : []
+
     if (type === 'sales') {
-      const missing = ['fecha', 'vendedor', 'unidades'].filter((c) => !foundKeys.includes(c))
-      if (missing.length > 0) {
-        post({
-          type: 'result',
-          success: false,
-          error: {
-            code: 'MISSING_REQUIRED',
-            missing,
-            found: foundKeys,
-            message: `Faltan columnas obligatorias: ${missing.join(', ')}. Se detectaron: ${foundKeys.join(', ')}.`,
-          },
-        })
+      // [Z.P1.1] Nueva regla: solo fecha obligatoria; al menos 1 entre {unidades, venta_neta}; al menos 1 dimensión.
+      const requiredError = buildObligatoriedadParseError('sales', foundKeys, ignoredColumns)
+      if (requiredError) {
+        post({ type: 'result', success: false, error: requiredError })
         return
       }
 
-      // Verificar que las fechas sean reconocibles
+      // [Z.P2.1] Detectar convención de fecha y reparsear filas
+      const fechaSample = mappedRows.slice(0, 50).map((r) => r.fecha).filter((f) => f !== undefined && f !== null)
+      dateConv = detectDateConvention(fechaSample)
       const fechaValues = mappedRows.slice(0, 10).map((r) => r.fecha).filter(Boolean)
-      const validDates = fechaValues.filter((f) => {
-        if (f instanceof Date) return !isNaN(f.getTime()) && f.getFullYear() > 2000
-        const num = typeof f === 'number' ? f : NaN
-        if (!isNaN(num)) return num > 36526 && num < 73050
-        const d = new Date(f as string)
-        return !isNaN(d.getTime()) && d.getFullYear() > 2000
-      })
+      const validDates = fechaValues
+        .map((f) => parseDateWithConvention(f, dateConv!.convention))
+        .filter((d): d is Date => d !== null && d.getFullYear() > 2000)
       if (fechaValues.length > 0 && validDates.length / fechaValues.length < 0.5) {
         post({
           type: 'result',
@@ -227,51 +244,47 @@ self.onmessage = (event: MessageEvent<ParseWorkerInput>) => {
         })
         return
       }
+      if (dateConv.convention !== 'unknown') {
+        for (const row of mappedRows) {
+          if (row.fecha !== undefined && row.fecha !== null && !(row.fecha instanceof Date)) {
+            const parsed = parseDateWithConvention(row.fecha, dateConv.convention)
+            if (parsed) row.fecha = parsed
+          }
+        }
+      }
+
+      // [Z.P1.9.2] costo_unitario requiere columna producto
+      if (foundKeys.includes('costo_unitario') && !foundKeys.includes('producto')) {
+        const headerOriginal =
+          rawHeaders.find((h) =>
+            (MAPPINGS.costo_unitario ?? []).some((a) => normalizeStr(a) === normalizeStr(h))
+          ) ?? 'costo'
+        salesWarnings.push({
+          code: 'COSTO_SIN_PRODUCTO',
+          field: 'costo_unitario',
+          message: `Detectamos la columna "${headerOriginal}" pero falta la columna producto. El análisis de margen requiere ambas; ignoramos la columna de costo.`,
+        })
+        for (const row of mappedRows) {
+          delete row.costo_unitario
+        }
+        const idx = foundKeys.indexOf('costo_unitario')
+        if (idx >= 0) foundKeys.splice(idx, 1)
+      }
     }
 
     if (type === 'inventory') {
-      const missing = ['producto', 'unidades'].filter((c) => !foundKeys.includes(c))
-      if (missing.length > 0) {
-        post({
-          type: 'result',
-          success: false,
-          error: {
-            code: 'MISSING_REQUIRED',
-            missing,
-            found: foundKeys,
-            message: `Faltan columnas obligatorias: ${missing.join(', ')}. Se detectaron: ${foundKeys.join(', ')}.`,
-          },
-        })
+      const requiredError = buildObligatoriedadParseError('inventory', foundKeys, ignoredColumns)
+      if (requiredError) {
+        post({ type: 'result', success: false, error: requiredError })
         return
       }
     }
 
     if (type === 'metas') {
-      if (!foundKeys.includes('mes_periodo')) {
-        post({
-          type: 'result',
-          success: false,
-          error: {
-            code: 'MISSING_REQUIRED',
-            missing: ['periodo (mes_periodo, mes, o period)'],
-            found: foundKeys,
-            message:
-              'No se encontró columna de período. Se aceptan: mes_periodo (YYYY-MM), mes + año separados, periodo, period, fecha.',
-          },
-        })
-        return
-      }
-      if (!foundKeys.includes('meta')) {
-        post({
-          type: 'result',
-          success: false,
-          error: {
-            code: 'MISSING_REQUIRED',
-            missing: ['meta'],
-            found: foundKeys,
-            message: 'No se encontró columna de meta/objetivo. Se aceptan: meta, target, budget, objetivo, cuota.',
-          },
-        })
+      // [Z.P1.3] Aceptar mes_periodo O mes como fuente de período
+      const requiredError = buildObligatoriedadParseError('metas', foundKeys, ignoredColumns)
+      if (requiredError) {
+        post({ type: 'result', success: false, error: requiredError })
         return
       }
     }
@@ -345,6 +358,11 @@ self.onmessage = (event: MessageEvent<ParseWorkerInput>) => {
             }
           }
 
+          // [Z.P1.3] Columna `mes` numérica aislada
+          if (mes === null && mapped.mes !== undefined) {
+            mes = parseMonthNum(mapped.mes)
+          }
+
           if (anio === null && mapped.anio !== undefined) {
             const n = Number(mapped.anio)
             if (!isNaN(n) && n >= 2000 && n <= 2100) anio = n
@@ -375,13 +393,9 @@ self.onmessage = (event: MessageEvent<ParseWorkerInput>) => {
             ...(tipo_meta === 'venta_neta' ? { meta_usd: meta } : { meta_uds: meta }),
             meta,
             tipo_meta,
-            ...(mapped.vendedor !== undefined ? { vendedor: String(mapped.vendedor) } : {}),
-            ...(mapped.cliente !== undefined ? { cliente: String(mapped.cliente) } : {}),
-            ...(mapped.producto !== undefined ? { producto: String(mapped.producto) } : {}),
-            ...(mapped.categoria !== undefined ? { categoria: String(mapped.categoria) } : {}),
-            ...(mapped.departamento !== undefined ? { departamento: String(mapped.departamento) } : {}),
-            ...(mapped.supervisor !== undefined ? { supervisor: String(mapped.supervisor) } : {}),
-            ...(mapped.canal !== undefined ? { canal: String(mapped.canal) } : {}),
+          }
+          for (const key of getDimensionKeys('metas')) {
+            if (mapped[key] !== undefined) record[key] = String(mapped[key])
           }
           data.push(record)
         }
@@ -412,14 +426,14 @@ self.onmessage = (event: MessageEvent<ParseWorkerInput>) => {
     let columns = foundKeys
     if (type === 'metas') {
       tipoMeta = detectTipoMeta(rawHeaders)
-      columns = foundKeys.filter((k) => k !== 'mes_periodo' && k !== 'anio').concat(['mes', 'anio'])
+      columns = Array.from(new Set(foundKeys.filter((k) => k !== 'mes_periodo' && k !== 'anio' && k !== 'mes').concat(['mes', 'anio'])))
     }
 
     post({
       type: 'progress',
       phase: 'done',
       percent: 100,
-      detail: `${data.length.toLocaleString('es')} registros listos`,
+      detail: `${data.length.toLocaleString('es')} ${data.length === 1 ? 'registro listo' : 'registros listos'}`,
     })
 
     post({
@@ -429,6 +443,19 @@ self.onmessage = (event: MessageEvent<ParseWorkerInput>) => {
       columns,
       sheetName,
       discardedRows: discardedRows.length > 0 ? discardedRows : undefined,
+      ignoredColumns: ignoredColumns.length > 0 ? ignoredColumns : undefined,
+      // [P2] Emitir siempre que la convención sea dmy/mdy (no solo cuando
+      // ambiguous=true). Antes el caso `12/13/2026` con secondOver12 fijaba
+      // mdy con ambiguous=false → no warning → usuario no veía la asunción.
+      // El flag `ambiguous` se pasa para que la UI diferencie el copy entre
+      // "ambiguo (asumimos X)" vs "detectamos formato X".
+      dateAmbiguity: dateConv && (dateConv.convention === 'dmy' || dateConv.convention === 'mdy')
+        ? { convention: dateConv.convention, evidence: dateConv.evidence, ambiguous: dateConv.ambiguous }
+        : undefined,
+      warnings: salesWarnings.length > 0 ? salesWarnings : undefined,
+      // [P4] Trace de mapeo para los 3 tipos. Antes solo se emitía para sales;
+      // el panel "Mapeo detectado" lo necesita también en metas/inventario.
+      mapping: computeMappingTrace(rawHeaders, MAPPINGS),
       tipoMeta,
     })
   } catch (err: unknown) {

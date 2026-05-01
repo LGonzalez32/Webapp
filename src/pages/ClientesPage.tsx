@@ -3,26 +3,41 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useDemoPath } from '../lib/useDemoPath'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
+import { formatPeriodLabel } from '../lib/periods'
 import { Users, ChevronUp, ChevronDown } from 'lucide-react'
+import { toast } from 'sonner'
 import type { ClienteDormido } from '../types'
 // callAI removed — analysis is now computed locally
 import AnalysisDrawer from '../components/ui/AnalysisDrawer'
 import ClientePanel from '../components/cliente/ClientePanel'
 import { SFSelect } from '../components/ui/SFSelect'
 import { SFSearch } from '../components/ui/SFSearch'
+import {
+  DIAS_DORMIDO_MIN,
+  DIAS_DORMIDO_MAX,
+  // R103: estas son constantes de configuración UI.
+  // Importación directa de insightStandard es conforme a R103.
+} from '../lib/insightStandard'
+import {
+  getParetoClientes,
+  getClientesEnRiesgoTemprano,
+  getValorEnRiesgoTotal,
+  type ParetoClienteEntry,
+  type RiesgoTempranoEntry,
+} from '../lib/domain-aggregations'
 
+
+const MESES_CORTOS = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']
 
 function formatDays(d: number): string {
   if (d >= 30) return `${Math.floor(d / 30)}m ${d % 30}d`
   return `${d}d`
 }
 
-type ParetoCliente = {
-  nombre: string; totalUnidades: number; totalVenta: number
-  vendedor: string; varPct: number | null; cumulativePct: number; peso: number
-}
+// R102: alias al tipo canónico de domain-aggregations (Z.1.b)
+type ParetoCliente = ParetoClienteEntry
 
-type SortKey = 'prioridad' | 'dias_sin_actividad' | 'valor_historico' | 'compras_historicas' | 'vendedor' | 'cliente'
+type SortKey = 'prioridad' | 'dias_sin_actividad' | 'valor_yoy_usd' | 'transacciones_yoy' | 'vendedor' | 'cliente'
 type SortDir = 'asc' | 'desc'
 
 const RECOVERY_CONFIG = {
@@ -47,6 +62,7 @@ export default function ClientesPage() {
     selectedPeriod,
     dataAvailability,
     configuracion,
+    setConfiguracion,
     isProcessed,
     insights,
     categoriasInventario,
@@ -54,6 +70,12 @@ export default function ClientesPage() {
     categoriaAnalysis,
     clienteSummaries,
   } = useAppStore()
+
+  // [Ticket 3.B.4] Label del rango YoY (año anterior). includeYear: true porque
+  // refiere al año pasado y omitirlo ambiguafica. Sentinel year=0 → placeholder.
+  const yoyPeriodLabel = selectedPeriod.year > 0
+    ? formatPeriodLabel(selectedPeriod.year - 1, selectedPeriod.monthStart, selectedPeriod.monthEnd, { includeYear: true })
+    : '—'
 
   const [highlightActive, setHighlightActive] = useState<string | null>(highlightCliente)
   const highlightRef = useCallback((node: HTMLTableRowElement | null) => {
@@ -77,6 +99,46 @@ export default function ClientesPage() {
   const [expandedParetoId, setExpandedParetoId] = useState<string | null>(null)
   const [paretoAnalysisMap, setParetoAnalysisMap] = useState<Record<string, { loading: boolean; text: string | null; content?: React.ReactNode }>>({})
   const [panelCliente, setPanelCliente] = useState<string | null>(null)
+
+  // ── Umbral días-dormido: exploración temporal (fix-1.3) ──────────────────────
+  // Fuente de verdad global = configuracion.dias_dormido_threshold (store).
+  // Este input es exploración local; "Guardar como predeterminado" propaga al store.
+  const [diasDormidoInput, setDiasDormidoInput] = useState<number>(
+    configuracion.dias_dormido_threshold
+  )
+  // Sincronizar input cuando Configuración cambia externamente (ej. desde /configuracion)
+  useEffect(() => {
+    setDiasDormidoInput(configuracion.dias_dormido_threshold)
+  }, [configuracion.dias_dormido_threshold])
+
+  // true cuando el valor local difiere del global → muestra botón "Guardar"
+  const diasDormidoCustom = diasDormidoInput !== configuracion.dias_dormido_threshold
+
+  const clampDiasDormido = useCallback((valor: number) => {
+    return Math.max(DIAS_DORMIDO_MIN, Math.min(DIAS_DORMIDO_MAX, Math.round(valor)))
+  }, [])
+
+  const saveAsDefault = useCallback(() => {
+    const clamped = clampDiasDormido(diasDormidoInput)
+    setConfiguracion({ dias_dormido_threshold: clamped })
+    toast.success(`Umbral actualizado a ${clamped} días`)
+    setDiasDormidoInput(clamped)
+  }, [diasDormidoInput, clampDiasDormido, setConfiguracion])
+
+  // Hash-based scroll/focus: navegación desde cintillo de Estado Comercial.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (window.location.hash !== '#dias-dormido-input') return
+    const id = window.setTimeout(() => {
+      const el = document.getElementById('dias-dormido-input') as HTMLInputElement | null
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        el.focus()
+        el.select?.()
+      }
+    }, 300)
+    return () => window.clearTimeout(id)
+  }, [])
 
   const handleAnalyzeTopCliente = useCallback((c: ParetoCliente) => {
     const id = `pareto-${c.nombre}`
@@ -167,7 +229,7 @@ export default function ClientesPage() {
 
     const clienteSales = sales.filter(s => s.cliente === c.cliente)
     const mesesSet = new Set(clienteSales.map(s => `${new Date(s.fecha).getFullYear()}-${new Date(s.fecha).getMonth()}`))
-    const promedioMensual = mesesSet.size > 0 ? Math.round(c.valor_historico / mesesSet.size) : 0
+    const promedioMensual = mesesSet.size > 0 ? Math.round(c.valor_yoy_usd / mesesSet.size) : 0
 
     // Top products
     const prodMap: Record<string, number> = {}
@@ -207,7 +269,7 @@ export default function ClientesPage() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
           {[
             { label: 'Inactivo', value: `${c.dias_sin_actividad}d` },
-            { label: 'Historial', value: `${c.valor_historico >= 1000 ? `${(c.valor_historico / 1000).toFixed(1)}k` : c.valor_historico} uds` },
+            { label: `Valor ${yoyPeriodLabel}`, value: c.valor_yoy_usd > 0 ? `${moneda}${c.valor_yoy_usd >= 1000 ? `${(c.valor_yoy_usd / 1000).toFixed(1)}k` : c.valor_yoy_usd}` : '—' },
             { label: 'Vendedor', value: c.vendedor.split(' ')[0] },
           ].map((m, i) => (
             <div key={i} style={{ padding: '8px 10px', background: 'var(--sf-bg)', borderRadius: 8, border: '1px solid var(--sf-border)' }}>
@@ -241,6 +303,7 @@ export default function ClientesPage() {
     setAnalysisMap(prev => ({ ...prev, [id]: { loading: false, text: 'computed', content } }))
   }, [sales, categoriasInventario, vendorAnalysis, clientesDormidos, categoriaAnalysis])
 
+  // R103: lookup UI — lista de vendedores para filtro de select, depende de estado UI
   const vendedores = useMemo(
     () => {
       const set = new Set<string>()
@@ -251,56 +314,17 @@ export default function ClientesPage() {
     [clientesDormidos, clienteSummaries],
   )
 
-  // Top-20 clientes derived from pre-computed clienteSummaries (off-thread)
-  const paretoClientes = useMemo<ParetoCliente[]>(() => {
-    if (!clienteSummaries.length) return []
-    const top = clienteSummaries.slice(0, 20)
-    const totalTop = top.reduce(
-      (s, c) => s + (dataAvailability.has_venta_neta ? c.ventaCur : c.udsCur),
-      0,
-    )
-    let cum = 0
-    return top.map((c) => {
-      const cur = dataAvailability.has_venta_neta ? c.ventaCur : c.udsCur
-      cum += cur
-      const cumulativePct = totalTop > 0 ? (cum / totalTop) * 100 : 0
-      const peso = totalTop > 0 ? (cur / totalTop) * 100 : 0
-      return {
-        nombre: c.nombre,
-        totalUnidades: c.udsCur,
-        totalVenta: c.ventaCur,
-        vendedor: c.vendedor,
-        varPct: c.varPct,
-        cumulativePct,
-        peso,
-      }
-    })
-  }, [clienteSummaries, dataAvailability.has_venta_neta])
+  // R102/Z.1.b: migrado a domain-aggregations.getParetoClientes (R59: peso total universe)
+  const paretoClientes = useMemo<ParetoCliente[]>(
+    () => getParetoClientes(clienteSummaries, dataAvailability.has_venta_neta),
+    [clienteSummaries, dataAvailability.has_venta_neta],
+  )
 
-  // Riesgo temprano derived from pre-computed clienteSummaries
-  const riesgoTemprano = useMemo(() => {
-    if (!clienteSummaries.length) return []
-    const items = clienteSummaries
-      .filter((c) => c.riesgoSignal !== null)
-      .map((c) => {
-        const lastPurchase = new Date(c.lastDate)
-        return {
-          nombre: c.nombre,
-          vendedor: c.vendedor,
-          lastPurchase,
-          avgDays: c.riesgoAvgDays,
-          daysSince: c.riesgoDaysSince,
-          atraso: c.riesgoAtraso,
-          signal: c.riesgoSignal as 'en riesgo' | 'desacelerando',
-          valorHistorico: c.riesgoValorHistorico,
-        }
-      })
-    items.sort((a, b) => {
-      if (a.signal !== b.signal) return a.signal === 'en riesgo' ? -1 : 1
-      return b.valorHistorico - a.valorHistorico
-    })
-    return items
-  }, [clienteSummaries])
+  // R102/Z.1.b: migrado a domain-aggregations.getClientesEnRiesgoTemprano
+  const riesgoTemprano = useMemo<RiesgoTempranoEntry[]>(
+    () => getClientesEnRiesgoTemprano(clienteSummaries),
+    [clienteSummaries],
+  )
 
   useEffect(() => {
     if (initialPanelCliente) setPanelCliente(initialPanelCliente)
@@ -317,34 +341,39 @@ export default function ClientesPage() {
   // No puede haber hooks después del early return.
   const searchQ = searchCliente.toLowerCase()
 
+  // R103: filtro UI — depende de estado local filterVendedor y searchQ
   const filtered = useMemo(() => {
     return clientesDormidos.filter(c => {
+      if ((c.dias_sin_actividad ?? 0) < diasDormidoInput) return false
       if (filterVendedor !== 'all' && c.vendedor !== filterVendedor) return false
       if (searchQ && !c.cliente.toLowerCase().includes(searchQ)) return false
       return true
     })
-  }, [clientesDormidos, filterVendedor, searchQ])
+  }, [clientesDormidos, diasDormidoInput, filterVendedor, searchQ])
 
+  // R103: orden UI — sort por criterio seleccionado por usuario
   const sortedFull = useMemo(() => {
     return filtered.slice().sort((a, b) => {
       const mul = sortDir === 'desc' ? -1 : 1
       if (sortKey === 'prioridad') return mul * (a.recovery_score - b.recovery_score)
       if (sortKey === 'dias_sin_actividad') return mul * (a.dias_sin_actividad - b.dias_sin_actividad)
-      if (sortKey === 'valor_historico') return mul * (a.valor_historico - b.valor_historico)
-      if (sortKey === 'compras_historicas') return mul * (a.compras_historicas - b.compras_historicas)
+      if (sortKey === 'valor_yoy_usd') return mul * (a.valor_yoy_usd - b.valor_yoy_usd)
+      if (sortKey === 'transacciones_yoy') return mul * (a.transacciones_yoy - b.transacciones_yoy)
       if (sortKey === 'vendedor') return mul * a.vendedor.localeCompare(b.vendedor)
       return mul * a.cliente.localeCompare(b.cliente)
     })
   }, [filtered, sortKey, sortDir])
 
+  // R103: paginación UI — slice derivado de sortedFull y visibleCount (estado local)
   const sorted = useMemo(() => sortedFull.slice(0, visibleCount), [sortedFull, visibleCount])
 
+  // R102/Z.1.b: migrado a domain-aggregations.getValorEnRiesgoTotal
   const totalValorEnRiesgo = useMemo(
-    () => clientesDormidos.reduce((a, c) => a + c.valor_historico, 0),
+    () => getValorEnRiesgoTotal(clientesDormidos),
     [clientesDormidos],
   )
 
-  // Filtered versions for pareto and riesgo (base memos stay unfiltered for badges)
+  // R103: filtro UI — versión filtrada por vendedor/búsqueda para tab pareto
   const filteredPareto = useMemo(() => {
     return paretoClientes.filter(c => {
       if (filterVendedor !== 'all' && c.vendedor !== filterVendedor) return false
@@ -353,6 +382,7 @@ export default function ClientesPage() {
     })
   }, [paretoClientes, filterVendedor, searchQ])
 
+  // R103: filtro UI — versión filtrada para tab riesgo temprano
   const filteredRiesgoFull = useMemo(() => {
     return riesgoTemprano.filter(c => {
       if (filterVendedor !== 'all' && c.vendedor !== filterVendedor) return false
@@ -361,6 +391,7 @@ export default function ClientesPage() {
     })
   }, [riesgoTemprano, filterVendedor, searchQ])
 
+  // R103: paginación UI — slice de riesgoTemprano filtrado
   const filteredRiesgo = useMemo(
     () => filteredRiesgoFull.slice(0, visibleCount),
     [filteredRiesgoFull, visibleCount],
@@ -394,24 +425,36 @@ export default function ClientesPage() {
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-[var(--sf-t1)]">Clientes</h1>
-          <p style={{ fontSize: '12px', color: 'var(--sf-t5)', margin: '3px 0 0' }}>Clientes inactivos, pareto y señales tempranas de riesgo</p>
+          <p style={{ fontSize: '12px', color: 'var(--sf-t5)', margin: '3px 0 0' }}>Clientes inactivos, concentración de ventas y señales tempranas de riesgo</p>
         </div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          <span style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'rgba(226,75,74,0.15)', color: '#E24B4A', border: '1px solid rgba(226,75,74,0.25)' }}>
-            {clientesDormidos.length} inactivos
+          <span
+            style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'rgba(226,75,74,0.15)', color: '#E24B4A', border: '1px solid rgba(226,75,74,0.25)', cursor: 'help' }}
+            title={`Clientes sin comprar en los últimos ${diasDormidoInput} días (umbral del filtro activo). Total en análisis: ${clientesDormidos.length}.`}
+          >
+            {filtered.length} inactivos
           </span>
-          <span style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'rgba(239,159,39,0.15)', color: '#EF9F27', border: '1px solid rgba(239,159,39,0.25)' }}>
+          <span
+            style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'rgba(239,159,39,0.15)', color: '#EF9F27', border: '1px solid rgba(239,159,39,0.25)', cursor: 'help' }}
+            title="Total de venta del año pasado en el mismo período aportada por clientes inactivos. Aproximación de lo que se pierde si no se recuperan."
+          >
             {moneda}{totalValorEnRiesgo >= 1000 ? `${(totalValorEnRiesgo / 1000).toFixed(1)}k` : totalValorEnRiesgo.toLocaleString(undefined, { maximumFractionDigits: 0 })} en riesgo
           </span>
-          <span style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'rgba(239,159,39,0.15)', color: '#EF9F27', border: '1px solid rgba(239,159,39,0.25)' }}>
+          <span
+            style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: 'rgba(239,159,39,0.15)', color: '#EF9F27', border: '1px solid rgba(239,159,39,0.25)', cursor: 'help' }}
+            title="Clientes activos cuya última compra excede su frecuencia habitual (más de 1.5× su frecuencia promedio): posibles dormidos próximos."
+          >
             {riesgoTemprano.length} riesgo temprano
           </span>
           {paretoClientes.length > 0 && (() => {
             const topPeso = paretoClientes[0].peso
             const isAlta = topPeso > 15
             return (
-              <span style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: isAlta ? 'rgba(226,75,74,0.15)' : 'rgba(239,159,39,0.15)', color: isAlta ? '#E24B4A' : '#EF9F27', border: `1px solid ${isAlta ? 'rgba(226,75,74,0.25)' : 'rgba(239,159,39,0.25)'}` }}>
-                {topPeso.toFixed(1)}% top cliente
+              <span
+                style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 500, background: isAlta ? 'rgba(226,75,74,0.15)' : 'rgba(239,159,39,0.15)', color: isAlta ? '#E24B4A' : '#EF9F27', border: `1px solid ${isAlta ? 'rgba(226,75,74,0.25)' : 'rgba(239,159,39,0.25)'}`, cursor: 'help' }}
+                title="Porcentaje del total de ventas que aporta el cliente más grande (peso del top 1 sobre el universo de clientes)."
+              >
+                {topPeso.toFixed(1)}% concentración cliente principal
               </span>
             )
           })()}
@@ -440,37 +483,154 @@ export default function ClientesPage() {
         )}
       </div>
 
-      {/* Tabs */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div style={{ display: 'inline-flex', background: 'var(--sf-inset)', borderRadius: '8px', padding: '3px', gap: '2px' }}>
-          {([
-            { key: 'dormidos', label: `Inactivos (${clientesDormidos.length})` },
-            { key: 'pareto',   label: 'Top Clientes' },
-            { key: 'riesgo',   label: 'Riesgo Temprano' },
-          ] as const).map(({ key: t, label }) => (
+      {/* Umbral días-dormido — exploración temporal (fix-1.3) */}
+      <div className="flex flex-wrap items-center gap-2 mb-3 text-[13px]" style={{ color: 'var(--sf-t4)' }}>
+        <label
+          htmlFor="dias-dormido-input"
+          title="Cambio temporal solo para esta vista. Para cambiar permanente, usá Configuración."
+          style={{ fontWeight: 500, color: 'var(--sf-t3)', cursor: 'help', borderBottom: '1px dotted var(--sf-border)' }}
+        >
+          Considerar dormido después de
+        </label>
+        <input
+          id="dias-dormido-input"
+          type="number"
+          min={DIAS_DORMIDO_MIN}
+          max={DIAS_DORMIDO_MAX}
+          step={1}
+          value={diasDormidoInput}
+          onChange={e => {
+            const n = parseInt(e.target.value, 10)
+            if (!Number.isNaN(n)) setDiasDormidoInput(n)
+          }}
+          onBlur={e => {
+            const n = parseInt(e.target.value, 10)
+            setDiasDormidoInput(Number.isNaN(n)
+              ? configuracion.dias_dormido_threshold
+              : clampDiasDormido(n))
+          }}
+          onKeyDown={e => {
+            if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur()
+          }}
+          style={{
+            width: 68,
+            padding: '4px 8px',
+            borderRadius: 6,
+            border: `1px solid ${diasDormidoCustom ? 'var(--sf-amber, #f59e0b)' : 'var(--sf-border)'}`,
+            background: 'var(--sf-card)',
+            color: 'var(--sf-t1)',
+            fontSize: 13,
+            textAlign: 'center',
+          }}
+        />
+        <span>días sin comprar</span>
+        <span style={{ color: 'var(--sf-t5)', marginLeft: 6 }}>
+          · {clientesDormidos.filter(d => (d.dias_sin_actividad ?? 0) >= diasDormidoInput).length} clientes clasificados con este umbral
+        </span>
+        {diasDormidoCustom && (
+          <>
             <button
-              key={t}
-              onClick={() => setTab(t)}
+              type="button"
+              onClick={saveAsDefault}
               style={{
-                padding: '5px 14px',
-                borderRadius: '6px',
-                fontSize: '12px',
-                fontWeight: 500,
-                background: tab === t ? 'rgba(29,158,117,0.15)' : 'transparent',
-                color: tab === t ? '#1D9E75' : 'var(--sf-t3)',
-                border: tab === t ? '1px solid rgba(29,158,117,0.25)' : '1px solid transparent',
+                marginLeft: 4,
+                padding: '3px 10px',
+                borderRadius: 6,
+                border: '1px solid rgba(245,158,11,0.4)',
+                background: 'rgba(245,158,11,0.08)',
+                color: '#f59e0b',
+                fontSize: 12,
                 cursor: 'pointer',
-                transition: 'all 150ms',
+                fontWeight: 500,
               }}
             >
-              {label}
+              Guardar como predeterminado
             </button>
-          ))}
+            <button
+              type="button"
+              onClick={() => setDiasDormidoInput(configuracion.dias_dormido_threshold)}
+              style={{
+                padding: '3px 8px',
+                borderRadius: 6,
+                border: '1px solid var(--sf-border)',
+                background: 'transparent',
+                color: 'var(--sf-t4)',
+                fontSize: 12,
+                cursor: 'pointer',
+              }}
+            >
+              ↩ restablecer
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* Tabs */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div
+          role="tablist"
+          aria-label="Vistas de clientes"
+          onKeyDown={(e) => {
+            const order = ['dormidos', 'pareto', 'riesgo'] as const
+            const idx = order.indexOf(tab)
+            let next: typeof order[number] | null = null
+            if (e.key === 'ArrowRight') next = order[(idx + 1) % order.length]
+            else if (e.key === 'ArrowLeft') next = order[(idx - 1 + order.length) % order.length]
+            else if (e.key === 'Home') next = order[0]
+            else if (e.key === 'End') next = order[order.length - 1]
+            if (next) {
+              e.preventDefault()
+              setTab(next)
+              ;(e.currentTarget.querySelector(`#tab-${next}`) as HTMLElement | null)?.focus()
+            }
+          }}
+          style={{ display: 'inline-flex', background: 'var(--sf-inset)', borderRadius: '8px', padding: '3px', gap: '2px' }}
+        >
+          {([
+            { key: 'dormidos', label: `Inactivos (${filtered.length})`, tip: `Clientes sin comprar desde hace al menos ${configuracion.dias_dormido_threshold} días (umbral configurable).` },
+            { key: 'pareto',   label: 'Mejores clientes', tip: 'Listado de clientes ordenados por venta acumulada — Pareto / concentración del negocio.' },
+            { key: 'riesgo',   label: 'Riesgo Temprano', tip: 'Clientes activos cuya última compra excede su frecuencia habitual (>1.5× su frecuencia promedio): posibles dormidos próximos.' },
+          ] as const).map(({ key: t, label, tip }) => {
+            const selected = tab === t
+            return (
+              <button
+                key={t}
+                id={`tab-${t}`}
+                role="tab"
+                type="button"
+                aria-selected={selected}
+                aria-controls={`panel-${t}`}
+                tabIndex={selected ? 0 : -1}
+                onClick={() => setTab(t)}
+                title={tip}
+                style={{
+                  padding: '5px 14px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  background: selected ? 'rgba(29,158,117,0.15)' : 'transparent',
+                  color: selected ? '#1D9E75' : 'var(--sf-t3)',
+                  border: selected ? '1px solid rgba(29,158,117,0.25)' : '1px solid transparent',
+                  cursor: 'pointer',
+                  transition: 'all 150ms',
+                }}
+              >
+                {label}
+              </button>
+            )
+          })}
         </div>
       </div>
 
       {/* Tab content — keyed div triggers fade-in on tab switch */}
-      <div key={tab} className="animate-in fade-in duration-150">
+      <div
+        key={tab}
+        id={`panel-${tab}`}
+        role="tabpanel"
+        aria-labelledby={`tab-${tab}`}
+        tabIndex={0}
+        className="animate-in fade-in duration-150"
+      >
 
       {/* Clientes dormidos table */}
       {tab === 'dormidos' && (
@@ -483,7 +643,7 @@ export default function ClientesPage() {
               </p>
               {totalValorEnRiesgo > 0 && usaDolares && (
                 <p className="text-xs mt-0.5" style={{ color: 'var(--sf-t3)' }}>
-                  {moneda}{totalValorEnRiesgo >= 1000 ? `${(totalValorEnRiesgo / 1000).toFixed(1)}k` : totalValorEnRiesgo.toLocaleString()} en ventas históricas
+                  {moneda}{totalValorEnRiesgo >= 1000 ? `${(totalValorEnRiesgo / 1000).toFixed(1)}k` : totalValorEnRiesgo.toLocaleString()} venta YoY perdida ({yoyPeriodLabel})
                   {sorted.length > 0 ? ` · ~${moneda}${Math.round(totalValorEnRiesgo / sorted.length / 1000 * 10) / 10}k promedio por cliente` : ''}
                 </p>
               )}
@@ -506,8 +666,8 @@ export default function ClientesPage() {
                       ['cliente', 'Cliente'],
                       ['vendedor', 'Vendedor'],
                       ['dias_sin_actividad', 'Inactivo'],
-                      ['compras_historicas', 'Compras históricas'],
-                      ['valor_historico', 'Valor hist.'],
+                      ['transacciones_yoy', 'Txns YoY'],
+                      ['valor_yoy_usd', usaDolares ? `Valor ${yoyPeriodLabel}` : `Unidades ${yoyPeriodLabel}`],
                       ['prioridad', 'Recuperación'],
                     ] as [SortKey, string][]).map(([k, label], i) => (
                       <th
@@ -576,11 +736,21 @@ export default function ClientesPage() {
                         >
                           {formatDays(c.dias_sin_actividad)}
                         </td>
-                        <td style={{ padding: '10px 12px', color: 'var(--sf-t3)', fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace", textAlign: 'right' }}>{c.compras_historicas}</td>
+                        <td style={{ padding: '10px 12px', color: 'var(--sf-t3)', fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace", textAlign: 'right' }}>{c.transacciones_yoy || '—'}</td>
                         <td style={{ padding: '10px 12px', color: 'var(--sf-t1)', fontWeight: 500, fontVariantNumeric: 'tabular-nums', fontFamily: "'DM Mono', monospace", textAlign: 'right' }}>
-                          {moneda}{c.valor_historico >= 1000
-                            ? `${(c.valor_historico / 1000).toFixed(1)}k`
-                            : c.valor_historico.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          {(() => {
+                            // [Sprint H2] Mostrar uds o USD según metricaGlobal.
+                            // unidades_yoy se rellena en analysis.ts paralelo a valor_yoy_usd.
+                            if (usaDolares) {
+                              return c.valor_yoy_usd > 0
+                                ? `${moneda}${c.valor_yoy_usd >= 1000 ? `${(c.valor_yoy_usd / 1000).toFixed(1)}k` : c.valor_yoy_usd.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+                                : '—'
+                            }
+                            const u = c.unidades_yoy ?? 0
+                            return u > 0
+                              ? `${u >= 1000 ? `${(u / 1000).toFixed(1)}k` : u.toLocaleString(undefined, { maximumFractionDigits: 0 })} uds`
+                              : '—'
+                          })()}
                         </td>
                         <td style={{ padding: '10px 12px', maxWidth: 180 }}>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -594,7 +764,7 @@ export default function ClientesPage() {
                             <span style={{ fontSize: '11px', color: 'var(--sf-t4)', lineHeight: 1.3 }}>
                               {c.recovery_label === 'alta' ? `Comprador frecuente, lleva ${c.dias_sin_actividad} días sin actividad`
                                 : c.recovery_label === 'recuperable' ? `Buen historial, se fue hace ${c.dias_sin_actividad} días`
-                                : c.recovery_label === 'dificil' ? (c.valor_historico > 20000 ? `Cliente de ${moneda}${(c.valor_historico / 1000).toFixed(0)}k, vale el intento` : 'Historial irregular, respuesta incierta')
+                                : c.recovery_label === 'dificil' ? (c.valor_yoy_usd > 5000 ? `Aportaba ${moneda}${(c.valor_yoy_usd / 1000).toFixed(0)}k, vale el intento` : 'Historial irregular, respuesta incierta')
                                 : `Sin señales de retorno en ${c.dias_sin_actividad} días`}
                             </span>
                             <span style={{
@@ -695,7 +865,7 @@ export default function ClientesPage() {
                                         `Profundizar sobre cliente dormido: ${c.cliente}`,
                                         `Vendedor: ${c.vendedor}`,
                                         `Días inactivo: ${c.dias_sin_actividad}`,
-                                        `Valor histórico: ${moneda}${c.valor_historico.toLocaleString()}`,
+                                        `Valor YoY (${yoyPeriodLabel}): ${moneda}${c.valor_yoy_usd.toLocaleString()}`,
                                         `Estado: ${c.recovery_label === 'alta' ? 'Alta probabilidad de recuperación' : c.recovery_label === 'recuperable' ? 'Recuperable' : c.recovery_label === 'dificil' ? 'Difícil de recuperar' : 'Perdido'}`,
                                         analysis.text ? `\nAnálisis previo:\n${analysis.text}` : '',
                                         ``,
@@ -768,15 +938,27 @@ export default function ClientesPage() {
           {/* Legend */}
           {paretoClientes.length > 0 && (
             <div className="flex items-center gap-4 flex-wrap px-4 py-2 mb-1" style={{ fontSize: 10, color: 'var(--sf-t5)' }}>
-              <span className="flex items-center gap-1.5">
+              <span
+                className="flex items-center gap-1.5"
+                style={{ cursor: 'help' }}
+                title="Cliente posicionado dentro del primer 50% del volumen acumulado del negocio. Concentración baja en este tramo."
+              >
                 <span style={{ width: 8, height: 2, background: 'rgba(29,158,117,0.6)', display: 'inline-block', borderRadius: 1 }} />
                 ≤50% bajo riesgo
               </span>
-              <span className="flex items-center gap-1.5">
+              <span
+                className="flex items-center gap-1.5"
+                style={{ cursor: 'help' }}
+                title="Cliente posicionado entre el 50% y el 80% del volumen acumulado. Tramo intermedio de concentración."
+              >
                 <span style={{ width: 8, height: 2, background: 'rgba(239,159,39,0.6)', display: 'inline-block', borderRadius: 1 }} />
                 50-80% concentración media
               </span>
-              <span className="flex items-center gap-1.5">
+              <span
+                className="flex items-center gap-1.5"
+                style={{ cursor: 'help' }}
+                title="Cliente posicionado más allá del 80% del volumen acumulado: cola larga del Pareto."
+              >
                 <span style={{ width: 8, height: 2, background: 'rgba(226,75,74,0.6)', display: 'inline-block', borderRadius: 1 }} />
                 &gt;80% alta concentración
               </span>
@@ -794,14 +976,14 @@ export default function ClientesPage() {
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--sf-border)', background: 'var(--sf-inset)' }}>
                     {([
-                      ['Cliente', 'left'],
-                      ['Vendedor', 'left'],
-                      ['Unidades', 'right'],
-                      ['Venta Neta', 'right'],
-                      ['VAR% YoY', 'right'],
-                      ['Peso acum.', 'right'],
-                    ] as [string, string][]).map(([h, align], i) => (
-                      <th key={h} style={{
+                      ['Cliente', 'left', undefined],
+                      ['Vendedor', 'left', undefined],
+                      ['Unidades', 'right', undefined],
+                      ['Venta Neta', 'right', undefined],
+                      ['Variación', 'right', 'Variación de venta del cliente vs el mismo período del año anterior.'],
+                      ['Peso acum.', 'right', 'Porcentaje acumulado de ventas que representan los clientes hasta esta fila (orden descendente por venta).'],
+                    ] as [string, string, string | undefined][]).map(([h, align, tip], i) => (
+                      <th key={h} title={tip} style={{
                         padding: '10px 12px',
                         fontSize: '11px',
                         textTransform: 'uppercase',
@@ -811,6 +993,7 @@ export default function ClientesPage() {
                         textAlign: align as 'left' | 'right',
                         borderLeft: i === 0 ? '3px solid #1D9E75' : undefined,
                         paddingLeft: i === 0 ? '16px' : undefined,
+                        cursor: tip ? 'help' : undefined,
                       }}>{h}</th>
                     ))}
                     <th style={{ padding: '8px 16px', width: '120px', minWidth: '120px', textAlign: 'right' }} />
@@ -828,7 +1011,11 @@ export default function ClientesPage() {
                         rows.push(
                           <tr key="div50">
                             <td colSpan={7} style={{ padding: '4px 12px', borderTop: '2px dashed rgba(29,158,117,0.35)' }}>
-                              <div className="flex items-center gap-2">
+                              <div
+                                className="flex items-center gap-2"
+                                style={{ cursor: 'help' }}
+                                title="Hasta esta fila, los clientes acumulan el 50% del volumen total del negocio. Marca el punto de Pareto."
+                              >
                                 <span style={{ fontSize: '10px', color: '#1D9E75', fontWeight: 600 }}>▲ 50% del volumen</span>
                                 <span style={{ fontSize: '9px', color: 'var(--sf-t5)' }}>— {idx + 1} clientes concentran la mitad</span>
                               </div>
@@ -841,7 +1028,11 @@ export default function ClientesPage() {
                         rows.push(
                           <tr key="div80">
                             <td colSpan={7} style={{ padding: '4px 12px', borderTop: '2px dashed rgba(239,159,39,0.35)' }}>
-                              <div className="flex items-center gap-2">
+                              <div
+                                className="flex items-center gap-2"
+                                style={{ cursor: 'help' }}
+                                title="Hasta esta fila, los clientes acumulan el 80% del volumen total. Aproximación de la regla 80/20."
+                              >
                                 <span style={{ fontSize: '10px', color: '#EF9F27', fontWeight: 600 }}>▲ 80% del volumen</span>
                                 <span style={{ fontSize: '9px', color: 'var(--sf-t5)' }}>— {idx + 1} de {paretoClientes.length} clientes</span>
                               </div>
@@ -977,6 +1168,14 @@ export default function ClientesPage() {
                   })()}
                 </tbody>
               </table>
+              {paretoClientes.length > 0 && (() => {
+                const topCoverage = paretoClientes[paretoClientes.length - 1].cumulativePct
+                return (
+                  <p className="px-5 py-2 text-[10px] text-[var(--sf-t4)] border-t border-[var(--sf-border)]">
+                    {paretoClientes.length} clientes — {topCoverage.toFixed(1)}% del volumen total del negocio (R59)
+                  </p>
+                )
+              })()}
             </div>
           )}
         </div>

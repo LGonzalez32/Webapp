@@ -141,11 +141,7 @@ export default function TermsPage() {
           11. Contacto
         </h2>
         <p className="mb-4 leading-relaxed" style={{ color: 'var(--sf-t3)' }}>
-          Si tienes preguntas sobre estos términos, contáctanos en{' '}
-          {/* TODO: Reemplazar con email real */}
-          <a href="mailto:soporte@salesflow.com" className="text-emerald-500 hover:underline">
-            soporte@salesflow.com
-          </a>.
+          Si tienes preguntas sobre estos términos, contáctanos a través de nuestros canales oficiales.
         </p>
       </div>
     </PublicLayout>

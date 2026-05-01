@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useAppStore } from '../store/appStore'
 import { getProjectionsFromBackend } from './forecastApi'
+import { recordAnalysisWorkerStageReport } from './insight-engine'
 import type { VendorAnalysis } from '../types'
 
 export function useAnalysis() {
@@ -26,6 +27,7 @@ export function useAnalysis() {
     setCategoriaAnalysis,
     setCanalAnalysis,
     setInsights,
+    setFilteredCandidates,
     setDataAvailability,
     setClienteSummaries,
     setProductoSummaries,
@@ -61,6 +63,7 @@ export function useAnalysis() {
     setCategoriaAnalysis: s.setCategoriaAnalysis,
     setCanalAnalysis: s.setCanalAnalysis,
     setInsights: s.setInsights,
+    setFilteredCandidates: s.setFilteredCandidates,
     setDataAvailability: s.setDataAvailability,
     setClienteSummaries: s.setClienteSummaries,
     setProductoSummaries: s.setProductoSummaries,
@@ -121,9 +124,12 @@ export function useAnalysis() {
           categoriaAnalysis: Parameters<typeof setCategoriaAnalysis>[0] | null
           canalAnalysis: Parameters<typeof setCanalAnalysis>[0] | null
           insights: Parameters<typeof setInsights>[0]
+          filteredCandidates?: Parameters<typeof setFilteredCandidates>[0]
           dataAvailability: Parameters<typeof setDataAvailability>[0]
+          runtimeTelemetry?: Parameters<typeof recordAnalysisWorkerStageReport>[0]
         }
 
+        if (data.runtimeTelemetry) recordAnalysisWorkerStageReport(data.runtimeTelemetry)
         setDataAvailability(dataAvailability)
         setVendorAnalysis(vendorAnalysis)
         setTeamStats(teamStats)
@@ -143,6 +149,8 @@ export function useAnalysis() {
         if (data.monthlyTotalsSameDay) setMonthlyTotalsSameDay(data.monthlyTotalsSameDay)
         if (data.fechaRefISO) setFechaRefISO(data.fechaRefISO)
         setInsights(insights)
+        // [Z.11.4] Single source of truth: candidates post Z.11+Z.12 vienen del worker.
+        if (data.filteredCandidates) setFilteredCandidates(data.filteredCandidates)
         setIsProcessed(true)
         setIsLoading(false)
         setLoadingMessage('')
@@ -162,6 +170,8 @@ export function useAnalysis() {
         setVendorAnalysis(data.vendorAnalysis as VendorAnalysis[])
         setTeamStats(data.teamStats)
         setInsights(data.insights)
+        // [Z.11.4] Phase 2 rerun (con proyecciones) también actualiza filteredCandidates.
+        if (data.filteredCandidates) setFilteredCandidates(data.filteredCandidates)
         setForecastLoading(false)
         worker.terminate()
         workerRef.current = null

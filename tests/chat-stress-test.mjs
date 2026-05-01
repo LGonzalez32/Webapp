@@ -4,7 +4,11 @@
  * and evaluates responses against expected behavior.
  */
 
-const DEEPSEEK_API_KEY = 'sk-be7fa627e4a04ca6a0d0be9bdb3fc29c'
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY
+if (!DEEPSEEK_API_KEY) {
+  console.error('Falta DEEPSEEK_API_KEY. Exportá la variable antes de correr este test:\n  export DEEPSEEK_API_KEY=tu-key-aqui')
+  process.exit(1)
+}
 const DEEPSEEK_URL = 'https://api.deepseek.com/chat/completions'
 
 // ─── System prompt representativo (basado en buildSystemPrompt con datos demo) ──

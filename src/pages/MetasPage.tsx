@@ -4,11 +4,21 @@ import { useDemoPath } from '../lib/useDemoPath'
 import { useAppStore } from '../store/appStore'
 import { useAnalysis } from '../lib/useAnalysis'
 import { salesInPeriod, periodKey } from '../lib/analysis'
-import { Target, TrendingUp, TrendingDown, Upload, PenLine, ChevronDown, Users } from 'lucide-react'
+import {
+  getVentasNetaPeriodo,
+  getMatrizHistoricaVendedorMes,
+  getSupervisorMap,
+  getListaSupervisores,
+  getMetaMes,
+  type MatrizVendedorMesEntry,
+} from '../lib/domain-aggregations'
+import { Target, TrendingUp, TrendingDown, Upload, PenLine, ChevronDown, BarChart2 } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { callAI } from '../lib/chatService'
 import AnalysisDrawer from '../components/ui/AnalysisDrawer'
 import { parseMetasFile } from '../lib/fileParser'
+import MetasPivotPanel from '../components/MetasPivotPanel'
+import { SFSelect } from '../components/ui/SFSelect'
 import type { MetaRecord } from '../types'
 
 const MESES_SHORT = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
@@ -48,11 +58,70 @@ export default function MetasPage() {
   const [excelLoading, setExcelLoading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // Vendedores activos derivados de las ventas (para edición manual)
+  // [fix-1.2] vendedoresActivos deriva de metas (no de ventas): incluye vendedores
+  // con meta asignada aunque no tengan ventas en el período seleccionado.
   const vendedoresActivos = useMemo(() => {
-    const s = new Set(sales.map(s => s.vendedor).filter(Boolean))
+    const s = new Set(
+      metas.filter(m => m.anio === currentYear && m.vendedor).map(m => m.vendedor!)
+    )
     return Array.from(s).sort()
-  }, [sales])
+  }, [metas, currentYear])
+
+  // ── Dimension breakdown (C2) ──────────────────────────────────────────────
+  type DimView = 'vendedor' | 'canal' | 'categoria'
+  const [dimView, setDimView] = useState<DimView>('vendedor')
+
+  const dimValues = useMemo(() => {
+    if (dimView === 'vendedor') return vendedoresActivos
+    if (dimView === 'canal') {
+      const s = new Set(sales.map(s => s.canal).filter((c): c is string => Boolean(c)))
+      return Array.from(s).sort()
+    }
+    const s = new Set(sales.map(s => s.categoria).filter((c): c is string => Boolean(c)))
+    return Array.from(s).sort()
+  }, [dimView, vendedoresActivos, sales])
+
+  const dimRows = useMemo(() => {
+    const getMetaVal = (m: MetaRecord) => tipoMetaActivo === 'usd' ? (m.meta_usd ?? 0) : (m.meta_uds ?? m.meta ?? 0)
+    const getSalesVal = (arr: typeof sales) => tipoMetaActivo === 'usd'
+      ? arr.reduce((a, s) => a + (s.venta_neta ?? 0), 0)
+      : arr.reduce((a, s) => a + s.unidades, 0)
+
+    const matchesDim = (val: string) => (m: MetaRecord | typeof sales[0], isDim: 'meta' | 'sale') => {
+      if (isDim === 'meta') {
+        const mr = m as MetaRecord
+        if (dimView === 'vendedor') return mr.vendedor === val && !mr.canal && !mr.categoria && !mr.cliente
+        if (dimView === 'canal') return mr.canal === val && !mr.vendedor && !mr.categoria && !mr.cliente
+        return mr.categoria === val && !mr.vendedor && !mr.canal && !mr.cliente
+      }
+      const sr = m as typeof sales[0]
+      if (dimView === 'vendedor') return sr.vendedor === val
+      if (dimView === 'canal') return sr.canal === val
+      return sr.categoria === val
+    }
+
+    return dimValues.map(val => {
+      const matchMeta = matchesDim(val)
+      const matchSale = matchesDim(val)
+
+      const metasMes = metas.filter(m => m.anio === currentYear && m.mes === currentMonth + 1 && matchMeta(m, 'meta'))
+      const metaMes = metasMes.reduce((a, m) => a + getMetaVal(m), 0)
+      const salesMes = salesInPeriod(sales, currentYear, currentMonth).filter(s => matchSale(s, 'sale'))
+      const realMes = getSalesVal(salesMes)
+      const pctMes = metaMes > 0 ? (realMes / metaMes) * 100 : null
+
+      const metasYTD = metas.filter(m => m.anio === currentYear && m.mes >= 1 && m.mes <= currentMonth + 1 && matchMeta(m, 'meta'))
+      const metaYTD = metasYTD.reduce((a, m) => a + getMetaVal(m), 0)
+      const salesYTD = sales.filter(s => {
+        const d = new Date(s.fecha)
+        return d.getFullYear() === currentYear && d.getMonth() <= currentMonth && matchSale(s, 'sale')
+      })
+      const realYTD = getSalesVal(salesYTD)
+      const pctYTD = metaYTD > 0 ? (realYTD / metaYTD) * 100 : null
+
+      return { val, metaMes, realMes, pctMes, metaYTD, realYTD, pctYTD }
+    })
+  }, [dimValues, dimView, metas, sales, currentYear, currentMonth, tipoMetaActivo])
 
   const buildDraft = useCallback(() => {
     const draft: Record<string, Record<number, { meta_uds?: number; meta_usd?: number }>> = {}
@@ -122,7 +191,7 @@ export default function MetasPage() {
     setExcelError(null)
   }, [currentYear, buildDraft])
 
-  // Día máximo con datos en el período actual (para "en curso")
+  // R103: derivación local — día máximo con datos del período activo, usado para UI "en curso" y prompts IA
   const maxDayInPeriod = useMemo(() => {
     const periodSales = sales.filter(s => {
       const d = new Date(s.fecha)
@@ -157,7 +226,8 @@ Reglas: máximo 100 palabras, cada bullet con número concreto, sin instruccione
       `Vendedor: ${vendor}`,
       `Cumplimiento: ${pct != null ? `${pct.toFixed(1)}%` : 'N/A'}`,
       `Real: ${realVal.toLocaleString()} uds | Meta: ${metaVal?.toLocaleString() ?? 'N/A'} uds`,
-      va?.variacion_ytd_pct != null ? `Variación YTD: ${va.variacion_ytd_pct.toFixed(1)}%` : '',
+      va?.variacion_ytd_usd_pct != null ? `Variación YTD (dinero): ${va.variacion_ytd_usd_pct.toFixed(1)}%` : '',
+      va?.variacion_ytd_uds_pct != null ? `Variación YTD (uds): ${va.variacion_ytd_uds_pct.toFixed(1)}%` : '',
       va ? `Estado: ${va.riesgo.toUpperCase()}` : '',
       `Día ${maxDayInPeriod} de ${daysInMonth} del mes`,
     ].filter(Boolean).join('\n')
@@ -173,13 +243,13 @@ Reglas: máximo 100 palabras, cada bullet con número concreto, sin instruccione
     }
   }, [configuracion, vendorAnalysis, moneda, maxDayInPeriod, daysInMonth])
 
-  // All vendors from metas — excluir nombres vacíos/blancos
+  // R103: lookup UI — vendors desde metas (no desde ventas crudas), para renderizar filas de la tabla
   const vendors = useMemo(() => {
     const s = new Set(metas.map((m) => m.vendedor).filter(v => v && v.trim() !== ''))
     return Array.from(s).sort()
   }, [metas])
 
-  // Last 6 months (inclusive of current)
+  // R103: derivación local — últimos 6 meses como labels para encabezados de tabla (UI)
   const histMonths = useMemo(() => {
     const months: { year: number; month: number; label: string }[] = []
     for (let i = 5; i >= 0; i--) {
@@ -191,52 +261,35 @@ Reglas: máximo 100 palabras, cada bullet con número concreto, sin instruccione
     return months
   }, [currentYear, currentMonth])
 
-  // Build data matrix: vendor × month
-  const matrix = useMemo(() => {
-    return vendors.map((vendor) => {
-      const va = vendorAnalysis.find((v) => v.vendedor === vendor)
-      const monthData = histMonths.map(({ year, month }) => {
-        const key = periodKey(year, month)
-        const metaRow = metas.find((m) => m.vendedor === vendor && m.anio === year && m.mes === month + 1)
-        const metaVal = tipoMetaActivo === 'usd' ? (metaRow?.meta_usd ?? null) : (metaRow?.meta_uds ?? metaRow?.meta ?? null)
-        const ventasSales = salesInPeriod(sales, year, month).filter((s) => s.vendedor === vendor)
-        const realVal = ventasSales.reduce((a, s) => a + s.unidades, 0)
-        const realValNeto = ventasSales.reduce((a, s) => a + (s.venta_neta ?? 0), 0)
-        const activeVal = tipoMetaActivo === 'usd' ? realValNeto : realVal
-        const pct = metaVal && metaVal > 0 ? (activeVal / metaVal) * 100 : null
-        const isCurrent = year === currentYear && month === currentMonth
-        return { key, metaVal, realVal, realValNeto, pct, isCurrent }
-      })
+  // R102/Z.1.b: migrado a domain-aggregations.getMatrizHistoricaVendedorMes
+  const matrix = useMemo<MatrizVendedorMesEntry[]>(
+    () => getMatrizHistoricaVendedorMes(
+      sales, metas, vendors, histMonths, vendorAnalysis, currentYear, currentMonth, tipoMetaActivo,
+    ),
+    [vendors, histMonths, metas, sales, vendorAnalysis, currentYear, currentMonth, tipoMetaActivo],
+  )
 
-      return { vendor, va, monthData }
-    })
-    // Excluir filas donde no hay meta ni ventas reales en ningún período visible
-    .filter(row => row.monthData.some(d => (d.metaVal ?? 0) > 0 || d.realVal > 0))
-  }, [vendors, histMonths, metas, sales, vendorAnalysis, currentYear, currentMonth, tipoMetaActivo])
+  // getMetaMes: filtro canónico single-dim desde domain-aggregations (B2).
+  const teamMeta = getMetaMes(metas, currentYear, currentMonth, tipoMetaActivo)
 
-  // Team totals for current month
-  const teamMeta = metas
-    .filter((m) => m.anio === currentYear && m.mes === currentMonth + 1 && m.vendedor)
-    .reduce((a, m) => a + (tipoMetaActivo === 'usd' ? (m.meta_usd ?? 0) : (m.meta_uds ?? m.meta ?? 0)), 0)
-
+  // R103: derivación local — periodSales es una slice de ventas para el mes activo; se usa también en teamRealUds
   const periodSales = useMemo(() => salesInPeriod(sales, currentYear, currentMonth), [sales, currentYear, currentMonth])
 
   const teamRealUds = periodSales.reduce((a, s) => a + s.unidades, 0)
-  const teamRealNeto = useMemo(() => periodSales.reduce((a, s) => a + (s.venta_neta ?? 0), 0), [periodSales])
+  // R102/Z.1.b: migrado a domain-aggregations.getVentasNetaPeriodo (R104: teamRealNeto reutilizado por MetasPage y futuras páginas)
+  const teamRealNeto = useMemo(
+    () => getVentasNetaPeriodo(sales, currentYear, currentMonth),
+    [sales, currentYear, currentMonth],
+  )
   const teamReal = tipoMetaActivo === 'usd' ? teamRealNeto : teamRealUds
 
   const teamPct = teamMeta > 0 ? (teamReal / teamMeta) * 100 : null
   const showUSD = tipoMetaActivo === 'usd'
 
-  // Supervisor grouping
-  const supervisorMap = useMemo(() => {
-    const map: Record<string, string> = {}
-    for (const row of sales) {
-      if (row.vendedor && row.supervisor) map[row.vendedor] = row.supervisor
-    }
-    return map
-  }, [sales])
-  const supervisores = useMemo(() => [...new Set(Object.values(supervisorMap))].filter(Boolean).sort(), [supervisorMap])
+  // R102/Z.1.b: migrado a domain-aggregations.getSupervisorMap (R104: reutilizado por MetasPage y VendedoresPage en Z.2)
+  const supervisorMap = useMemo(() => getSupervisorMap(sales), [sales])
+  // R102/Z.1.b: migrado a domain-aggregations.getListaSupervisores (R104: derivación canónica de supervisorMap)
+  const supervisores = useMemo(() => getListaSupervisores(supervisorMap), [supervisorMap])
   const hasSupervisores = supervisores.length > 0
 
   // Projection helpers
@@ -485,121 +538,93 @@ Reglas: máximo 100 palabras, cada bullet con número concreto, sin instruccione
         ✦ Analizar cumplimiento con IA →
       </button>
 
-      {/* Current month — individual progress */}
-      <div className="space-y-5">
-        <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--sf-t4)' }}>
-          Cumplimiento individual — {MESES_SHORT[currentMonth]}
-        </p>
-        {(() => {
-          const riesgoColor = (r: string) => {
-            switch (r) {
-              case 'superando': case 'ok': return { color: '#10b981', bg: 'rgba(16,185,129,0.15)' }
-              case 'riesgo': return { color: '#f59e0b', bg: 'rgba(245,158,11,0.15)' }
-              case 'critico': return { color: '#ef4444', bg: 'rgba(239,68,68,0.15)' }
-              default: return { color: '#6b7280', bg: 'rgba(107,114,128,0.15)' }
-            }
-          }
-          const renderCard = ({ vendor, va, monthData }: typeof matrix[number]) => {
-            const curr = monthData[monthData.length - 1]
-            const pct = curr.pct ?? 0
-            const vendidoActivo = tipoMetaActivo === 'usd' ? curr.realValNeto : curr.realVal
-            const pctProy = maxDayInPeriod > 0 && curr.metaVal && curr.metaVal > 0
-              ? Math.round((vendidoActivo / maxDayInPeriod) * daysInMonth / curr.metaVal * 100)
-              : null
-            const rc = riesgoColor(va?.riesgo ?? 'ok')
-            return (
-              <div key={vendor} className="rounded-xl p-4" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full" style={{ background: rc.color }} />
-                    <span className="font-medium" style={{ color: 'var(--sf-t1)' }}>{vendor}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {va?.filtro_meta && (va.filtro_meta.canal || va.filtro_meta.departamento || va.filtro_meta.producto) && (
-                      <div className="flex gap-1 flex-wrap">
-                        {va.filtro_meta.canal && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'var(--sf-border)', color: 'var(--sf-t3)' }}>{va.filtro_meta.canal}</span>}
-                        {va.filtro_meta.departamento && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'var(--sf-border)', color: 'var(--sf-t3)' }}>{va.filtro_meta.departamento}</span>}
-                        {va.filtro_meta.producto && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'var(--sf-border)', color: 'var(--sf-t3)' }}>{va.filtro_meta.producto}</span>}
-                      </div>
-                    )}
-                    <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{
-                      background: rc.bg,
-                      color: rc.color,
-                    }}>
-                      {curr.pct !== null ? `${curr.pct.toFixed(0)}%` : '—'}
-                    </span>
-                    <button
-                      onClick={() => handleAnalyzeMetaVendedor(vendor, curr.pct, curr.realVal, curr.metaVal)}
-                      disabled={metaAnalysisMap[vendor]?.loading}
-                      className="cursor-pointer transition-all"
-                      style={{
-                        fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 5,
-                        border: '1px solid rgba(16,185,129,0.2)', background: 'rgba(16,185,129,0.06)',
-                        color: '#10b981', opacity: metaAnalysisMap[vendor]?.loading ? 0.5 : 1,
-                      }}
-                    >
-                      {metaAnalysisMap[vendor]?.loading ? '...' : '✦'}
-                    </button>
-                  </div>
-                </div>
-                <div className="flex items-center gap-4 mb-3">
-                  <div className="min-w-0">
-                    <p className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--sf-t4)' }}>Vendido</p>
-                    <p className="text-sm font-semibold tabular-nums" style={{ color: 'var(--sf-t1)' }}>{fmtVal(tipoMetaActivo === 'usd' ? curr.realValNeto : curr.realVal)}</p>
-                  </div>
-                  <div style={{ color: 'var(--sf-t5)' }}>/</div>
-                  <div className="min-w-0">
-                    <p className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--sf-t4)' }}>Meta</p>
-                    <p className="text-sm font-semibold tabular-nums" style={{ color: 'var(--sf-t2)' }}>{curr.metaVal ? fmtVal(curr.metaVal) : 'Sin meta'}</p>
-                  </div>
-                  {pctProy !== null && (
-                    <div className="ml-auto text-right">
-                      <p className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--sf-t4)' }}>Proyección</p>
-                      <p className={`text-sm font-semibold tabular-nums ${pctProy >= 100 ? 'text-emerald-400' : pctProy >= 80 ? 'text-yellow-400' : 'text-red-400'}`}>
-                        {pctProy}%
-                      </p>
-                    </div>
-                  )}
-                </div>
-                <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--sf-border)' }}>
-                  <div className="h-full rounded-full transition-all duration-700" style={{ width: `${Math.min(pct, 100)}%`, backgroundColor: rc.color }} />
-                </div>
-              </div>
-            )
-          }
-
-          if (hasSupervisores) {
-            return supervisores.map(supervisor => {
-              const vendedoresDelSup = matrix.filter(m => supervisorMap[m.vendor] === supervisor)
-              if (vendedoresDelSup.length === 0) return null
-              const totalSup = vendedoresDelSup.reduce((s, m) => s + m.monthData[m.monthData.length - 1].realVal, 0)
-              const metaSup = vendedoresDelSup.reduce((s, m) => s + (m.monthData[m.monthData.length - 1].metaVal ?? 0), 0)
-              const pctSup = metaSup > 0 ? Math.round((totalSup / metaSup) * 100) : 0
-              return (
-                <div key={supervisor}>
-                  <div className="flex items-center justify-between mb-2 px-1">
-                    <div className="flex items-center gap-2">
-                      <Users className="w-3.5 h-3.5" style={{ color: 'var(--sf-t4)' }} />
-                      <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--sf-t3)' }}>{supervisor}</span>
-                    </div>
-                    <span className={`text-xs font-semibold ${pctSup >= 100 ? 'text-emerald-400' : pctSup >= 70 ? 'text-yellow-400' : 'text-red-400'}`}>
-                      Equipo: {pctSup}%
-                    </span>
-                  </div>
-                  <div className="space-y-2">
-                    {vendedoresDelSup.map(row => renderCard(row))}
-                  </div>
-                </div>
-              )
-            })
-          }
-          // No supervisors: flat list
-          const sinSup = matrix.filter(m => !supervisorMap[m.vendor])
-          return sinSup.length > 0
-            ? sinSup.map(row => renderCard(row))
-            : matrix.map(row => renderCard(row))
-        })()}
+      {/* ── Breakdown por dimensión (mes actual) ─────────────────────────────
+          SFSelect elige la dimensión; la tabla muestra meta mes / real mes /
+          % cumplimiento / meta YTD / real YTD por cada valor de esa dimensión. */}
+      <div className="rounded-2xl overflow-hidden" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
+        <div className="px-6 py-4 flex items-center justify-between gap-3 flex-wrap" style={{ borderBottom: '1px solid var(--sf-border)' }}>
+          <div className="flex items-center gap-2">
+            <BarChart2 className="w-4 h-4" style={{ color: 'var(--sf-t4)' }} />
+            <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--sf-t4)' }}>
+              Cumplimiento — {MESES_SHORT[currentMonth]} {currentYear}
+            </p>
+          </div>
+          <SFSelect
+            value={dimView}
+            onChange={e => setDimView(e.target.value as DimView)}
+          >
+            <option value="vendedor">Por vendedor</option>
+            {dataAvailability.has_canal && <option value="canal">Por canal</option>}
+            {dataAvailability.has_categoria && <option value="categoria">Por categoría</option>}
+          </SFSelect>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr style={{ borderBottom: '1px solid var(--sf-border)' }}>
+                <th className="text-left px-5 py-3 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--sf-t4)' }}>
+                  {dimView === 'vendedor' ? 'Vendedor' : dimView === 'canal' ? 'Canal' : 'Categoría'}
+                </th>
+                <th className="text-right px-4 py-3 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--sf-t4)' }}>Meta mes</th>
+                <th className="text-right px-4 py-3 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--sf-t4)' }}>Real mes</th>
+                <th className="text-center px-4 py-3 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--sf-t4)' }}>% Mes</th>
+                <th className="text-right px-4 py-3 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--sf-t4)' }}>Meta YTD</th>
+                <th className="text-right px-4 py-3 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--sf-t4)' }}>Real YTD</th>
+                <th className="text-center px-4 py-3 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--sf-t4)' }}>% YTD</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dimRows.map(row => (
+                <tr key={row.val} style={{ borderBottom: '0.5px solid var(--sf-border)' }}>
+                  <td className="px-5 py-3 font-medium" style={{ color: 'var(--sf-t1)' }}>{row.val}</td>
+                  <td className="px-4 py-3 text-right tabular-nums" style={{ color: 'var(--sf-t3)' }}>
+                    {row.metaMes > 0 ? fmtVal(row.metaMes) : <span style={{ color: 'var(--sf-t5)' }}>—</span>}
+                  </td>
+                  <td className="px-4 py-3 text-right tabular-nums" style={{ color: 'var(--sf-t1)' }}>
+                    {fmtVal(row.realMes)}
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    <CumplimientoBadge pct={row.pctMes} />
+                  </td>
+                  <td className="px-4 py-3 text-right tabular-nums" style={{ color: 'var(--sf-t3)' }}>
+                    {row.metaYTD > 0 ? fmtVal(row.metaYTD) : <span style={{ color: 'var(--sf-t5)' }}>—</span>}
+                  </td>
+                  <td className="px-4 py-3 text-right tabular-nums" style={{ color: 'var(--sf-t1)' }}>
+                    {fmtVal(row.realYTD)}
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    <CumplimientoBadge pct={row.pctYTD} />
+                  </td>
+                </tr>
+              ))}
+              {dimRows.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-5 py-6 text-center text-xs" style={{ color: 'var(--sf-t5)' }}>
+                    Sin datos para esta dimensión
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
+
+      {/* Multi-dim pivot — mismo UX que "Analiza tus ventas" en Rendimiento.
+          Filtrado a YTD (Ene → fin del mes actual). Muestra Venta YTD, Meta YTD,
+          Var, Var%, Peso% y barra de cumplimiento por combo de dimensiones.
+          Reemplaza la antigua sección "Cumplimiento individual" (más rico). */}
+      <MetasPivotPanel
+        metas={metas}
+        sales={sales}
+        tipoMetaActivo={tipoMetaActivo}
+        moneda={moneda}
+        currentYear={currentYear}
+        currentMonth={currentMonth}
+      />
+
+      {/* "Cumplimiento individual" cards eliminado — ahora vive dentro del pivot
+          (que muestra cumplimiento + barra cuando se agrupa por Vendedor con
+          Var/Var%/Peso% adicionales). El histórico mensual sigue abajo. */}
 
       {/* Historical table — last 6 months */}
       <div className="rounded-2xl overflow-hidden" style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)' }}>
@@ -660,7 +685,10 @@ Reglas: máximo 100 palabras, cada bullet con número concreto, sin instruccione
                 </td>
                 {histMonths.map(({ year, month }) => {
                   const key = periodKey(year, month)
-                  const metaTot = metas.filter((m) => m.anio === year && m.mes === month + 1).reduce((a, m) => a + (tipoMetaActivo === 'usd' ? (m.meta_usd ?? 0) : (m.meta_uds ?? m.meta ?? 0)), 0)
+                  // [fix-1.6] denominador EQUIPO = solo metas single-dim (vendedor sin otras dimensiones),
+                  // igual que teamMeta del header (fix-1.2). Sin este filtro, metas multi-dim
+                  // inflan el denominador y deprimen el % a 35–45%.
+                  const metaTot = metas.filter((m) => m.anio === year && m.mes === month + 1 && m.vendedor && !m.canal && !m.categoria && !m.cliente).reduce((a, m) => a + (tipoMetaActivo === 'usd' ? (m.meta_usd ?? 0) : (m.meta_uds ?? m.meta ?? 0)), 0)
                   const ps = salesInPeriod(sales, year, month)
                   const realTot = tipoMetaActivo === 'usd' ? ps.reduce((a, s) => a + (s.venta_neta ?? 0), 0) : ps.reduce((a, s) => a + s.unidades, 0)
                   const pct = metaTot > 0 ? (realTot / metaTot) * 100 : null

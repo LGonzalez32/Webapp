@@ -25,19 +25,20 @@ const PREVIEWS: Record<StepId, StepPreview> = {
   inventory: {
     title: 'Plantilla de Inventario',
     headers: [
+      { label: 'Fecha', required: true },
       { label: 'Producto', required: true },
       { label: 'Stock', required: true },
       { label: 'Categoria', required: false },
+      { label: 'Subcategoria', required: false },
       { label: 'Proveedor', required: false },
-      { label: 'Costo', required: false },
     ],
     rows: [
-      { cells: ['Coca-Cola 355ml', '24', 'Bebidas', 'Dist. Sur', '0.75'] },
-      { cells: ['Arroz 5lb', '85', 'Granos', 'Granos del Sur', '2.10'] },
-      { cells: ['Aceite Vegetal 1L', '3', 'Abarrotes', 'Aceites Central', '2.40'], lowStock: true },
-      { cells: ['Papel Higiénico 4u', '2', 'Higiene', 'Dist. Higiene SA', '2.20'], lowStock: true },
+      { cells: ['2026-03-15', 'Coca-Cola 355ml', '24', 'Bebidas', 'Gaseosas', 'Dist. Sur'] },
+      { cells: ['2026-03-15', 'Arroz 5lb', '85', 'Granos', 'Arroz', 'Granos del Sur'] },
+      { cells: ['2026-03-15', 'Aceite Vegetal 1L', '3', 'Abarrotes', 'Aceites', 'Aceites Central'], lowStock: true },
+      { cells: ['2026-03-15', 'Papel Higienico 4u', '2', 'Higiene', 'Papel', 'Dist. Higiene SA'], lowStock: true },
     ],
-    footerNote: 'Guarda tu archivo como .xlsx o .csv',
+    footerNote: 'Una fila por producto por fecha de corte. Guarda tu archivo como .xlsx o .csv',
   },
   sales: {
     title: 'Plantilla de Ventas',

@@ -1,4 +1,5 @@
 import type { SaleRecord, MetaRecord, InventoryItem } from '../types'
+import { emitIngestSummary } from './ingestTelemetry'
 
 // ─── Los Pinos S.A. ──────────────────────────────────────────
 // Ene 2024 – Dic 2028 · 8 vendedores · 30 clientes · 20 productos
@@ -322,9 +323,7 @@ export function getDemoData(): { sales: SaleRecord[]; metas: MetaRecord[]; inven
               fecha: date,
               vendedor: vendor.nombre,
               producto: prod.nombre,
-              codigo_producto: prod.codigo,
               cliente: cliente.nombre,
-              codigo_cliente: cliente.codigo,
               unidades,
               venta_neta,
               categoria: prod.cat,
@@ -341,6 +340,13 @@ export function getDemoData(): { sales: SaleRecord[]; metas: MetaRecord[]; inven
   // ── Filtrar ventas: solo hasta hoy ─────────────────────────────────────────
   const sales = allSales.filter(s => s.fecha <= today)
 
+  // Poblar clientKey derivado — paridad con ruta parser de Excel.
+  // Ahora solo desde cliente nombre (codigo_cliente eliminado del schema).
+  for (const s of sales) {
+    const nombre = typeof s.cliente === 'string' ? s.cliente.trim() : ''
+    s.clientKey = nombre !== '' ? nombre.toUpperCase() : null
+  }
+
   // ── METAS (Ene 2024 – Dic 2028, sin filtrar — metas futuras son válidas) ──
   const metas: MetaRecord[] = []
 
@@ -349,30 +355,86 @@ export function getDemoData(): { sales: SaleRecord[]; metas: MetaRecord[]; inven
       const seasonal = ESTACIONAL[m]
       const yearDiff = y - 2026
       const growthFactor = yearDiff < 0 ? 1 + yearDiff * 0.03 : 1 + yearDiff * 0.05
-      const supervisorAcum: Record<string, number> = {}
 
       // Por vendedor
       for (const vendor of VENDORS) {
         const meta = Math.round(vendor.baseDiaria * 8 * 26 * seasonal * 0.95 * growthFactor)
         const metaUsd = Math.round(meta * 1.15)
         metas.push({ mes: m, anio: y, vendedor: vendor.nombre, meta, meta_uds: meta, meta_usd: metaUsd, tipo_meta: 'unidades' })
-        supervisorAcum[vendor.supervisor] = (supervisorAcum[vendor.supervisor] ?? 0) + meta
       }
+      // [fix-1.1] Metas agregadas puras (supervisor / categoría sin vendedor) eliminadas:
+      // analysis.ts las excluye y MetasPage Histórico EQUIPO las sumaba al denominador,
+      // produciendo cumplimiento de equipo ~27% vs individuales 49–210%. Las dimensiones
+      // supervisor/categoría se cubren por las metas multi-dim (vendedor+canal,
+      // vendedor+categoría, vendedor+cliente+canal) generadas más abajo.
 
-      // Por supervisor
-      for (const [supervisor, sum] of Object.entries(supervisorAcum)) {
-        const supMeta = Math.round(sum * 1.02)
-        metas.push({ mes: m, anio: y, supervisor, meta: supMeta, meta_uds: supMeta, meta_usd: Math.round(supMeta * 1.15), tipo_meta: 'unidades' })
-      }
+      // Multi-dim metas (Sprint visibility): metas con 2-3 dimensiones para
+      // que meta_gap_combo tenga combinaciones reales que evaluar y crossCount
+      // del candidato sea ≥ 2 (necesario para Z.11 regla B/C). Solo para
+      // current year ± 1 para no inflar el dataset.
+      const isFocusYear = y >= 2025 && y <= 2027
+      if (isFocusYear) {
+        for (const vendor of VENDORS) {
+          const vendorMeta = Math.round(vendor.baseDiaria * 8 * 26 * seasonal * 0.95 * growthFactor)
 
-      // Por categoría
-      for (const [cat, dailyBase] of Object.entries(CAT_BASELINE_DAILY)) {
-        const catMeta = Math.round(dailyBase * 26 * seasonal * 1.05 * growthFactor)
-        metas.push({
-          mes: m, anio: y, categoria: cat,
-          meta: catMeta, meta_uds: catMeta, meta_usd: Math.round(catMeta * 1.15),
-          tipo_meta: 'unidades',
-        })
+          // 2-dim: vendedor + canal — distribuye la meta del vendor entre los
+          // canales donde realmente atiende clientes.
+          const channelDist: Record<string, number> = {}
+          let totalW = 0
+          for (const c of vendor.clients) {
+            const cliente = CLIENTES.find(x => x.codigo === c.codigo)
+            if (!cliente) continue
+            channelDist[cliente.canal] = (channelDist[cliente.canal] ?? 0) + c.w
+            totalW += c.w
+          }
+          for (const [canal, w] of Object.entries(channelDist)) {
+            const share = totalW > 0 ? w / totalW : 0
+            const meta = Math.round(vendorMeta * share)
+            if (meta < 30) continue   // skip metas triviales
+            const metaUsd = Math.round(meta * 1.15)
+            metas.push({
+              mes: m, anio: y,
+              vendedor: vendor.nombre, canal,
+              meta, meta_uds: meta, meta_usd: metaUsd, tipo_meta: 'unidades',
+            })
+          }
+
+          // 2-dim: vendedor + categoría principal (top categoría del vendor).
+          const topCat = Object.entries(vendor.catWeights)
+            .sort((a, b) => b[1] - a[1])[0]
+          if (topCat) {
+            const [cat, w] = topCat
+            const meta = Math.round(vendorMeta * w)
+            if (meta >= 30) {
+              metas.push({
+                mes: m, anio: y,
+                vendedor: vendor.nombre, categoria: cat,
+                meta, meta_uds: meta, meta_usd: Math.round(meta * 1.15),
+                tipo_meta: 'unidades',
+              })
+            }
+          }
+
+          // 3-dim: vendedor + cliente top + canal — el cliente más pesado del vendor.
+          const topClient = [...vendor.clients].sort((a, b) => b.w - a.w)[0]
+          if (topClient) {
+            const cliente = CLIENTES.find(c => c.codigo === topClient.codigo)
+            if (cliente) {
+              const share = totalW > 0 ? topClient.w / totalW : 0
+              const meta = Math.round(vendorMeta * share)
+              if (meta >= 50) {
+                metas.push({
+                  mes: m, anio: y,
+                  vendedor: vendor.nombre,
+                  cliente: cliente.nombre,
+                  canal: cliente.canal,
+                  meta, meta_uds: meta, meta_usd: Math.round(meta * 1.15),
+                  tipo_meta: 'unidades',
+                })
+              }
+            }
+          }
+        }
       }
     }
   }
@@ -384,28 +446,35 @@ export function getDemoData(): { sales: SaleRecord[]; metas: MetaRecord[]; inven
   //   normal          (21-60d): LAC001 ~35d, LAC004 ~28d, REF001 ~40d, REF002 ~30d, LIM001 ~45d, LIM002 ~32d
   //   lento_movimiento (>60d): LAC005 ~90d, SNA001 ~90d, SNA002 ~75d, LIM004 ~80d, LIM005 ~100d
   //   sin_movimiento  (PM3=0): SNA003/004/005 – sin ventas últimos 6 meses (agoMonths ≤ 5)
+  // [schema-cleanup] inventory snapshots ahora llevan fecha (fecha de corte).
+  // El demo usa la fecha "today" del generador (hora actual del sistema al momento
+  // de runtime).
+  const inventoryDate = new Date(today.getFullYear(), today.getMonth(), today.getDate())
   const inventory: InventoryItem[] = [
-    { producto: 'Leche Entera 1L',       categoria: 'Lácteos',   unidades: 1870 },
-    { producto: 'Yogurt Natural 500g',   categoria: 'Lácteos',   unidades:  690 },
-    { producto: 'Queso Fresco 400g',     categoria: 'Lácteos',   unidades:  270 },
-    { producto: 'Crema Ácida 250g',      categoria: 'Lácteos',   unidades: 1490 },
-    { producto: 'Mantequilla 225g',      categoria: 'Lácteos',   unidades: 4800 },
-    { producto: 'Coca Cola 600ml',       categoria: 'Refrescos', unidades: 2670 },
-    { producto: 'Pepsi 600ml',           categoria: 'Refrescos', unidades: 2000 },
-    { producto: 'Agua Pura 500ml',       categoria: 'Refrescos', unidades:  870 },
-    { producto: 'Jugo Naranja 1L',       categoria: 'Refrescos', unidades: 1000 },
-    { producto: 'Té Helado 500ml',       categoria: 'Refrescos', unidades:  330 },
-    { producto: 'Papas Fritas 150g',     categoria: 'Snacks',    unidades: 5220 },
-    { producto: 'Galletas Soda 200g',    categoria: 'Snacks',    unidades: 4350 },
-    { producto: 'Cacahuates 100g',       categoria: 'Snacks',    unidades:   35 },
-    { producto: 'Palomitas 80g',         categoria: 'Snacks',    unidades:   28 },
-    { producto: 'Chicharrón 120g',       categoria: 'Snacks',    unidades:   22 },
-    { producto: 'Detergente 1kg',        categoria: 'Limpieza',  unidades: 1880 },
-    { producto: 'Jabón Lavaplatos 500g', categoria: 'Limpieza',  unidades: 1330 },
-    { producto: 'Suavizante 1L',         categoria: 'Limpieza',  unidades:  580 },
-    { producto: 'Cloro 1L',              categoria: 'Limpieza',  unidades: 3330 },
-    { producto: 'Desinfectante 750ml',   categoria: 'Limpieza',  unidades: 4170 },
+    { fecha: inventoryDate, producto: 'Leche Entera 1L',       categoria: 'Lácteos',   unidades: 1870 },
+    { fecha: inventoryDate, producto: 'Yogurt Natural 500g',   categoria: 'Lácteos',   unidades:  690 },
+    { fecha: inventoryDate, producto: 'Queso Fresco 400g',     categoria: 'Lácteos',   unidades:  270 },
+    { fecha: inventoryDate, producto: 'Crema Ácida 250g',      categoria: 'Lácteos',   unidades: 1490 },
+    { fecha: inventoryDate, producto: 'Mantequilla 225g',      categoria: 'Lácteos',   unidades: 4800 },
+    { fecha: inventoryDate, producto: 'Coca Cola 600ml',       categoria: 'Refrescos', unidades: 2670 },
+    { fecha: inventoryDate, producto: 'Pepsi 600ml',           categoria: 'Refrescos', unidades: 2000 },
+    { fecha: inventoryDate, producto: 'Agua Pura 500ml',       categoria: 'Refrescos', unidades:  870 },
+    { fecha: inventoryDate, producto: 'Jugo Naranja 1L',       categoria: 'Refrescos', unidades: 1000 },
+    { fecha: inventoryDate, producto: 'Té Helado 500ml',       categoria: 'Refrescos', unidades:  330 },
+    { fecha: inventoryDate, producto: 'Papas Fritas 150g',     categoria: 'Snacks',    unidades: 5220 },
+    { fecha: inventoryDate, producto: 'Galletas Soda 200g',    categoria: 'Snacks',    unidades: 4350 },
+    { fecha: inventoryDate, producto: 'Cacahuates 100g',       categoria: 'Snacks',    unidades:   35 },
+    { fecha: inventoryDate, producto: 'Palomitas 80g',         categoria: 'Snacks',    unidades:   28 },
+    { fecha: inventoryDate, producto: 'Chicharrón 120g',       categoria: 'Snacks',    unidades:   22 },
+    { fecha: inventoryDate, producto: 'Detergente 1kg',        categoria: 'Limpieza',  unidades: 1880 },
+    { fecha: inventoryDate, producto: 'Jabón Lavaplatos 500g', categoria: 'Limpieza',  unidades: 1330 },
+    { fecha: inventoryDate, producto: 'Suavizante 1L',         categoria: 'Limpieza',  unidades:  580 },
+    { fecha: inventoryDate, producto: 'Cloro 1L',              categoria: 'Limpieza',  unidades: 3330 },
+    { fecha: inventoryDate, producto: 'Desinfectante 750ml',   categoria: 'Limpieza',  unidades: 4170 },
   ]
+
+  // [PR-M1-fix] telemetría de ingesta (demo) — fuente única con parser Excel
+  emitIngestSummary(sales)
 
   return { sales, metas, inventory }
 }

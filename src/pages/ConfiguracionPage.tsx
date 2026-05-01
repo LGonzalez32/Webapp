@@ -1,8 +1,12 @@
 import { useState } from 'react'
 import { useAppStore } from '../store/appStore'
 import { useAuthStore } from '../store/authStore'
-import { Store, BarChart3, Save, Package, Bell, Info, RotateCcw, HelpCircle } from 'lucide-react'
+import { useOrgStore } from '../store/orgStore'
+import { useEmpresaName } from '../lib/useEmpresaName'
+import { Store, BarChart3, Save, Package, Bell, RotateCcw, HelpCircle, Trash2 } from 'lucide-react'
+import { toast } from 'sonner'
 import { GIRO_OPTIONS } from '../lib/giroOptions'
+import { cleanupClientState } from '../lib/cleanupClientState'
 
 interface NotifPrefs {
   email: string
@@ -49,6 +53,8 @@ const CURRENCIES = [
 export default function ConfiguracionPage() {
   const { configuracion, setConfiguracion, setIsProcessed } = useAppStore()
   const userEmail = useAuthStore(s => s.user?.email ?? '')
+  const hasOrg = useOrgStore(s => s.org !== null)
+  const empresaName = useEmpresaName()
   const [local, setLocal] = useState({ ...configuracion })
   const [notif, setNotif] = useState<NotifPrefs>(() => loadNotifPrefs(userEmail))
   const [notifSaved, setNotifSaved] = useState(false)
@@ -88,11 +94,24 @@ export default function ConfiguracionPage() {
             </label>
             <input
               type="text"
-              value={local.empresa}
+              value={hasOrg ? empresaName : local.empresa}
               onChange={(e) => setLocal({ ...local, empresa: e.target.value })}
+              readOnly={hasOrg}
+              disabled={hasOrg}
               className="w-full rounded-xl px-4 py-3 text-sm focus:outline-none transition-all"
-              style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', color: 'var(--sf-t1)' }}
+              style={{
+                background: 'var(--sf-inset)',
+                border: '1px solid var(--sf-border)',
+                color: 'var(--sf-t1)',
+                opacity: hasOrg ? 0.65 : 1,
+                cursor: hasOrg ? 'not-allowed' : 'text',
+              }}
             />
+            {hasOrg && (
+              <p className="text-[10px] text-zinc-500">
+                Para cambiar el nombre, ve a <a href="/organizacion" className="text-[#00B894] hover:underline">/organizacion</a>.
+              </p>
+            )}
           </div>
           <div className="space-y-1.5">
             <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">
@@ -171,7 +190,7 @@ export default function ConfiguracionPage() {
               onChange={(e) => setLocal({ ...local, dias_dormido_threshold: Number(e.target.value) })}
               className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-amber-500/50 transition-all"
             />
-            <p className="text-[10px] text-zinc-600">Días sin compra para marcar dormido</p>
+            <p className="text-[10px] text-zinc-600">Este valor se usa en todas las pantallas. En /clientes podés cambiarlo temporalmente para explorar.</p>
           </div>
           <div className="space-y-1.5">
             <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1.5">
@@ -398,14 +417,35 @@ export default function ConfiguracionPage() {
               <span className="text-xs text-purple-400 font-medium animate-in fade-in duration-200">Guardado</span>
             )}
           </div>
+        </div>
+      </div>
 
-          {/* Banner próximamente */}
-          <div className="flex items-start gap-3 p-4 rounded-xl bg-blue-500/5 border border-blue-500/15">
-            <Info className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
-            <p className="text-xs text-blue-300/80 leading-relaxed">
-              Las notificaciones por email estarán disponibles próximamente. Tus preferencias quedarán guardadas.
-            </p>
+      {/* [Sprint G4] Diagnóstico — limpieza de caché local sin logout */}
+      <div className="bg-zinc-900 border border-red-900/40 rounded-2xl overflow-hidden">
+        <div className="px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-red-500/10 flex items-center justify-center border border-red-500/20">
+              <Trash2 className="w-4 h-4 text-red-400" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-zinc-50">Limpiar caché del navegador</h3>
+              <p className="text-[11px] text-zinc-500">Borra datos cacheados localmente. Útil si la app muestra datos viejos. No te desloguea.</p>
+            </div>
           </div>
+          <button
+            onClick={async () => {
+              if (!confirm('¿Limpiar todos los datos cacheados? Tendrás que recargar la app después.')) return
+              try {
+                await cleanupClientState()
+                toast.success('Caché limpiada — recarga la página')
+              } catch {
+                toast.error('No se pudo limpiar la caché')
+              }
+            }}
+            className="px-4 py-2 text-xs font-medium rounded-lg border border-red-700 text-red-300 hover:border-red-500 hover:text-red-100 transition-colors"
+          >
+            Limpiar caché
+          </button>
         </div>
       </div>
 

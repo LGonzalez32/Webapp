@@ -112,7 +112,7 @@ export async function getOrgMembersWithEmail(orgId: string): Promise<
       role: m.role as OrgRole,
       email: profile?.email ?? null,
       joined_at: m.joined_at,
-      allowed_pages: m.allowed_pages ?? null,
+      allowed_pages: (m.allowed_pages as string[] | null) ?? null,
       full_name: profile?.full_name ?? null,
       avatar_url: profile?.avatar_url ?? null,
     }

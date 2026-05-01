@@ -1,12 +1,35 @@
+import { getAllDateFieldKeys } from '../../lib/registry-ui'
+
 interface DataPreviewProps {
   data: any[];
   maxRows?: number;
 }
 
+// [Sprint C] Set de keys que llevan rol 'date' en cualquier tabla del registry.
+// Computado una vez en module load. Si agregás una columna fecha al registry
+// (ej. fecha_vencimiento en farmacéutica), DataPreview la formatea automáticamente.
+const DATE_FIELD_KEYS = new Set(getAllDateFieldKeys())
+
 function formatPreviewValue(key: string, value: any): string {
-  if (key === 'fecha' || key === 'date' || key === 'mes_periodo') {
-    const d = new Date(value)
-    if (!isNaN(d.getTime())) {
+  if (DATE_FIELD_KEYS.has(key) || key === 'date' /* compat alias raw */) {
+    // [B2] Bug fix: `new Date('2026-04-14')` parsea como UTC midnight y luego
+    // toLocaleDateString aplica el offset local, mostrando el día anterior en
+    // timezones negativos (ej. UTC-6 → 13/04/2026). Cuando el valor ya es Date
+    // (parser local), lo usamos directo. Cuando es string ISO YYYY-MM-DD,
+    // lo construimos como fecha local. Resto cae al constructor genérico.
+    let d: Date | null = null
+    if (value instanceof Date) {
+      d = value
+    } else if (typeof value === 'string') {
+      const m = value.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/)
+      if (m) {
+        d = new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10))
+      } else {
+        const tmp = new Date(value)
+        if (!isNaN(tmp.getTime())) d = tmp
+      }
+    }
+    if (d && !isNaN(d.getTime())) {
       return d.toLocaleDateString('es', { day: '2-digit', month: '2-digit', year: 'numeric' })
     }
   }
@@ -23,13 +46,18 @@ export default function DataPreview({ data, maxRows = 5 }: DataPreviewProps) {
   const rows = data.slice(0, maxRows);
 
   return (
-    <div className="rounded-xl border border-[var(--sf-border)] overflow-hidden">
+    // [primera-impresion-v2] Wrapper relative para soportar el fade overlay
+    // que indica overflow-x. Antes el corte a la derecha era seco e invisible.
+    <div className="relative rounded-xl border border-[var(--sf-border)] overflow-hidden">
       <div className="overflow-x-auto">
         <table className="w-full text-left text-[11px]">
           <thead>
             <tr style={{ background: 'var(--sf-inset)' }}>
+              {/* [Z.P1.10.c.fix-mini/M1] Sin uppercase forzado: los headers
+                  son canonical lowercase (fecha, venta_neta, etc.) y forzar
+                  uppercase los hace gritar inconsistente vs los valores. */}
               {headers.map(h => (
-                <th key={h} className="px-4 py-2.5 whitespace-nowrap font-medium text-[var(--sf-t2)] uppercase tracking-wider text-[10px]">{h}</th>
+                <th key={h} className="px-4 py-2.5 whitespace-nowrap font-medium text-[var(--sf-t2)] text-[11px]">{h}</th>
               ))}
             </tr>
           </thead>
@@ -51,6 +79,12 @@ export default function DataPreview({ data, maxRows = 5 }: DataPreviewProps) {
           Mostrando {maxRows} de {data.length} filas
         </div>
       )}
+      {/* [primera-impresion-v2] Fade overlay derecha: sombra suave universal */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute top-0 right-0 bottom-0 w-10"
+        style={{ background: 'linear-gradient(to right, rgba(0,0,0,0) 0%, rgba(0,0,0,0.08) 100%)' }}
+      />
     </div>
   );
 }

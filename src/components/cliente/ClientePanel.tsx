@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useDemoPath } from '../../lib/useDemoPath'
-import { salesInPeriod, prevPeriod } from '../../lib/analysis'
+import { salesInRange } from '../../lib/analysis'
+import { formatPeriodLabel } from '../../lib/periods'
 import { useAppStore } from '../../store/appStore'
 import type { SaleRecord, ClienteDormido, DataAvailability, Insight } from '../../types'
 
@@ -15,7 +16,7 @@ type ClienteStatus = 'activo' | 'dormido' | 'en_declive'
 interface Props {
   clienteName: string
   sales: SaleRecord[]
-  selectedPeriod: { year: number; month: number }
+  selectedPeriod: { year: number; monthStart: number; monthEnd: number }
   clientesDormidos: ClienteDormido[]
   dataAvailability: DataAvailability
   insights: Insight[]
@@ -43,22 +44,22 @@ export default function ClientePanel({
 
   // ── Métricas del cliente ─────────────────────────────────────────────────
   const metrics = useMemo(() => {
-    const { year, month } = selectedPeriod
-    const prev = prevPeriod(year, month)
+    const { year, monthStart, monthEnd } = selectedPeriod
     const clientSales = sales.filter(s => s.cliente === clienteName)
     if (clientSales.length === 0) return null
 
-    // Ventas período actual vs anterior
-    const periodSales = salesInPeriod(clientSales, year, month)
-    const prevSales = salesInPeriod(clientSales, prev.year, prev.month)
+    // Ventas período actual (rango [monthStart..monthEnd]) vs análogo YoY
+    // (mismo rango año anterior). El label en UI dice "vs ${year - 1}" → YoY.
+    const periodSales = salesInRange(clientSales, year, monthStart, monthEnd)
+    const prevSales = salesInRange(clientSales, year - 1, monthStart, monthEnd)
     const ventasPeriodo = periodSales.reduce((a, s) => a + s.unidades, 0)
     const ventasPrev = prevSales.reduce((a, s) => a + s.unidades, 0)
     const ventaNetaPeriodo = periodSales.reduce((a, s) => a + (s.venta_neta ?? 0), 0)
     const ventaNetaPrev = prevSales.reduce((a, s) => a + (s.venta_neta ?? 0), 0)
 
-    // YTD actual vs anterior
-    const ytdCur = clientSales.filter(r => r.fecha.getFullYear() === year && r.fecha.getMonth() + 1 <= month + 1)
-    const ytdPrev = clientSales.filter(r => r.fecha.getFullYear() === year - 1 && r.fecha.getMonth() + 1 <= month + 1)
+    // YTD actual vs anterior — anclado a monthEnd (último mes del rango)
+    const ytdCur = clientSales.filter(r => r.fecha.getFullYear() === year && r.fecha.getMonth() <= monthEnd)
+    const ytdPrev = clientSales.filter(r => r.fecha.getFullYear() === year - 1 && r.fecha.getMonth() <= monthEnd)
     const ytdUnidades = ytdCur.reduce((a, s) => a + s.unidades, 0)
     const ytdUnidadesPrev = ytdPrev.reduce((a, s) => a + s.unidades, 0)
     const ytdNeto = ytdCur.reduce((a, s) => a + (s.venta_neta ?? 0), 0)
@@ -130,10 +131,11 @@ export default function ClientePanel({
   const trendData = useMemo(() => {
     const clientSales = sales.filter(s => s.cliente === clienteName)
     if (clientSales.length === 0) return []
-    const { year, month } = selectedPeriod
+    // Tendencia 6 meses: el ancla del bucket más reciente es monthEnd (B1).
+    const { year, monthEnd } = selectedPeriod
     const buckets: { key: string; label: string; current: number; prev: number }[] = []
     for (let i = 5; i >= 0; i--) {
-      let m = month - i
+      let m = monthEnd - i
       let y = year
       while (m < 0) { m += 12; y-- }
       const label = MESES[m]
@@ -151,10 +153,10 @@ export default function ClientePanel({
 
   // ── Top 5 productos ──────────────────────────────────────────────────────
   const topProductos = useMemo(() => {
-    const { year, month } = selectedPeriod
-    const periodSales = salesInPeriod(
+    const { year, monthStart, monthEnd } = selectedPeriod
+    const periodSales = salesInRange(
       sales.filter(s => s.cliente === clienteName && s.producto),
-      year, month,
+      year, monthStart, monthEnd,
     )
     const agg: Record<string, { unidades: number; venta: number }> = {}
     periodSales.forEach(s => {
@@ -171,7 +173,7 @@ export default function ClientePanel({
   // ── Alertas del cliente ──────────────────────────────────────────────────
   const clienteInsights = insights.filter(i => i.cliente === clienteName)
 
-  const mesLabel = MESES[selectedPeriod.month]
+  const mesLabel = formatPeriodLabel(selectedPeriod.year, selectedPeriod.monthStart, selectedPeriod.monthEnd)
   const sCfg = STATUS_CONFIG[status]
 
   if (!metrics) {
@@ -253,7 +255,7 @@ export default function ClientePanel({
           <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--sf-border)' }}>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <p className="text-[11px] font-bold uppercase tracking-widest mb-2" style={{ color: 'var(--sf-t5)' }}>
+                <p data-testid="cliente-panel-header" className="text-[11px] font-bold uppercase tracking-widest mb-2" style={{ color: 'var(--sf-t5)' }}>
                   COMPRAS {mesLabel}
                 </p>
                 <p style={{ ...mono, fontSize: 32, color: 'var(--sf-t1)', lineHeight: 1 }}>

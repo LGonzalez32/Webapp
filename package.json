@@ -8,7 +8,12 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings=0",
+    "test": "vitest run",
+    "test:unit": "vitest run",
+    "test:e2e": "playwright test",
+    "sprint-check": "npm run typecheck & npm run lint & npm run test:unit"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -36,11 +41,18 @@
     "zustand": "^5.0.11"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/node": "^22.14.0",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
     "autoprefixer": "^10.4.21",
+    "eslint": "^8.57.1",
+    "eslint-plugin-react-hooks": "^4.6.2",
+    "eslint-plugin-react-refresh": "^0.4.26",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+    "vite": "^6.2.0",
+    "vitest": "^4.1.4"
   }
 }

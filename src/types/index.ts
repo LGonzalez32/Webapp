@@ -8,12 +8,20 @@ export interface SaleRecord {
   cliente?: string
   venta_neta?: number
   categoria?: string
+  subcategoria?: string
   proveedor?: string
   canal?: string
   departamento?: string
   supervisor?: string
-  codigo_producto?: string
-  codigo_cliente?: string
+  // [Z.P1.9.2] costo_unitario puede venir directo (unit_cost, precio_costo...)
+  // o derivado por el parser si el header era un "total de línea" (Costo de
+  // Ventas, COGS...). Se requiere columna producto para que el valor sea
+  // conservado (ver warning COSTO_SIN_PRODUCTO).
+  costo_unitario?: number
+  // Clave canónica derivada del nombre de cliente (uppercase trimmed).
+  // Mantenida como campo interno para que los consumers de agregación que
+  // dedupean por cliente sigan funcionando sin tener que tocar 30+ archivos.
+  clientKey?: string | null
 }
 
 export interface MetaRecord {
@@ -29,15 +37,21 @@ export interface MetaRecord {
   cliente?:      string
   producto?:     string
   categoria?:    string
+  subcategoria?: string
   departamento?: string
   supervisor?:   string
   canal?:        string
+  proveedor?:    string
 }
 
 export interface InventoryItem {
+  // Snapshot date — required: análisis temporal (movimiento de stock,
+  // detección de quiebres) requiere saber la fecha del corte.
+  fecha: Date
   producto: string
   unidades: number
   categoria?: string
+  subcategoria?: string
   proveedor?: string
 }
 
@@ -53,6 +67,17 @@ export interface DataAvailability {
   has_departamento: boolean
   has_metas: boolean
   has_inventario: boolean
+  // [PR-M1] Flags para ingesta dual (métrica global configurable).
+  //   has_unidades:        ≥80% filas con unidades>0 (gate de métrica "unidades")
+  //   has_precio_unitario: has_unidades && has_venta_neta (derivable)
+  has_unidades?: boolean
+  has_precio_unitario?: boolean
+  // Sprint cross-dim: nuevas columnas que ya capturaba el parser pero no eran
+  // visibles para el motor. Permiten al cross-engine y al main loop saber
+  // qué dimensiones/métricas adicionales pueden activarse.
+  has_subcategoria?: boolean
+  has_proveedor?: boolean
+  has_costo_unitario?: boolean
 }
 
 // ─── ANÁLISIS POR VENDEDOR ────────────────────────────────────────────────────
@@ -80,11 +105,15 @@ export interface VendorAnalysis {
   variacion_vs_promedio_pct?: number | null
   periodos_base_promedio?: number
   riesgo: RiesgoVendedor
-  ytd_actual?: number
-  ytd_anterior?: number
-  ytd_actual_neto?: number
-  ytd_anterior_neto?: number
-  variacion_ytd_pct?: number | null
+  // ── YTD ──
+  // Sufijo _uds = unidades · Sufijo _usd = dinero (Venta Neta).
+  // Prohibido campos "ytd_actual" sin unidad explícita (ver manifiesto R55).
+  ytd_actual_uds?: number
+  ytd_anterior_uds?: number
+  variacion_ytd_uds_pct?: number | null
+  ytd_actual_usd?: number
+  ytd_anterior_usd?: number
+  variacion_ytd_usd_pct?: number | null
   // ── Enriquecimiento del motor ──
   top_clientes_periodo: Array<{ cliente: string; unidades: number; venta_neta: number | null }> | null
   productos_ausentes: Array<{ producto: string; dias_sin_venta: number; ultimo_periodo: string }> | null
@@ -111,9 +140,13 @@ export interface TeamStats {
   dias_transcurridos: number
   dias_totales: number
   dias_restantes: number
-  ytd_actual_equipo?: number
-  ytd_anterior_equipo?: number
-  variacion_ytd_equipo?: number | null
+  ytd_actual_equipo_uds?: number
+  ytd_anterior_equipo_uds?: number
+  variacion_ytd_equipo_uds_pct?: number | null
+  meta_cerrada_total?: number
+  venta_cerrada_total?: number
+  cumplimiento_cerrado?: number
+  meses_cerrados?: number[]
 }
 
 // ─── INSIGHTS ─────────────────────────────────────────────────────────────────
@@ -122,6 +155,7 @@ export type InsightTipo =
   | 'riesgo_vendedor'
   | 'riesgo_cliente'
   | 'riesgo_producto'
+  | 'riesgo_inventario'
   | 'riesgo_meta'
   | 'riesgo_equipo'
   | 'cruzado'
@@ -159,6 +193,7 @@ export interface Insight {
   esPositivo?: boolean
   esAccionable?: boolean
   señalesConvergentes?: number
+  impactoUSD?: number // [Z.6 F2.1 — hydration fix] R119.2: hidratado en buildRichBlocksFromInsights
 }
 
 // ─── CLIENTES DORMIDOS ────────────────────────────────────────────────────────
@@ -168,8 +203,9 @@ export interface ClienteDormido {
   vendedor: string
   ultima_compra: Date
   dias_sin_actividad: number
-  valor_historico: number
-  compras_historicas: number
+  valor_yoy_usd: number
+  unidades_yoy: number
+  transacciones_yoy: number
   recovery_score: number
   recovery_label: 'alta' | 'recuperable' | 'dificil' | 'perdido'
   recovery_explicacion: string
@@ -221,11 +257,27 @@ export type ParseError =
   | { code: 'FORMAT_NOT_SUPPORTED'; message: string }
   | { code: 'MULTIPLE_SHEETS'; sheets: string[]; message: string }
   | { code: 'NO_VALID_COLUMNS'; found: string[]; message: string }
-  | { code: 'MISSING_REQUIRED'; missing: string[]; found: string[]; message: string }
+  | {
+      code: 'MISSING_REQUIRED'
+      missing: string[]
+      found: string[]
+      message: string
+      unrecognizedHeaders?: string[]
+      suggestions?: Array<{
+        missingKey: string
+        candidateHeaders: string[]
+        acceptedAliases: string[]
+      }>
+    }
   | { code: 'EMPTY_FILE'; message: string }
   | { code: 'INVALID_DATES'; sample: string[]; message: string }
   | { code: 'FILE_PROTECTED_OR_CORRUPT'; message: string }
   | { code: 'ENCODING_ISSUE'; sample: string[]; message: string }
+  | { code: 'FILE_TOO_LARGE'; sizeMB: number; limitMB: number; message: string }
+  // [schema-cleanup/upload-validation] Metas trae dim que ventas no tiene.
+  // Bloquear evita que el motor genere insights por dim que no existe en ventas.
+  | { code: 'META_DIM_NOT_IN_SALES'; missingFromSales: string[]; message: string }
+  | { code: 'SALES_NOT_LOADED'; message: string }
   | { code: 'UNKNOWN'; message: string }
 
 export interface DiscardedRow {
@@ -234,14 +286,67 @@ export interface DiscardedRow {
   reason: string
 }
 
+/**
+ * [Z.P1.10.b.1] Campos canónicos que el parser puede mapear desde headers crudos.
+ * Coincide 1:1 con las keys de SALES_MAPPINGS en src/lib/fileParser.ts.
+ */
+export type CanonicalField =
+  | 'fecha'
+  | 'unidades'
+  | 'venta_neta'
+  | 'costo_unitario'
+  | 'vendedor'
+  | 'cliente'
+  | 'producto'
+  | 'categoria'
+  | 'subcategoria'
+  | 'proveedor'
+  | 'canal'
+  | 'departamento'
+  | 'supervisor'
+
+/**
+ * [Z.P1.10.b.1] Override del mapeo automático del parser.
+ *
+ * Para cada campo canónico (CanonicalField):
+ * - `string` (header del archivo) → forzar mapeo: usar este header como el campo canónico,
+ *   ignorando la detección automática.
+ * - `null` → ignorar explícitamente este campo (no mapear nada a él aunque haya sido detectable).
+ * - `undefined` / ausente → usar la detección automática normal.
+ *
+ * Si un override fuerza un header que no existe en el archivo, el parser emite un warning
+ * `OVERRIDE_HEADER_NOT_FOUND` y cae a la detección automática para ese campo.
+ */
+export type MappingOverride = Partial<Record<CanonicalField, string | null>>
+
 export type ParseResult<T> =
-  | { success: true; data: T[]; columns: string[]; sheetName?: string; discardedRows?: DiscardedRow[] }
+  | {
+      success: true
+      data: T[]
+      columns: string[]
+      sheetName?: string
+      discardedRows?: DiscardedRow[]
+      ignoredColumns?: string[]
+      dateAmbiguity?: { convention: 'dmy' | 'mdy' | 'ymd' | 'unknown'; evidence: string; ambiguous: boolean }
+      warnings?: Array<{ code: string; message: string; field?: string }>
+      /** [Z.P1.10.b.1] Trace de mapeo: canónico → header crudo del archivo que se asignó. */
+      mapping?: Partial<Record<CanonicalField, string>>
+    }
   | { success: false; error: ParseError }
 
 // ─── UPLOAD / SESIÓN ──────────────────────────────────────────────────────────
 
 export interface UploadStep {
-  id: 'ventas' | 'metas' | 'inventario'
+  /**
+   * [Sprint D] Slug del paso, derivado de TABLE_REGISTRY[id].wizardStepId.
+   * Antes era un union cerrado `'ventas' | 'metas' | 'inventario'`, lo que
+   * obligaba a editar este archivo cada vez que se agregaba una tabla nueva.
+   * Ahora es `string` para que agregar una 4ta tabla con `wizardStepId='precios'`
+   * no requiera tocar este tipo. Las comparaciones `step.id === 'ventas'` en
+   * UploadPage siguen siendo válidas — son feature flags per-tabla, no
+   * exhaustividad estructural.
+   */
+  id: string
   label: string
   description: string
   required: boolean
@@ -335,8 +440,8 @@ export interface SupervisorAnalysis {
   vendedores_ok: number
   vendedores_superando: number
   riesgo_zona: 'critico' | 'riesgo' | 'ok' | 'superando'
-  ytd_actual: number
-  ytd_anterior: number
+  ytd_actual_uds: number
+  ytd_anterior_uds: number
 }
 
 // ─── ANÁLISIS POR CATEGORÍA ───────────────────────────────────────────────────
@@ -387,6 +492,9 @@ export interface Configuracion {
   metricaGlobal: 'usd' | 'uds'
   giro: string
   giro_custom: string
+  // [Ticket 3.F.2] Vista activa de la tabla pivot en /rendimiento.
+  // Persistida globalmente; toggle vive en TopBar.
+  tableView: 'ytd' | 'monthly'
 }
 
 // ─── MULTI-TENANT ─────────────────────────────────────────────────────────────
@@ -430,8 +538,8 @@ export type ChatClienteContext =
       cliente: string
       vendedor: string
       dias_sin_actividad: number
-      compras_historicas: number
-      valor_historico: number
+      transacciones_yoy: number
+      valor_yoy_usd: number
       recovery_score: number
       recovery_explicacion: string
       frecuencia_esperada_dias: number | null

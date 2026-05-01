@@ -15,6 +15,11 @@ import type {
   CategoriaAnalysis,
   CanalAnalysis,
 } from '../types'
+import {
+  getFechaReferencia,
+  buildMonthlyRange,
+  buildComparisonRangeYoY,
+} from './periods'
 
 // ─── HELPERS DE FECHA ─────────────────────────────────────────────────────────
 
@@ -63,6 +68,14 @@ export interface SaleIndex {
   has_canal: boolean
   has_supervisor: boolean
   has_departamento: boolean
+  // [PR-M1] Flags para ingesta dual (unidades obligatoria, venta_neta opcional)
+  has_unidades: boolean
+  has_precio_unitario: boolean
+  // [schema-cleanup] flags de columnas opcionales agregadas: subcategoria/proveedor (dims),
+  // costo_unitario (habilita métricas margen_bruto / margen_pct).
+  has_subcategoria: boolean
+  has_proveedor: boolean
+  has_costo_unitario: boolean
 }
 
 function appendToMap<K>(map: Map<K, SaleRecord[]>, key: K, s: SaleRecord): void {
@@ -76,28 +89,40 @@ export function buildSaleIndex(sales: SaleRecord[]): SaleIndex {
   const byVendor = new Map<string, SaleRecord[]>()
   const byProduct = new Map<string, SaleRecord[]>()
   const byClient = new Map<string, SaleRecord[]>()
-  let fechaReferencia = new Date(0)
+  // Ticket 2.2-C: max(sales.fecha) centralizado en lib/periods.ts.
+  // Conservamos sentinel epoch 0 cuando sales es vacío — computeCommercialAnalysis
+  // detecta el sentinel y retorna shape vacío (Ticket 2.2-A).
+  const fechaReferencia = getFechaReferencia(sales) ?? new Date(0)
   let has_producto = false, has_cliente = false, has_venta_neta = false
   let has_categoria = false, has_canal = false, has_supervisor = false, has_departamento = false
+  let has_subcategoria = false, has_proveedor = false, has_costo_unitario = false
+  // [PR-M1] has_unidades usa umbral ≥80% (métrica obligatoria); contamos aparte
+  let _filasConUnidades = 0
 
   for (const s of sales) {
-    if (s.fecha > fechaReferencia) fechaReferencia = s.fecha
     appendToMap(byPeriod, periodKey(s.fecha.getFullYear(), s.fecha.getMonth()), s)
     if (s.vendedor) appendToMap(byVendor, s.vendedor, s)
-    const productoKey = s.producto ?? s.codigo_producto
-    if (productoKey) { appendToMap(byProduct, productoKey, s); has_producto = true }
-    const clienteKey = s.cliente ?? s.codigo_cliente
-    if (clienteKey) { appendToMap(byClient, clienteKey, s); has_cliente = true }
+    if (s.producto) { appendToMap(byProduct, s.producto, s); has_producto = true }
+    if (s.cliente)  { appendToMap(byClient, s.cliente, s); has_cliente = true }
     if (!has_venta_neta && s.venta_neta != null && s.venta_neta > 0) has_venta_neta = true
     if (!has_categoria && s.categoria != null && s.categoria !== '') has_categoria = true
+    if (!has_subcategoria && s.subcategoria != null && s.subcategoria !== '') has_subcategoria = true
     if (!has_canal && s.canal != null && s.canal !== '') has_canal = true
     if (!has_supervisor && s.supervisor != null && s.supervisor !== '') has_supervisor = true
     if (!has_departamento && s.departamento != null && s.departamento !== '') has_departamento = true
+    if (!has_proveedor && s.proveedor != null && s.proveedor !== '') has_proveedor = true
+    if (!has_costo_unitario && s.costo_unitario != null && s.costo_unitario > 0) has_costo_unitario = true
+    if (s.unidades > 0) _filasConUnidades++
   }
+
+  const has_unidades        = sales.length > 0 && (_filasConUnidades / sales.length) >= 0.8
+  const has_precio_unitario = has_unidades && has_venta_neta
 
   return {
     byPeriod, byVendor, byProduct, byClient, fechaReferencia,
     has_producto, has_cliente, has_venta_neta, has_categoria, has_canal, has_supervisor, has_departamento,
+    has_unidades, has_precio_unitario,
+    has_subcategoria, has_proveedor, has_costo_unitario,
   }
 }
 
@@ -107,10 +132,61 @@ function getSalesByPeriod(index: SaleIndex, year: number, month: number): SaleRe
 
 // ─── FILTROS DE PERÍODO ───────────────────────────────────────────────────────
 
-export function salesInPeriod(sales: SaleRecord[], year: number, month: number): SaleRecord[] {
-  const start = startOfPeriod(year, month)
-  const end = endOfPeriod(year, month)
+export function salesInRange(
+  sales: SaleRecord[],
+  year: number,
+  monthStart: number,
+  monthEnd: number,
+): SaleRecord[] {
+  // Invariante: monthEnd >= monthStart. Mirror del patrón de lib/periods.ts
+  // (buildMonthlyRange throws). NaN/fuera-de-rango propagan a Invalid Date
+  // como en salesInPeriod legacy → filter retorna [].
+  if (monthEnd < monthStart) {
+    throw new Error(`monthEnd (${monthEnd}) < monthStart (${monthStart})`)
+  }
+  const start = startOfPeriod(year, monthStart)
+  const end = endOfPeriod(year, monthEnd)
   return sales.filter((s) => s.fecha >= start && s.fecha <= end)
+}
+
+export function salesInPeriod(sales: SaleRecord[], year: number, month: number): SaleRecord[] {
+  return salesInRange(sales, year, month, month)
+}
+
+/**
+ * Devuelve las ventas YoY del rango [monthStart..monthEnd] del año anterior,
+ * truncando al maxDay SOLO en el último mes del rango (regla CONTEXT.md
+ * "MTD vs MTD same-day, YTD vs YTD same-day"). Meses intermedios completos.
+ *
+ * @param year año DEL RANGO ACTUAL (la función calcula year-1 internamente).
+ * @param maxDay día del mes de cutoff [1-31]. Si <= 0, retorna [].
+ * @throws si monthStart > monthEnd.
+ */
+export function salesInRangeYoYSameDay(
+  sales: SaleRecord[],
+  year: number,
+  monthStart: number,
+  monthEnd: number,
+  maxDay: number,
+): SaleRecord[] {
+  if (monthStart > monthEnd) {
+    throw new Error(`monthEnd (${monthEnd}) < monthStart (${monthStart})`)
+  }
+  if (maxDay <= 0) return []
+
+  const result: SaleRecord[] = []
+  for (let m = monthStart; m <= monthEnd; m++) {
+    const monthSales = salesInPeriod(sales, year - 1, m)
+    if (m === monthEnd) {
+      const cutoff = new Date(year - 1, m, maxDay, 23, 59, 59, 999)
+      for (const s of monthSales) {
+        if (s.fecha <= cutoff) result.push(s)
+      }
+    } else {
+      result.push(...monthSales)
+    }
+  }
+  return result
 }
 
 /** Filter sales to only include days <= maxDay within the month */
@@ -257,31 +333,110 @@ const safePct = (num: number, den: number): number => {
 
 // ─── YTD HELPER ───────────────────────────────────────────────────────────────
 
-function computeYTD(
+/**
+ * Calcula totales (uds + USD) del rango actual y del mismo rango YoY (año - 1),
+ * más variación porcentual.
+ *
+ * El "rango YoY" se construye con `buildComparisonRangeYoY` aplicado al rango
+ * actual, lo que produce el mismo rango del año anterior con clamp same-day
+ * en monthEnd cuando corresponde (regla CONTEXT.md "MTD vs MTD same-day,
+ * YTD vs YTD same-day").
+ *
+ * Nota: los nombres de los campos retornados preservan el prefijo `ytd_` por
+ * compat histórica con consumers downstream. Cuando el rango es
+ * (0, fechaRef.getMonth()) el campo es YTD literal; en otros rangos el "YTD"
+ * del nombre es legacy y el valor representa "totales del rango". Renaming
+ * queda para un ticket futuro de cleanup (ver BACKLOG).
+ *
+ * @param sales ventas a agregar.
+ * @param fechaReferencia "hoy" del negocio (max sales date).
+ * @param monthStart mes inicial del rango actual [0-11].
+ * @param monthEnd mes final del rango actual [0-11], debe ser >= monthStart.
+ * @throws si monthStart > monthEnd.
+ */
+export function computeRangeYoY(
   sales: SaleRecord[],
-  fechaReferencia: Date
-): { ytd_actual: number; ytd_anterior: number; ytd_actual_neto?: number; ytd_anterior_neto?: number; variacion_ytd_pct: number | null } {
-  const yearActual = fechaReferencia.getFullYear()
-  const startActual = new Date(yearActual, 0, 1)
-  const startAnterior = new Date(yearActual - 1, 0, 1)
-  // Mismo día/mes del año anterior
-  const endAnterior = new Date(yearActual - 1, fechaReferencia.getMonth(), fechaReferencia.getDate(), 23, 59, 59, 999)
+  fechaReferencia: Date,
+  monthStart: number,
+  monthEnd: number,
+): {
+  ytd_actual_uds: number
+  ytd_anterior_uds: number
+  variacion_ytd_uds_pct: number | null
+  ytd_actual_usd?: number
+  ytd_anterior_usd?: number
+  variacion_ytd_usd_pct?: number | null
+} {
+  if (monthStart > monthEnd) {
+    throw new Error(`monthEnd (${monthEnd}) < monthStart (${monthStart})`)
+  }
 
-  const salesActual   = sales.filter((s) => s.fecha >= startActual && s.fecha <= fechaReferencia)
-  const salesAnterior = sales.filter((s) => s.fecha >= startAnterior && s.fecha <= endAnterior)
+  const year = fechaReferencia.getFullYear()
+  const rangeActual = buildMonthlyRange({ year, monthStart, monthEnd }, fechaReferencia)
+  const rangeAnterior = buildComparisonRangeYoY(rangeActual)
 
-  const ytd_actual   = salesActual.reduce((a, s) => a + s.unidades, 0)
-  const ytd_anterior = salesAnterior.reduce((a, s) => a + s.unidades, 0)
+  const salesActual   = sales.filter((s) => s.fecha >= rangeActual.start && s.fecha <= rangeActual.end)
+  const salesAnterior = sales.filter((s) => s.fecha >= rangeAnterior.start && s.fecha <= rangeAnterior.end)
 
-  const variacion_ytd_pct = ytd_anterior > 0 ? safePct(ytd_actual, ytd_anterior) : null
+  const ytd_actual_uds   = salesActual.reduce((a, s) => a + s.unidades, 0)
+  const ytd_anterior_uds = salesAnterior.reduce((a, s) => a + s.unidades, 0)
 
-  // Neto: solo si hay registros con venta_neta
+  const variacion_ytd_uds_pct = ytd_anterior_uds > 0 ? safePct(ytd_actual_uds, ytd_anterior_uds) : null
+
   const hasNetoActual   = salesActual.some((s) => s.venta_neta != null && s.venta_neta > 0)
   const hasNetoAnterior = salesAnterior.some((s) => s.venta_neta != null && s.venta_neta > 0)
-  const ytd_actual_neto   = hasNetoActual   ? salesActual.reduce((a, s) => a + (s.venta_neta ?? 0), 0)   : undefined
-  const ytd_anterior_neto = hasNetoAnterior ? salesAnterior.reduce((a, s) => a + (s.venta_neta ?? 0), 0) : undefined
+  const ytd_actual_usd   = hasNetoActual   ? salesActual.reduce((a, s) => a + (s.venta_neta ?? 0), 0)   : undefined
+  const ytd_anterior_usd = hasNetoAnterior ? salesAnterior.reduce((a, s) => a + (s.venta_neta ?? 0), 0) : undefined
+  const variacion_ytd_usd_pct =
+    ytd_actual_usd != null && ytd_anterior_usd != null && ytd_anterior_usd > 0
+      ? safePct(ytd_actual_usd, ytd_anterior_usd)
+      : null
 
-  return { ytd_actual, ytd_anterior, ytd_actual_neto, ytd_anterior_neto, variacion_ytd_pct }
+  return {
+    ytd_actual_uds,
+    ytd_anterior_uds,
+    variacion_ytd_uds_pct,
+    ytd_actual_usd,
+    ytd_anterior_usd,
+    variacion_ytd_usd_pct,
+  }
+}
+
+/**
+ * [Ticket 3.B.½] Resuelve el rango efectivo a usar en computeRangeYoY.
+ *
+ * - Si selectedPeriod trae monthStart y monthEnd definidos: los usa.
+ * - Si no: cae al default legacy YTD = (0, fechaRef.getMonth()).
+ *
+ * Cuando se exercita el path range-aware (monthStart/monthEnd presentes),
+ * valida que selectedPeriod.year coincida con fechaRef.getFullYear().
+ * Soportar año pasado en el path range-aware queda fuera de scope (Sprint 3.E
+ * o posterior). Throws con mensaje claro si hay mismatch.
+ */
+function resolveYTDRange(
+  selectedPeriod: { year: number; monthStart?: number; monthEnd?: number; month?: number } | undefined,
+  fechaReferencia: Date,
+): { monthStart: number; monthEnd: number } {
+  const fechaRefYear = fechaReferencia.getFullYear()
+  // Path range-aware solo cuando: (a) hay selectedPeriod con monthStart/monthEnd
+  // definidos, (b) year > 0 (no neutral state), (c) year coincide con fechaRef.
+  // Cualquier otro caso → legacy YTD default (preserva goldens y tolera neutral).
+  if (
+    !selectedPeriod ||
+    selectedPeriod.monthStart === undefined ||
+    selectedPeriod.monthEnd === undefined ||
+    // year === 0 sentinel: pre-hydration store state, fallback to legacy YTD range.
+    selectedPeriod.year === 0
+  ) {
+    return { monthStart: 0, monthEnd: fechaReferencia.getMonth() }
+  }
+  if (selectedPeriod.year !== fechaRefYear) {
+    throw new Error(
+      `[3.B.½] selectedPeriod.year (${selectedPeriod.year}) ≠ fechaRef.year (${fechaRefYear}); ` +
+      `range-aware YTD path solo soporta el año actual. Año pasado pendiente de Sprint posterior.`,
+    )
+  }
+  return { monthStart: selectedPeriod.monthStart, monthEnd: selectedPeriod.monthEnd }
 }
 
 // Accepts pre-grouped vendor sales (only this vendor's records)
@@ -289,7 +444,7 @@ function analyzeVendor(
   vendedor: string,
   vendorSales: SaleRecord[],
   metas: MetaRecord[],
-  selectedPeriod: { year: number; month: number },
+  selectedPeriod: { year: number; month: number; monthStart?: number; monthEnd?: number },
   diasTranscurridos: number,
   diasTotales: number,
   diasRestantes: number,
@@ -377,8 +532,11 @@ function analyzeVendor(
     month
   )
 
-  // YTD (necesario para clasificación de riesgo sin meta)
-  const ytd = computeYTD(vendorSales, fechaReferencia)
+  // YTD (necesario para clasificación de riesgo sin meta).
+  // [Ticket 3.B.½] Range-aware: usa monthStart/monthEnd del store si están
+  // presentes; cae a YTD legacy (0, fechaRef.getMonth()) si no.
+  const _ytdRange = resolveYTDRange(selectedPeriod, fechaReferencia)
+  const ytd = computeRangeYoY(vendorSales, fechaReferencia, _ytdRange.monthStart, _ytdRange.monthEnd)
 
   // Clasificación de riesgo
   let riesgo: RiesgoVendedor = 'ok'
@@ -387,8 +545,8 @@ function analyzeVendor(
     else if (proyeccion_cierre < meta * 0.9) riesgo = 'riesgo'
     else if (proyeccion_cierre > meta * 1.05) riesgo = 'superando'
   } else {
-    const variacion_vs_anio = ytd.ytd_anterior > 0
-      ? ((ytd.ytd_actual - ytd.ytd_anterior) / ytd.ytd_anterior) * 100
+    const variacion_vs_anio = ytd.ytd_anterior_uds > 0
+      ? ((ytd.ytd_actual_uds - ytd.ytd_anterior_uds) / ytd.ytd_anterior_uds) * 100
       : null
     if (variacion_vs_anio !== null) {
       if (variacion_vs_anio < -20) riesgo = 'critico'
@@ -528,11 +686,16 @@ function calcFrecuenciaEsperada(sortedAsc: SaleRecord[]): number | null {
 function computeClientesDormidos(
   sales: SaleRecord[],
   threshold: number,
+  selectedPeriod: { year: number; month: number; monthStart?: number; monthEnd?: number },
   byClient?: Map<string, SaleRecord[]>,
 ): ClienteDormido[] {
-  const today = sales.length > 0
-    ? sales.reduce((max, s) => { const d = s.fecha; return d > max ? d : max }, new Date(0))
-    : new Date()
+  // BUG-FIX (Ticket 2.2-A): si no hay sales, retornar lista vacía en vez de
+  // inventar "hoy" desde el browser. La función no tiene base para calcular
+  // "días sin comprar" sin datos.
+  if (sales.length === 0) return []
+  // safe: sales.length > 0 (early return arriba) garantiza que getFechaReferencia
+  // no retorna null. Ticket 2.2-C: cálculo centralizado en lib/periods.ts.
+  const today = getFechaReferencia(sales)!
 
   const clientMap = byClient ?? (() => {
     const m = new Map<string, SaleRecord[]>()
@@ -543,9 +706,18 @@ function computeClientesDormidos(
     return m
   })()
 
+  // [Ticket 3.B.4] YoY reference window: mismo rango del año anterior con
+  // truncamiento same-day en monthEnd cuando coincide con fechaRef.month
+  // (regla CONTEXT.md "MTD vs MTD same-day, YTD vs YTD same-day"). Pre-3.B.4
+  // era single-month sin truncamiento; ahora suma todo el rango del usuario.
+  const yoyYear = selectedPeriod.year - 1
+  const yoyMonthStart = selectedPeriod.monthStart ?? 0
+  const yoyMonthEnd = selectedPeriod.monthEnd ?? selectedPeriod.month
+  const yoyCutoffDay = yoyMonthEnd === today.getMonth() ? today.getDate() : null
+
   type DormidoRaw = {
     cliente: string; vendedor: string; ultima_compra: Date; dias_sin_actividad: number
-    valor_historico: number; compras_historicas: number
+    valor_yoy_usd: number; unidades_yoy: number; transacciones_yoy: number; _compras_total: number
     frecuencia_promedio: number; frecuencia_esperada: number | null; threshold_efectivo: number
     meses_distintos: number; meses_historial: number
   }
@@ -571,7 +743,22 @@ function computeClientesDormidos(
       vendedorCount[r.vendedor] = (vendedorCount[r.vendedor] ?? 0) + 1
     }
     const vendedor = Object.entries(vendedorCount).sort(([, a], [, b]) => b - a)[0][0]
-    const valor_historico = records.reduce((a, s) => a + (s.venta_neta ?? s.unidades), 0)
+
+    // [Ticket 3.B.4] valor_yoy_usd: ventas del cliente en el mismo rango del año
+    // anterior. Same-day cutoff en monthEnd si == mes de fechaRef (regla MTD).
+    const yoyRecords = records.filter(r => {
+      if (r.fecha.getFullYear() !== yoyYear) return false
+      const m = r.fecha.getMonth()
+      if (m < yoyMonthStart || m > yoyMonthEnd) return false
+      if (m === yoyMonthEnd && yoyCutoffDay !== null && r.fecha.getDate() > yoyCutoffDay) return false
+      return true
+    })
+    const valor_yoy_usd = yoyRecords.reduce((a, s) => a + (s.venta_neta ?? s.unidades), 0)
+    // [Sprint H2] unidades_yoy: paralelo a valor_yoy_usd pero solo unidades (no
+    // mezclado con venta_neta). Habilita render dual-metric en /clientes tab
+    // Inactivos cuando metricaGlobal === 'uds'. Cierra blocker F2.
+    const unidades_yoy = yoyRecords.reduce((a, s) => a + (s.unidades ?? 0), 0)
+    const transacciones_yoy = yoyRecords.length
 
     let frecuencia_promedio = 0
     if (sortedAsc.length >= 2) {
@@ -592,7 +779,7 @@ function computeClientesDormidos(
 
     candidates.push({
       cliente, vendedor, ultima_compra, dias_sin_actividad,
-      valor_historico, compras_historicas: records.length,
+      valor_yoy_usd, unidades_yoy, transacciones_yoy, _compras_total: records.length,
       frecuencia_promedio, frecuencia_esperada, threshold_efectivo,
       meses_distintos, meses_historial,
     })
@@ -600,13 +787,13 @@ function computeClientesDormidos(
 
   if (candidates.length === 0) return []
 
-  const maxValor = Math.max(...candidates.map(c => c.valor_historico))
+  const maxValor = Math.max(...candidates.map(c => c.valor_yoy_usd), 1)
 
   const dormidos: ClienteDormido[] = candidates.map(c => {
-    const frecuencia_score = c.frecuencia_promedio === 0 || c.compras_historicas < 2
+    const frecuencia_score = c.frecuencia_promedio === 0 || c._compras_total < 2
       ? 0.3
       : Math.max(0, 1 - (c.dias_sin_actividad / (c.frecuencia_promedio * 3)))
-    const valor_score = maxValor > 0 ? c.valor_historico / maxValor : 0
+    const valor_score = maxValor > 0 ? c.valor_yoy_usd / maxValor : 0
     // recencia_score uses dynamic threshold instead of fixed 180
     const recencia_score = Math.max(0, 1 - (c.dias_sin_actividad / (c.threshold_efectivo * 2)))
     const estabilidad_score = Math.min(1, c.meses_distintos / c.meses_historial)
@@ -621,7 +808,7 @@ function computeClientesDormidos(
       : 'perdido'
 
     let recovery_explicacion: string
-    if (c.frecuencia_promedio >= 2 && c.compras_historicas >= 2) {
+    if (c.frecuencia_promedio >= 2 && c._compras_total >= 2) {
       recovery_explicacion = `Compraba cada ${Math.round(c.frecuencia_promedio)} días, lleva ${c.dias_sin_actividad} sin comprar`
     } else if (c.meses_distintos >= 3) {
       recovery_explicacion = `Activo ${c.meses_distintos} de ${c.meses_historial} meses, ${c.dias_sin_actividad} días inactivo`
@@ -632,19 +819,20 @@ function computeClientesDormidos(
 
     return {
       cliente: c.cliente, vendedor: c.vendedor, ultima_compra: c.ultima_compra,
-      dias_sin_actividad: c.dias_sin_actividad, valor_historico: c.valor_historico,
-      compras_historicas: c.compras_historicas, recovery_score, recovery_label, recovery_explicacion,
+      dias_sin_actividad: c.dias_sin_actividad, valor_yoy_usd: c.valor_yoy_usd,
+      unidades_yoy: c.unidades_yoy,
+      transacciones_yoy: c.transacciones_yoy, recovery_score, recovery_label, recovery_explicacion,
       frecuencia_esperada_dias: c.frecuencia_esperada !== null ? Math.round(c.frecuencia_esperada) : null,
       threshold_usado: c.threshold_efectivo,
     }
   })
 
-  const maxValorD = Math.max(...dormidos.map(c => c.valor_historico), 1)
+  const maxValorD = Math.max(...dormidos.map(c => c.valor_yoy_usd), 1)
 
   const scored = dormidos.map(c => ({
     ...c,
     _priority_score:
-      (c.valor_historico / maxValorD) * 0.6 +
+      (c.valor_yoy_usd / maxValorD) * 0.6 +
       (c.recovery_score / 100) * 0.4
   }))
 
@@ -697,7 +885,7 @@ export function computeCommercialAnalysis(
   sales: SaleRecord[],
   metas: MetaRecord[],
   inventory: InventoryItem[],
-  selectedPeriod: { year: number; month: number },
+  selectedPeriod: { year: number; month: number; monthStart?: number; monthEnd?: number },
   config: Configuracion,
   index?: SaleIndex,
   tipoMetaActivo?: 'uds' | 'usd',
@@ -705,7 +893,29 @@ export function computeCommercialAnalysis(
   const { year, month } = selectedPeriod
 
   const idx = index ?? buildSaleIndex(sales)
-  const fechaReferencia = idx.fechaReferencia.getTime() > 0 ? idx.fechaReferencia : new Date()
+
+  // BUG-FIX (Ticket 2.2-A): si idx.fechaReferencia es epoch sentinel (sales vacío),
+  // retornar resultado vacío en vez de calcular contra "hoy" del browser.
+  if (idx.fechaReferencia.getTime() === 0) {
+    return {
+      vendorAnalysis: [],
+      teamStats: {
+        total_ventas: 0,
+        total_unidades: 0,
+        variacion_pct: null,
+        mejor_vendedor: '',
+        clientes_dormidos_count: 0,
+        productos_sin_movimiento_count: 0,
+        riesgos_concentracion_count: 0,
+        dias_transcurridos: 0,
+        dias_totales: 0,
+        dias_restantes: 0,
+      },
+      clientesDormidos: [],
+      concentracionRiesgo: [],
+    }
+  }
+  const fechaReferencia = idx.fechaReferencia
 
   // Determinar si el período seleccionado es el mes con la última fecha de datos
   const isCurrentMonth =
@@ -716,13 +926,19 @@ export function computeCommercialAnalysis(
   const diasRestantes = Math.max(0, diasTotales - diasTranscurridos)
 
   // MTD YoY: compare same month previous year, same day range
+  // Ticket 2.2-C: rangos centralizados en lib/periods.ts. buildMonthlyRange con
+  // monthStart === monthEnd === month devuelve [1-mes, endOfDay(fechaRef)] si el
+  // mes contiene fechaRef, o mes calendario completo si no.
   const prevYoY = { year: year - 1, month }
-  const periodStart = startOfPeriod(year, month)
-  const periodEnd = isCurrentMonth ? new Date(year, month, diasTranscurridos, 23, 59, 59, 999) : endOfPeriod(year, month)
-  const prevStart = startOfPeriod(prevYoY.year, prevYoY.month)
-  const prevEnd = isCurrentMonth
-    ? new Date(prevYoY.year, prevYoY.month, diasTranscurridos, 23, 59, 59, 999)
-    : endOfPeriod(prevYoY.year, prevYoY.month)
+  const periodRange = buildMonthlyRange(
+    { year, monthStart: month, monthEnd: month },
+    fechaReferencia,
+  )
+  const prevRange = buildComparisonRangeYoY(periodRange)
+  const periodStart = periodRange.start
+  const periodEnd = periodRange.end
+  const prevStart = prevRange.start
+  const prevEnd = prevRange.end
 
   const vendedores = Array.from(idx.byVendor.keys())
   const vendorAnalysis = vendedores.map((v) =>
@@ -789,16 +1005,14 @@ export function computeCommercialAnalysis(
   const prevTotal = prevSales.reduce((a, s) => a + s.unidades, 0)
   const variacion_pct = prevTotal > 0 ? safePct(total_unidades, prevTotal) : null
 
-  const metasDelPeriodo = metas.filter((m) => m.mes === month + 1 && m.anio === year)
+  // Filtro canónico single-dim: excluye canal/categoria/cliente para evitar
+  // doble conteo con metas multi-dim. Versión exportable en domain-aggregations.getMetaMes.
   const getMetaVal = (m: MetaRecord) => tipoMetaActivo === 'usd' ? (m.meta_usd ?? 0) : (m.meta_uds ?? m.meta ?? 0)
-  // Only sum vendedor-level metas (exclude supervisor/categoria metas)
-  const vendedorMetas = metasDelPeriodo.filter((m) => m.vendedor && !m.supervisor && !m.categoria)
-  const meta_equipo =
-    vendedorMetas.length > 0
-      ? vendedorMetas.reduce((a, m) => a + getMetaVal(m), 0)
-      : undefined
-  const meta_equipo_total: number | null =
-    vendedorMetas.length > 0 ? vendedorMetas.reduce((a, m) => a + getMetaVal(m), 0) : null
+  const vendedorMetas = metas.filter(
+    (m) => m.mes === month + 1 && m.anio === year && m.vendedor && !m.canal && !m.categoria && !m.cliente
+  )
+  const meta_equipo = vendedorMetas.length > 0 ? vendedorMetas.reduce((a, m) => a + getMetaVal(m), 0) : undefined
+  const meta_equipo_total: number | null = vendedorMetas.length > 0 ? vendedorMetas.reduce((a, m) => a + getMetaVal(m), 0) : null
 
   const proyeccion_equipo = vendorAnalysis.reduce(
     (a, v) => a + (v.proyeccion_cierre ?? 0),
@@ -821,7 +1035,7 @@ export function computeCommercialAnalysis(
 
   const hasCliente = idx.byClient.size > 0
   const clientesDormidos = hasCliente
-    ? computeClientesDormidos(sales, config.dias_dormido_threshold, idx.byClient)
+    ? computeClientesDormidos(sales, config.dias_dormido_threshold, selectedPeriod, idx.byClient)
     : []
 
   const concentracionRiesgo = hasCliente
@@ -853,6 +1067,33 @@ export function computeCommercialAnalysis(
     ).length
   }
 
+  // --- Metas de meses cerrados (enero hasta mes anterior al actual) ---
+  const getMetaVal2 = (m: MetaRecord) => tipoMetaActivo === 'usd' ? (m.meta_usd ?? 0) : (m.meta_uds ?? m.meta ?? 0)
+  let metaCerradaTotal = 0
+  let ventaCerradaTotal = 0
+  const mesesCerradosArr: number[] = []
+
+  for (let mesIdx = 0; mesIdx < month; mesIdx++) {
+    const metasMes = metas.filter((m) => m.mes === mesIdx + 1 && m.anio === year && m.vendedor && !m.supervisor && !m.categoria)
+    const metaMes = metasMes.reduce((a, m) => a + getMetaVal2(m), 0)
+    if (metaMes === 0) continue
+
+    let ventaMesUds = 0
+    let ventaMesNeta = 0
+    for (const s of sales) {
+      if (s.fecha.getFullYear() === year && s.fecha.getMonth() === mesIdx) {
+        ventaMesUds += s.unidades
+        ventaMesNeta += s.venta_neta ?? 0
+      }
+    }
+
+    metaCerradaTotal += metaMes
+    ventaCerradaTotal += tipoMetaActivo === 'usd' ? ventaMesNeta : ventaMesUds
+    mesesCerradosArr.push(mesIdx + 1)
+  }
+
+  const cumplimientoCerrado = metaCerradaTotal > 0 ? (ventaCerradaTotal / metaCerradaTotal) * 100 : 0
+
   const teamStats: TeamStats = {
     total_ventas,
     total_unidades,
@@ -870,9 +1111,22 @@ export function computeCommercialAnalysis(
     dias_totales: diasTotales,
     dias_restantes: diasRestantes,
     ...(() => {
-      const { ytd_actual, ytd_anterior, variacion_ytd_pct } = computeYTD(sales, fechaReferencia)
-      return { ytd_actual_equipo: ytd_actual, ytd_anterior_equipo: ytd_anterior, variacion_ytd_equipo: variacion_ytd_pct }
+      // [Ticket 3.B.½] Range-aware igual que analyzeVendor.
+      const _teamRange = resolveYTDRange(selectedPeriod, fechaReferencia)
+      const { ytd_actual_uds, ytd_anterior_uds, variacion_ytd_uds_pct } =
+        computeRangeYoY(sales, fechaReferencia, _teamRange.monthStart, _teamRange.monthEnd)
+      return {
+        ytd_actual_equipo_uds: ytd_actual_uds,
+        ytd_anterior_equipo_uds: ytd_anterior_uds,
+        variacion_ytd_equipo_uds_pct: variacion_ytd_uds_pct,
+      }
     })(),
+    ...(metaCerradaTotal > 0 ? {
+      meta_cerrada_total: metaCerradaTotal,
+      venta_cerrada_total: ventaCerradaTotal,
+      cumplimiento_cerrado: cumplimientoCerrado,
+      meses_cerrados: mesesCerradosArr,
+    } : {}),
   }
 
   return { vendorAnalysis, teamStats, clientesDormidos, concentracionRiesgo }
@@ -1040,17 +1294,25 @@ export function computeCategoriasInventario(
 export function analyzeSupervisor(
   vendorAnalysis: VendorAnalysis[],
   metas: MetaRecord[],
-  selectedPeriod: { year: number; month: number },
+  selectedPeriod: { year: number; month: number; monthStart?: number; monthEnd?: number },
   index: SaleIndex,
 ): SupervisorAnalysis[] {
   const { year, month } = selectedPeriod
   const fr = index.fechaReferencia
-  const ytdYear = fr.getFullYear()
-  const startYTDActual  = new Date(ytdYear, 0, 1)
-  const startYTDAnterior = new Date(ytdYear - 1, 0, 1)
-  const endYTDAnterior  = new Date(ytdYear - 1, fr.getMonth(), fr.getDate(), 23, 59, 59, 999)
-  const prevYearStart   = new Date(year - 1, month, 1)
-  const prevYearEnd     = new Date(year - 1, month + 1, 0, 23, 59, 59, 999)
+
+  // Ticket 2.2-C: rangos centralizados en lib/periods.ts.
+  // MTD: mes seleccionado vs mismo mes año anterior. buildMonthlyRange trunca
+  // si el mes contiene fr; buildComparisonRangeYoY clampea 29-feb cross-year.
+  // El Math.min defensivo del Commit 2.2-B queda implícito en la primitiva.
+  // YTD: delegado a computeRangeYoY por supervisor (Ticket 3.A.1).
+  const periodRange = buildMonthlyRange(
+    { year, monthStart: month, monthEnd: month },
+    fr,
+  )
+  const prevYearRange = buildComparisonRangeYoY(periodRange)
+
+  const prevYearStart = prevYearRange.start
+  const prevYearEnd = prevYearRange.end
 
   // Predominant supervisor per vendor
   const supervisorByVendor: Record<string, string> = {}
@@ -1081,8 +1343,11 @@ export function analyzeSupervisor(
 
     const supervisorSales = vendores.flatMap((v) => index.byVendor.get(v) ?? [])
 
-    const ytd_actual  = supervisorSales.filter((s) => s.fecha >= startYTDActual && s.fecha <= fr).reduce((a, s) => a + s.unidades, 0)
-    const ytd_anterior = supervisorSales.filter((s) => s.fecha >= startYTDAnterior && s.fecha <= endYTDAnterior).reduce((a, s) => a + s.unidades, 0)
+    // [Ticket 3.A.1] YTD por supervisor delegado a computeRangeYoY.
+    // [Ticket 3.B.½] Range-aware: usa monthStart/monthEnd del store si están
+    // presentes; cae a YTD legacy (0, fr.getMonth()) si no.
+    const _supRange = resolveYTDRange(selectedPeriod, fr)
+    const { ytd_actual_uds, ytd_anterior_uds } = computeRangeYoY(supervisorSales, fr, _supRange.monthStart, _supRange.monthEnd)
 
     const ventas_prev = supervisorSales.filter((s) => s.fecha >= prevYearStart && s.fecha <= prevYearEnd).reduce((a, s) => a + s.unidades, 0)
     const variacion_pct = safePct(ventas_periodo, ventas_prev)
@@ -1117,7 +1382,7 @@ export function analyzeSupervisor(
       supervisor, vendedores: vendores, ventas_periodo, meta_zona, cumplimiento_pct,
       proyeccion_cierre, variacion_pct,
       vendedores_criticos, vendedores_riesgo, vendedores_ok, vendedores_superando,
-      riesgo_zona, ytd_actual, ytd_anterior,
+      riesgo_zona, ytd_actual_uds, ytd_anterior_uds,
     })
   }
 
@@ -1205,7 +1470,7 @@ export function analyzeCategoria(
     // Top clientes
     const clienteVol: Record<string, number> = {}
     catSales.forEach((s) => {
-      const c = s.cliente ?? s.codigo_cliente
+      const c = s.cliente
       if (c) clienteVol[c] = (clienteVol[c] ?? 0) + s.unidades
     })
     const top_clientes = Object.entries(clienteVol).sort(([, a], [, b]) => b - a).slice(0, 3).map(([c]) => c)
@@ -1278,7 +1543,7 @@ export function analyzeCanal(
 
     const clienteVol: Record<string, number> = {}
     canalSales.forEach((s) => {
-      const c = s.cliente ?? s.codigo_cliente
+      const c = s.cliente
       if (c) clienteVol[c] = (clienteVol[c] ?? 0) + s.unidades
     })
     const top_cliente = Object.entries(clienteVol).sort(([, a], [, b]) => b - a)[0]?.[0] ?? null
@@ -1420,7 +1685,9 @@ export interface DepartamentoSummary {
   udsCur: number
   ventaPrev: number
   udsPrev: number
-  varPct: number | null
+  varPct: number | null     // active metric (hasVenta → usd, else uds)
+  varPct_usd: number | null // R55: always USD-based
+  varPct_uds: number | null // R55: always UDS-based
   clientesActivos: number
   vendedores: number
   productos: number
@@ -1446,12 +1713,10 @@ export function buildAggregatedSummaries(
   const { year, month } = selectedPeriod
   const hasVenta = dataAvailability.has_venta_neta
 
-  // Compute fechaReferencia (max sale date) for same-day-range YTD logic
-  let fechaRef = new Date(0)
-  for (const s of sales) {
-    if (s.fecha > fechaRef) fechaRef = s.fecha
-  }
-  if (fechaRef.getTime() === 0) fechaRef = new Date()
+  // NOTA (Ticket 2.2-A/C): fallback intencional al browser cuando no hay datos.
+  // Las funciones internas ya retornan empty; este orquestador externo
+  // requiere SIEMPRE un fechaRef para pantallas que dependen de él.
+  const fechaRef = getFechaReferencia(sales) ?? new Date()
   const refMonth = fechaRef.getMonth()
   const refDay = fechaRef.getDate()
 
@@ -1715,9 +1980,9 @@ export function buildAggregatedSummaries(
   // --- Build departamento summaries ---
   const departamentoSummaries: DepartamentoSummary[] = []
   for (const [nombre, dp] of departamentoMap) {
-    const metricCur = hasVenta ? dp.totalCur : dp.udsCur
-    const metricPrev = hasVenta ? dp.totalPrev : dp.udsPrev
-    const varPct = metricPrev > 0 ? ((metricCur - metricPrev) / metricPrev) * 100 : null
+    const varPct_usd = dp.totalPrev > 0 ? ((dp.totalCur - dp.totalPrev) / dp.totalPrev) * 100 : null
+    const varPct_uds = dp.udsPrev > 0 ? ((dp.udsCur - dp.udsPrev) / dp.udsPrev) * 100 : null
+    const varPct = hasVenta ? varPct_usd : varPct_uds
     departamentoSummaries.push({
       nombre,
       ventaCur: dp.totalCur,
@@ -1725,6 +1990,8 @@ export function buildAggregatedSummaries(
       ventaPrev: dp.totalPrev,
       udsPrev: dp.udsPrev,
       varPct,
+      varPct_usd,
+      varPct_uds,
       clientesActivos: dp.clientes.size,
       vendedores: dp.vendedores.size,
       productos: dp.productos.size,

@@ -4,12 +4,14 @@ import type {
   SaleRecord,
   CategoriaInventario,
 } from '../types'
+import type { DepartamentoSummary } from './analysis'
 
 // ─── Contexto extendido con datos crudos ──────────────────────────────────────
 
 export interface ChatContext extends BaseChatContext {
   sales: SaleRecord[]
   activeEntityHint?: string
+  departamentoSummaries?: DepartamentoSummary[]
 }
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
@@ -203,6 +205,11 @@ function buildSystemPrompt(ctx: ChatContext): string {
     has_departamento: false,
     has_metas: false,
     has_inventario: false,
+    has_unidades: false,
+    has_precio_unitario: false,
+    has_subcategoria: false,
+    has_proveedor: false,
+    has_costo_unitario: false,
   }
   const dataAvailability = safeDataAvailability
   const sales = salesRaw ?? []
@@ -291,7 +298,7 @@ ${(() => {
 
 EQUIPO — RESUMEN:
 Total vendedores: ${vendorAnalysis.length}
-Variación YTD: ${teamStats?.variacion_ytd_equipo != null ? teamStats.variacion_ytd_equipo.toFixed(1) + '%' : 'N/A'}
+Variación YTD (uds): ${teamStats?.variacion_ytd_equipo_uds_pct != null ? teamStats.variacion_ytd_equipo_uds_pct.toFixed(1) + '%' : 'N/A'}
 Total unidades período: ${teamStats?.total_unidades?.toLocaleString() ?? 'N/A'}
 Variación vs período anterior: ${teamStats?.variacion_pct != null ? teamStats.variacion_pct.toFixed(1) + '%' : 'N/A'}${dataAvailability.has_venta_neta && teamStats?.total_ventas ? `\nVenta neta total período: ${teamStats.total_ventas.toLocaleString()} ${mon}` : ''}`
 
@@ -302,9 +309,13 @@ Variación vs período anterior: ${teamStats?.variacion_pct != null ? teamStats.
     p += `\n\nVENDEDOR: ${v.vendedor}`
     p += `\nEstado: ${v.riesgo.toUpperCase()} | Unidades: ${v.ventas_periodo}`
     if (v.variacion_pct != null) p += `\nVariación vs período anterior: ${v.variacion_pct.toFixed(1)}%`
-    if (v.ytd_actual != null) {
-      p += `\nYTD actual: ${v.ytd_actual} | YTD anterior: ${v.ytd_anterior ?? 'N/A'}`
-      if (v.variacion_ytd_pct != null) p += ` | Var YTD: ${v.variacion_ytd_pct.toFixed(1)}%`
+    if (v.ytd_actual_uds != null) {
+      p += `\nYTD actual: ${v.ytd_actual_uds} uds | YTD anterior: ${v.ytd_anterior_uds ?? 'N/A'} uds`
+      if (v.variacion_ytd_uds_pct != null) p += ` | Var YTD (uds): ${v.variacion_ytd_uds_pct.toFixed(1)}%`
+    }
+    if (v.ytd_actual_usd != null) {
+      p += `\nYTD actual: ${mon} ${v.ytd_actual_usd.toLocaleString(undefined, { maximumFractionDigits: 0 })} | YTD anterior: ${v.ytd_anterior_usd != null ? `${mon} ${v.ytd_anterior_usd.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : 'N/A'}`
+      if (v.variacion_ytd_usd_pct != null) p += ` | Var YTD (${mon}): ${v.variacion_ytd_usd_pct.toFixed(1)}%`
     }
     if (v.meta != null) {
       p += `\nMeta: ${v.meta} | Cumplimiento: ${v.cumplimiento_pct?.toFixed(1) ?? 'N/A'}%`
@@ -320,8 +331,8 @@ Variación vs período anterior: ${teamStats?.variacion_pct != null ? teamStats.
         p += `\nClientes dormidos (${dormidos.length}):`
         for (const c of dormidos.slice(0, 2)) {
           p += `\n  - ${c.cliente} | ${c.dias_sin_actividad} días sin comprar`
-          if (dataAvailability.has_venta_neta && c.valor_historico) {
-            p += ` | Valor hist: ${c.valor_historico.toLocaleString()} ${mon}`
+          if (dataAvailability.has_venta_neta && c.valor_yoy_usd) {
+            p += ` | Valor YoY: ${c.valor_yoy_usd.toLocaleString()} ${mon}`
           }
           p += ` | Estado: ${c.recovery_label === 'alta' ? 'Alta probabilidad' : c.recovery_label === 'recuperable' ? 'Recuperable' : c.recovery_label === 'dificil' ? 'Difícil' : 'Perdido'}`
         }
@@ -423,79 +434,39 @@ Variación vs período anterior: ${teamStats?.variacion_pct != null ? teamStats.
   }
 
   // ─── Departamentos ──────────────────────────────────────────────────────────
+  // Usa departamentoSummaries pre-computados (same-day-range correcto) en lugar
+  // de recalcular desde sales crudas sin cap por día (bug: variaciones infladas).
   if (dataAvailability.has_departamento) {
-    const currentYear = año
-    const previousYear = currentYear - 1
-    const currentMonth = selectedPeriod.month
+    const previousYear = año - 1
+    const useUSD = dataAvailability.has_venta_neta
+    const precomputed = ctx.departamentoSummaries
 
-    // Pre-filtrar por año y mes para no iterar sales completas por cada departamento
-    const salesCY: SaleRecord[] = []
-    const salesPY: SaleRecord[] = []
-    const deptMap = new Map<string, { actual: number; anterior: number }>()
+    if (precomputed && precomputed.length > 0) {
+      const depts = precomputed
+        .filter(d => d.udsCur > 0 || d.udsPrev > 0)
+        .sort((a, b) => b.udsCur - a.udsCur)
 
-    for (const sale of sales) {
-      const d = toDate(sale.fecha)
-      const yr = d.getFullYear()
-      const mo = d.getMonth()
-      if (mo > currentMonth) continue
-      if (!sale.departamento) continue
-      const dept = sale.departamento.trim()
-      if (!dept) continue
-
-      if (!deptMap.has(dept)) deptMap.set(dept, { actual: 0, anterior: 0 })
-      const entry = deptMap.get(dept)!
-
-      if (yr === currentYear) {
-        entry.actual += sale.unidades
-        salesCY.push(sale)
-      } else if (yr === previousYear) {
-        entry.anterior += sale.unidades
-        salesPY.push(sale)
-      }
-    }
-
-    const depts = Array.from(deptMap.entries())
-      .map(([name, data]) => ({
-        name,
-        actual: data.actual,
-        anterior: data.anterior,
-        variacion: data.anterior > 0 ? ((data.actual - data.anterior) / data.anterior * 100) : 0,
-      }))
-      .sort((a, b) => b.actual - a.actual)
-
-    if (depts.length > 0) {
-      const totalActual = depts.reduce((s, d) => s + d.actual, 0)
+      const totalActual = depts.reduce((s, d) => s + (useUSD ? d.ventaCur : d.udsCur), 0)
       const topDepts = depts.slice(0, 10)
 
       p += '\n\n════════════════════\nDEPARTAMENTOS (' + depts.length + ' con datos)\n════════════════════'
 
       for (const dept of topDepts) {
-        const pctTotal = totalActual > 0 ? (dept.actual / totalActual * 100).toFixed(1) : '0'
-        const varSign = dept.variacion >= 0 ? '+' : ''
-        p += `\n${dept.name}: ${dept.actual.toLocaleString()} uds YTD (${varSign}${dept.variacion.toFixed(1)}% vs ${previousYear}) — ${pctTotal}% del total`
-
-        // Top 3 vendedores de este departamento (usando salesCY pre-filtrado)
-        const vendedoresDept = new Map<string, number>()
-        for (const sale of salesCY) {
-          if (sale.departamento?.trim() === dept.name) {
-            vendedoresDept.set(sale.vendedor, (vendedoresDept.get(sale.vendedor) || 0) + sale.unidades)
-          }
-        }
-        const topVendedores = Array.from(vendedoresDept.entries())
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, 3)
-
-        if (topVendedores.length > 0) {
-          p += `\n  Vendedores: ${topVendedores.map(([v, u]) => `${v} (${u.toLocaleString()})`).join(', ')}`
-        }
+        const actual = useUSD ? dept.ventaCur : dept.udsCur
+        const anterior = useUSD ? dept.ventaPrev : dept.udsPrev
+        const variacion = useUSD ? dept.varPct_usd : dept.varPct_uds
+        const pctTotal = totalActual > 0 ? (actual / totalActual * 100).toFixed(1) : '0'
+        const varStr = variacion !== null ? `${variacion >= 0 ? '+' : ''}${variacion.toFixed(1)}%` : 'n/d'
+        const metrica = useUSD ? mon : 'uds'
+        p += `\n${dept.nombre}: ${actual.toLocaleString()} ${metrica} YTD (${varStr} vs ${previousYear}) — ${pctTotal}% del total`
       }
 
       if (depts.length > 10) {
         p += `\n(${depts.length - 10} departamentos adicionales omitidos por brevedad)`
       }
 
-      const enCrecimiento = depts.filter(d => d.variacion > 0).length
-      const enCaida = depts.filter(d => d.variacion < 0).length
+      const enCrecimiento = depts.filter(d => (useUSD ? d.varPct_usd : d.varPct_uds) !== null && (useUSD ? d.varPct_usd! : d.varPct_uds!) > 0).length
+      const enCaida = depts.filter(d => (useUSD ? d.varPct_usd : d.varPct_uds) !== null && (useUSD ? d.varPct_usd! : d.varPct_uds!) < 0).length
       p += `\nResumen: ${enCrecimiento} departamentos creciendo, ${enCaida} en caída vs ${previousYear}`
     }
   }
@@ -703,6 +674,23 @@ export function parseChartBlock(content: string): {
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'https://webapp-0yx8.onrender.com'
 
+// [Sprint I2] Obtener access_token de Supabase para mandar como Authorization
+// header al backend. Backend valida el JWT y aplica quota per-user.
+// En modo demo (sin sesión real) retorna null y el backend devolverá 401 — el
+// caller debe interceptar y mostrar canned response (callAI ya lo hace).
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  try {
+    const { supabase } = await import('./supabaseClient')
+    const { data } = await supabase.auth.getSession()
+    const token = data?.session?.access_token
+    if (token) headers['Authorization'] = `Bearer ${token}`
+  } catch {
+    // Sin sesión: backend devolverá 401, caller decide qué hacer.
+  }
+  return headers
+}
+
 export async function callAI(
   messages: { role: string; content: string }[],
   options?: { max_tokens?: number; temperature?: number; model?: string; top_p?: number; frequency_penalty?: number },
@@ -710,7 +698,7 @@ export async function callAI(
   try {
     const response = await fetch(`${BACKEND_URL}/api/v1/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await getAuthHeaders(),
       body: JSON.stringify({
         messages,
         model: options?.model || 'deepseek-chat',
@@ -840,9 +828,21 @@ export async function sendChatMessageStream(
     ...recentMessages.map((m) => ({ role: m.role, content: m.content })),
   ]
 
+  // Demo mode bypass — no real session, no backend call.
+  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/demo')) {
+    const demoText = '📊 **Análisis de ejemplo** — Esta es una vista previa del asistente con IA.\n\nEn la versión completa, el asistente analiza tus datos en tiempo real y genera recomendaciones personalizadas con nombres, cifras y acciones concretas.\n\n💡 **Regístrate gratis** para desbloquear el análisis con IA sobre tus propios datos.'
+    for (const char of demoText) {
+      callbacks.onToken(char)
+      // tiny async yield so the UI can repaint token by token
+      await new Promise(r => setTimeout(r, 8))
+    }
+    callbacks.onDone(demoText)
+    return
+  }
+
   const response = await fetch(`${BACKEND_URL}/api/v1/chat/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await getAuthHeaders(),
     body: JSON.stringify({
       messages: apiMessages,
       model: 'deepseek-chat',

@@ -3,6 +3,20 @@ import { X } from 'lucide-react'
 import { useAppStore } from '../../store/appStore'
 import type { PulsoPanelData } from '../../lib/pulso-engine'
 
+/**
+ * PulsoPanel es deliberadamente period-agnostic.
+ * Consume fechaRef + agregados pre-computados (categoriasInventario, clientesDormidos, etc.)
+ * y deriva ventanas relativas a fechaRef. NO debe consumir selectedPeriod.
+ *
+ * Razón: este panel muestra alertas operativas (declives, oportunidades, dormidos)
+ * que se evalúan contra el "ahora" del negocio (fechaRef), no contra el rango
+ * que el usuario filtró en TopBar. Cambiar esto requiere redefinir el contrato
+ * del panel a nivel producto.
+ *
+ * Si en el futuro PulsoPanel necesita consumir selectedPeriod, abrir ticket
+ * de redefinición de contrato antes de modificar.
+ */
+
 interface Props {
   data: PulsoPanelData
   moneda: string
@@ -154,12 +168,19 @@ function CategoriasContent({ categorias, moneda }: { categorias: Array<{ nombre:
 }
 
 function InventarioContent({ data }: { data: PulsoPanelData }) {
-  const { sales, clientesDormidos, categoriaAnalysis, categoriasInventario } = useAppStore()
+  const { sales, clientesDormidos, categoriaAnalysis, categoriasInventario, fechaRefISO } = useAppStore()
+  const fechaRef = useMemo(
+    () => fechaRefISO ? new Date(fechaRefISO) : new Date(),
+    [fechaRefISO]
+  )
   const stock = data.stock ?? 0
   const dias = data.diasInventario ?? 0
   const promedio = data.promedioMensual ?? 0
 
-  const quiebreDate = new Date(); quiebreDate.setDate(quiebreDate.getDate() + dias)
+  // BUG-FIX (Ticket 2.0.1): proyección anclada a fechaRef del store, no al browser.
+  // Si datos llegan al 20-abr y browser está en 29-abr, la proyección de quiebre
+  // debe partir del 20-abr (último dato real), no del 29-abr.
+  const quiebreDate = new Date(fechaRef.getTime()); quiebreDate.setDate(quiebreDate.getDate() + dias)
   const meses = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre']
   const barPct = Math.min(dias / 30 * 100, 100)
 
@@ -272,7 +293,7 @@ function MetaContent({ data }: { data: PulsoPanelData }) {
     if (clientesDormidos.length > 0 && brecha > 0) {
       const dormValMensual = clientesDormidos.reduce((a, d) => {
         const meses = new Set(sales.filter(s => s.cliente === d.cliente).map(s => { const dt = new Date(s.fecha); return `${dt.getFullYear()}-${dt.getMonth()}` })).size
-        return a + (meses > 0 ? Math.round(d.valor_historico / meses) : 0)
+        return a + (meses > 0 ? Math.round(d.valor_yoy_usd / meses) : 0)
       }, 0)
       if (dormValMensual > 0) {
         const pctBrch = Math.min(100, Math.round((dormValMensual / brecha) * 100))
@@ -489,7 +510,11 @@ function ZonaSupervisorContent({ data }: { data: PulsoPanelData }) {
 }
 
 function OportunidadContent({ data }: { data: PulsoPanelData }) {
-  const { sales, clientesDormidos, categoriaAnalysis, categoriasInventario, vendorAnalysis } = useAppStore()
+  const { sales, clientesDormidos, categoriaAnalysis, categoriasInventario, vendorAnalysis, fechaRefISO } = useAppStore()
+  const fechaRef = useMemo(
+    () => fechaRefISO ? new Date(fechaRefISO) : new Date(),
+    [fechaRefISO]
+  )
 
   const cross = useMemo(() => {
     if (!data.cliente || !data.producto) return null
@@ -502,7 +527,10 @@ function OportunidadContent({ data }: { data: PulsoPanelData }) {
     const ultimaCompra = comprasProducto.length > 0
       ? comprasProducto.sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime())[0]
       : null
-    const diasDesdeUltimaCompra = ultimaCompra ? Math.floor((Date.now() - new Date(ultimaCompra.fecha).getTime()) / 86400000) : null
+    // BUG-FIX (Ticket 2.0.1): "días sin comprar" anclado a fechaRef del store, no al browser.
+    // Evita inflar la heurística "cliente dormido" cuando datos < hoy del browser.
+    // Math.max(0, ...) defensivo por si ultimaCompra > fechaRef (no debería pasar).
+    const diasDesdeUltimaCompra = ultimaCompra ? Math.max(0, Math.floor((fechaRef.getTime() - new Date(ultimaCompra.fecha).getTime()) / 86400000)) : null
 
     const invItem = categoriasInventario.find(i => i.producto === data.producto)
     const categoria = invItem?.categoria
@@ -522,7 +550,7 @@ function OportunidadContent({ data }: { data: PulsoPanelData }) {
     const pctProducto = totalHistCliente > 0 ? Math.round((totalUdsHist / totalHistCliente) * 100) : 0
 
     return { promedioMensual, mesesActivos: mesesSet.size, diasDesdeUltimaCompra, categoria, clasificacion, catInfo, vendInfo, metaPct, gapMeta, dormidoInfo, otrosDormidos, pctProducto }
-  }, [sales, clientesDormidos, categoriaAnalysis, categoriasInventario, vendorAnalysis, data.cliente, data.producto])
+  }, [sales, clientesDormidos, categoriaAnalysis, categoriasInventario, vendorAnalysis, data.cliente, data.producto, fechaRef])
 
   const señales: string[] = []
   if (cross) {
@@ -616,15 +644,45 @@ function OportunidadContent({ data }: { data: PulsoPanelData }) {
 }
 
 function ProductoDecliveContent({ data }: { data: PulsoPanelData }) {
-  const { sales, vendorAnalysis, clientesDormidos, categoriaAnalysis, categoriasInventario } = useAppStore()
+  const { sales, vendorAnalysis, clientesDormidos, categoriaAnalysis, categoriasInventario, fechaRefISO } = useAppStore()
+  const fechaRef = useMemo(
+    () => fechaRefISO ? new Date(fechaRefISO) : new Date(),
+    [fechaRefISO]
+  )
 
   const insights = useMemo(() => {
     if (!data.producto) return { vendedores: [], clientesPerdidos: [], catCtx: null, señales: [] }
-    const sp = { year: new Date().getFullYear(), month: new Date().getMonth() }
-    const prevMonth = sp.month === 0 ? { year: sp.year - 1, month: 11 } : { year: sp.year, month: sp.month - 1 }
 
-    const ventasAct = sales.filter(s => s.producto === data.producto && new Date(s.fecha).getFullYear() === sp.year && new Date(s.fecha).getMonth() === sp.month)
-    const ventasAnt = sales.filter(s => s.producto === data.producto && new Date(s.fecha).getFullYear() === prevMonth.year && new Date(s.fecha).getMonth() === prevMonth.month)
+    // BUG-FIX (Ticket 2.0): comparación MTD truncada al día de fechaRef del store,
+    // no new Date() del browser. Cumple regla CONTEXT.md: mes en curso parcial
+    // vs mismo número de días del mes anterior. Será refactorizado a lib/periods.ts
+    // en Ticket 2.1.
+    const yearActual = fechaRef.getFullYear()
+    const monthActual = fechaRef.getMonth()
+    const dayActual = fechaRef.getDate()
+
+    const startActual = new Date(yearActual, monthActual, 1, 0, 0, 0, 0)
+    const endActual = new Date(yearActual, monthActual, dayActual, 23, 59, 59, 999)
+
+    // Mes anterior, mismo número de días truncado
+    const prevMonthYear = monthActual === 0 ? yearActual - 1 : yearActual
+    const prevMonth = monthActual === 0 ? 11 : monthActual - 1
+    // Clamp para evitar overflow cuando fechaRef es día que no existe en mes anterior (ej: 31-mar -> feb)
+    const lastDayOfPrevMonth = new Date(prevMonthYear, prevMonth + 1, 0).getDate()
+    const dayAnteriorClamped = Math.min(dayActual, lastDayOfPrevMonth)
+    const startAnterior = new Date(prevMonthYear, prevMonth, 1, 0, 0, 0, 0)
+    const endAnterior = new Date(prevMonthYear, prevMonth, dayAnteriorClamped, 23, 59, 59, 999)
+
+    const ventasAct = sales.filter(s => {
+      if (s.producto !== data.producto) return false
+      const f = new Date(s.fecha)
+      return f >= startActual && f <= endActual
+    })
+    const ventasAnt = sales.filter(s => {
+      if (s.producto !== data.producto) return false
+      const f = new Date(s.fecha)
+      return f >= startAnterior && f <= endAnterior
+    })
 
     // Vendedores
     const vendAct: Record<string, number> = {}, vendAnt: Record<string, number> = {}
@@ -656,7 +714,7 @@ function ProductoDecliveContent({ data }: { data: PulsoPanelData }) {
     if (data.stock && data.stock > 0) señales.push(`${data.stock.toLocaleString()} uds en bodega (${data.diasInventario ?? '?'} días de stock)`)
 
     return { vendedores, clientesPerdidos, catCtx, señales }
-  }, [data, sales, vendorAnalysis, clientesDormidos, categoriaAnalysis])
+  }, [data, sales, vendorAnalysis, clientesDormidos, categoriaAnalysis, fechaRef])
 
   return (
     <div className="space-y-4">

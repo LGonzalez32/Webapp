@@ -1,0 +1,82 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`change_point — quiebre de régimen > dispara con mean shift sostenido en serie mensual 1`] = `
+{
+  "candidates_found": 14,
+  "candidates_total": 14,
+  "cells_evaluated": 54,
+  "first_candidate": {
+    "dim": "producto",
+    "member": "P1",
+    "metric": "unidades",
+    "score": 0.8018,
+    "severity": "CRITICA",
+  },
+  "series_with_data": 21,
+  "type": "change_point",
+}
+`;
+
+exports[`correlation — entre métricas > dispara con correlación positiva fuerte (r ≥ 0.7) 1`] = `
+{
+  "direction": "positive",
+  "n": 4,
+  "r": 1,
+  "score": 1,
+  "type": "correlation",
+}
+`;
+
+exports[`dominance — concentration Pareto > dispara cuando top-N concentra ≥60% del total 1`] = `
+{
+  "pctShare": 80,
+  "score": 0.5,
+  "topMembers": [
+    "A",
+  ],
+  "totalMembers": 5,
+  "type": "dominance",
+}
+`;
+
+exports[`proportion_shift — cambio de participación > dispara cuando shift ≥ 5pp 1`] = `
+{
+  "currentShare": 70,
+  "member": "A",
+  "prevShare": 50,
+  "score": 0.6667,
+  "shiftPct": 20,
+  "type": "proportion_shift",
+}
+`;
+
+exports[`seasonality — patrón cíclico anual > dispara con pico estacional sostenido entre años 1`] = `
+{
+  "candidates": 1,
+  "first": {
+    "dim": "producto",
+    "insightTypeId": "seasonality",
+    "member": "P1",
+    "metric": "venta_usd",
+    "score": 1,
+    "severity": "CRITICA",
+  },
+  "type": "seasonality",
+}
+`;
+
+exports[`steady_share — cambio sostenido de participación > dispara con shift estable de share entre regímenes 1`] = `
+{
+  "candidates_found": 2,
+  "candidates_total": 2,
+  "cells_evaluated": 18,
+  "first_candidate": {
+    "dim": "producto",
+    "member": "P1",
+    "metric": "venta_neta",
+    "score": 0.6667,
+    "severity": "CRITICA",
+  },
+  "type": "steady_share",
+}
+`;

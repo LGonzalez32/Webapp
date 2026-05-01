@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect, useRef, useCallback, type CSSProperties, type Key } from 'react'
 import { buildPivotTree, flattenPivot } from '../utils/pivotUtils'
-import type { DimKey, PivotNode } from '../utils/pivotUtils'
+import type { DimKey, PivotNode, MonthlyPivotNode } from '../utils/pivotUtils'
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
   type DragEndEvent,
@@ -25,15 +25,23 @@ import { TrendingUp, TrendingDown, Minus, Calendar, Loader2, Settings, ChevronRi
 import { cn } from '../lib/utils'
 import { callAI } from '../lib/chatService'
 import AnalysisDrawer from '../components/ui/AnalysisDrawer'
-import type { SaleRecord, MetaRecord, ForecastData } from '../types'
+import type { SaleRecord, MetaRecord, ForecastData, DataAvailability } from '../types'
 import { DIM_META } from '../config/metaConfig'
 import { SFSelect } from '../components/ui/SFSelect'
 
-const DIM_TOGGLES: { key: DimKey; label: string; icon: string; requiresDim?: string }[] = [
-  { key: 'canal',    label: 'Canal',    icon: '🏪', requiresDim: 'canal' },
-  { key: 'vendedor', label: 'Vendedor', icon: '👤' },
-  { key: 'producto', label: 'Producto', icon: '📦', requiresDim: 'producto' },
-  { key: 'mes',      label: 'Mes',      icon: '📅' },
+// schema-cleanup: TODAS las dimensiones disponibles. La gating por availability
+// se hace abajo en el render con un check explícito por dim.
+const DIM_TOGGLES: { key: DimKey; label: string; icon: string; requiresDim?: keyof DataAvailability }[] = [
+  { key: 'mes',          label: 'Mes',          icon: '📅' },
+  { key: 'vendedor',     label: 'Vendedor',     icon: '👤' },
+  { key: 'canal',        label: 'Canal',        icon: '🏪', requiresDim: 'has_canal' },
+  { key: 'cliente',      label: 'Cliente',      icon: '🧾', requiresDim: 'has_cliente' },
+  { key: 'producto',     label: 'Producto',     icon: '📦', requiresDim: 'has_producto' },
+  { key: 'categoria',    label: 'Categoría',    icon: '🏷️', requiresDim: 'has_categoria' },
+  { key: 'subcategoria', label: 'Subcategoría', icon: '🔖', requiresDim: 'has_subcategoria' },
+  { key: 'departamento', label: 'Departamento', icon: '🌎', requiresDim: 'has_departamento' },
+  { key: 'supervisor',   label: 'Supervisor',   icon: '🧑‍💼', requiresDim: 'has_supervisor' },
+  { key: 'proveedor',    label: 'Proveedor',    icon: '🏭', requiresDim: 'has_proveedor' },
 ]
 
 const MESES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
@@ -123,11 +131,18 @@ export default function RendimientoPage() {
   useAnalysis()
   const navigate = useNavigate()
   const dp = useDemoPath()
-  const { sales, metas, dataAvailability, selectedPeriod, configuracion, forecastData, forecastChartLoading, setForecastData, setForecastChartLoading, dataSource, vendorAnalysis } = useAppStore()
+  const { sales, metas, dataAvailability, selectedPeriod, configuracion, setConfiguracion, forecastData, forecastChartLoading, setForecastData, setForecastChartLoading, dataSource, vendorAnalysis, fechaRefISO } = useAppStore()
   const metric: 'unidades' | 'venta_neta' = (configuracion.metricaGlobal ?? 'usd') === 'usd' ? 'venta_neta' : 'unidades'
   const [showBudget, setShowBudget] = useState(true)
   const [selectedVendor, setSelectedVendor] = useState<string>('todos')
   const [selectedYear, setSelectedYear] = useState<number>(selectedPeriod.year)
+  // [Ticket 2.3.3] Sincronizar selectedYear local con el store cuando éste
+  // materializa selectedPeriod.year desde 0 (initial state neutro post-2.3.2)
+  // al año real vía setFechaRefISO al cargar datos. Sin este efecto, el
+  // SFSelect del año queda en 0 hasta interacción del usuario.
+  useEffect(() => {
+    setSelectedYear(selectedPeriod.year)
+  }, [selectedPeriod.year])
   const [selectedCliente, setSelectedCliente] = useState<string>('all')
   const [selectedCanal, setSelectedCanal] = useState<string>('all')
   const [selectedProducto, setSelectedProducto] = useState<string>('all')
@@ -249,6 +264,12 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
     try { return !localStorage.getItem('sf_pivot_advanced_seen') } catch { return false }
   })
   const microcopyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // [Ticket 3.F.2] tableView migrado a configuracion del store (persistido).
+  // El toggle vive en TopBar (visible solo en /rendimiento). Aquí se lee solo.
+  const tableView = configuracion.tableView ?? 'ytd'
+  // [Ticket 3.E.2] Tree pivot monthly histórica (paralelo a pivotData YTD).
+  const [monthlyPivotData, setMonthlyPivotData] = useState<MonthlyPivotNode[]>([])
+  const [monthlySortDir, setMonthlySortDir] = useState<'asc' | 'desc'>('desc')
 
   const dismissMicrocopy = () => {
     setShowMicrocopy(false)
@@ -320,6 +341,18 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
       return true
     })
   }, [sales, selectedYear, selectedVendor, selectedCliente, selectedCanal, selectedProducto])
+
+  // [Ticket 3.E.1] Sales filtradas por dim filters PERO sin filtro de año.
+  // Alimenta la tabla "Venta mensual histórica" que muestra todos los años del dataset.
+  const filteredSalesAllYears = useMemo(() => {
+    return sales.filter(s => {
+      if (selectedVendor !== 'todos' && s.vendedor !== selectedVendor) return false
+      if (selectedCliente !== 'all' && s.cliente !== selectedCliente) return false
+      if (selectedCanal !== 'all' && s.canal !== selectedCanal) return false
+      if (selectedProducto !== 'all' && s.producto !== selectedProducto) return false
+      return true
+    })
+  }, [sales, selectedVendor, selectedCliente, selectedCanal, selectedProducto])
 
   const [chartFilter, setChartFilter] = useState<{ dim: DimKey; value: string } | null>(null)
 
@@ -422,6 +455,46 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
     return { ytdCurr, ytdPrev, variacion, bestMonth, bestVal, projected }
   }, [filteredForChart, selectedYear, currentMonth, useVentaNeta, isCurrentYear, forecastData])
 
+  // [Ticket 3.E.3] Columnas mes truncadas: desde el primer mes con venta en el
+  // dataset COMPLETO (no filtrado) hasta fechaRef.month inclusive. Oculta meses
+  // futuros y pre-dataset. Si no hay sales o fechaRef indefinido → [].
+  const monthlyColumns = useMemo(() => {
+    const MESES_LARGO_LOC = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
+    type Col = { key: string; year: number; month: number; label: string }
+    if (sales.length === 0 || !fechaRefISO) return [] as Col[]
+    // Cota inferior: min(sales.fecha) sobre TODAS las sales (no filtradas) —
+    // la cota es del dataset, no del filtro activo.
+    let minTime = Infinity
+    for (const s of sales) {
+      const t = (s.fecha instanceof Date ? s.fecha : new Date(s.fecha)).getTime()
+      if (t < minTime) minTime = t
+    }
+    if (!isFinite(minTime)) return []
+    const minDate = new Date(minTime)
+    const firstYear = minDate.getFullYear()
+    const firstMonth = minDate.getMonth()
+    // Cota superior: fechaRef (max sale date), inclusive.
+    const ref = new Date(fechaRefISO)
+    const lastYear = ref.getFullYear()
+    const lastMonth = ref.getMonth()
+    // Caso patológico: cota inferior > superior → vacío
+    if (firstYear > lastYear || (firstYear === lastYear && firstMonth > lastMonth)) return []
+    const out: Col[] = []
+    let y = firstYear
+    let m = firstMonth
+    while (y < lastYear || (y === lastYear && m <= lastMonth)) {
+      out.push({
+        key: `${y}-${String(m + 1).padStart(2, '0')}`,
+        year: y,
+        month: m,
+        label: `${MESES_LARGO_LOC[m]} ${y}`,
+      })
+      m++
+      if (m > 11) { m = 0; y++ }
+    }
+    return out
+  }, [sales, fechaRefISO])
+
   // ── Pivot computation via Web Worker ──────────────────────────────────────
   // Mark dims as changed so the worker's onmessage auto-expands on structural change
   useEffect(() => { dimsChangedRef.current = true }, [pivotDims])
@@ -433,36 +506,74 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
       { type: 'module' }
     )
     setPivotLoading(true)
-    workerRef.current.onmessage = (e: MessageEvent<PivotNode[]>) => {
-      const data = e.data
-      setPivotData(data)
-      // When dims change, merge: respect user's explicit expand/collapse choices, default for the rest
-      if (dimsChangedRef.current) {
-        dimsChangedRef.current = false
-        const toggled = userToggledKeys.current
-        const merged = new Set<string>()
-        const collectAndMerge = (nodes: PivotNode[]) => {
-          for (const n of nodes) {
-            if (n.children.length > 0) {
-              if (toggled.has(n.id)) {
-                // User explicitly set this key — respect their choice
-                if (toggled.get(n.id)) merged.add(n.id)
-              } else {
-                // No user choice — apply default (expand depth 0 and 1)
-                if (n.depth <= 1) merged.add(n.id)
+    workerRef.current.onmessage = (
+      e: MessageEvent<{ mode: 'ytd'; tree: PivotNode[] } | { mode: 'monthly'; tree: MonthlyPivotNode[] }>
+    ) => {
+      const out = e.data
+      if (out.mode === 'ytd') {
+        const data = out.tree
+        setPivotData(data)
+        if (dimsChangedRef.current) {
+          dimsChangedRef.current = false
+          const toggled = userToggledKeys.current
+          const merged = new Set<string>()
+          const collectAndMerge = (nodes: PivotNode[]) => {
+            for (const n of nodes) {
+              if (n.children.length > 0) {
+                if (toggled.has(n.id)) {
+                  if (toggled.get(n.id)) merged.add(n.id)
+                } else {
+                  if (n.depth <= 1) merged.add(n.id)
+                }
+                collectAndMerge(n.children)
               }
-              collectAndMerge(n.children)
             }
           }
+          collectAndMerge(data)
+          setExpandedKeys(merged)
         }
-        collectAndMerge(data)
-        setExpandedKeys(merged)
+      } else {
+        const data = out.tree
+        setMonthlyPivotData(data)
+        if (dimsChangedRef.current) {
+          dimsChangedRef.current = false
+          const toggled = userToggledKeys.current
+          const merged = new Set<string>()
+          const collectAndMerge = (nodes: MonthlyPivotNode[]) => {
+            for (const n of nodes) {
+              if (n.children.length > 0) {
+                if (toggled.has(n.id)) {
+                  if (toggled.get(n.id)) merged.add(n.id)
+                } else {
+                  if (n.depth <= 1) merged.add(n.id)
+                }
+                collectAndMerge(n.children)
+              }
+            }
+          }
+          collectAndMerge(data)
+          setExpandedKeys(merged)
+        }
       }
       setPivotLoading(false)
     }
-    workerRef.current.postMessage({ filteredSales, metas, pivotDims, selectedYear })
+    if (tableView === 'monthly') {
+      const dimsForRows = pivotDims.filter(d => d !== 'mes')
+      const monthCols = monthlyColumns.map(c => c.key)
+      const metric: 'unidades' | 'venta_neta' = useVentaNeta ? 'venta_neta' : 'unidades'
+      workerRef.current.postMessage({
+        filteredSales: filteredSalesAllYears,
+        metas, pivotDims, selectedYear,
+        mode: 'monthly',
+        dimsForRows,
+        monthColumns: monthCols,
+        metric,
+      })
+    } else {
+      workerRef.current.postMessage({ filteredSales, metas, pivotDims, selectedYear, mode: 'ytd' })
+    }
     return () => workerRef.current?.terminate()
-  }, [filteredSales, metas, pivotDims, selectedYear])
+  }, [filteredSales, metas, pivotDims, selectedYear, tableView, filteredSalesAllYears, monthlyColumns, useVentaNeta])
 
   const grandTotal = useMemo(() =>
     pivotData.reduce((a, n) => ({ u: a.u + n.unidades, v: a.v + n.ventaNeta, pu: a.pu + n.prevUnidades, pv: a.pv + n.prevVentaNeta }), { u: 0, v: 0, pu: 0, pv: 0 }),
@@ -653,7 +764,7 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
             <div style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderTop: '3px solid var(--sf-border)', borderRadius: '12px', padding: '20px' }}>
               <p style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--sf-t5)', marginBottom: '4px' }}>YTD {selectedYear}</p>
               <p style={{ fontFamily: "'DM Mono', monospace", fontSize: '28px', fontWeight: 500, color: 'var(--sf-t1)' }}>{useVentaNeta ? formatCurrency(ytdStats.ytdCurr, configuracion.moneda) : formatUnits(ytdStats.ytdCurr)}</p>
-              <p style={{ fontSize: '12px', color: 'var(--sf-t5)', marginTop: '4px' }}>Acumulado {MESES[0]}–{MESES[currentMonth]}</p>
+              <p style={{ fontSize: '12px', color: 'var(--sf-t5)', marginTop: '4px' }}>Ene–{MESES[currentMonth]} {selectedYear} vs mismo período {selectedYear - 1}</p>
             </div>
             <div style={{ background: 'var(--sf-card)', border: '1px solid var(--sf-border)', borderTop: `3px solid ${ytdStats.variacion == null ? 'var(--sf-border)' : ytdStats.variacion >= 0 ? 'var(--sf-green)' : 'var(--sf-red)'}`, borderRadius: '12px', padding: '20px' }}>
               <p style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--sf-t5)', marginBottom: '4px' }}>vs {selectedYear - 1}</p>
@@ -726,6 +837,60 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
       >
         ✦ Analizar rendimiento con IA →
       </button>
+
+      {/* [Ticket 3.F.3] Toggle Venta YTD / Venta mensual histórica.
+          Reubicado del TopBar (3.F.2) a este lugar entre el botón IA y el
+          chart. Estilo pill paritario al toggle Claro/Oscuro del TopBar.
+          Persistencia: configuracion.tableView (store, v13). */}
+      <div className="flex justify-center mt-2 mb-2">
+        {/* [Ticket 3.F.4] Wrapper card para contraste en light mode. var(--sf-card)
+            actúa como marco visual sobre el page background; en dark mode el efecto
+            es neutral. Replicate del patrón de cards de la página (border + radius). */}
+        <div
+          className="inline-flex items-center"
+          style={{
+            background: 'var(--sf-card)',
+            border: '1px solid var(--sf-border)',
+            borderRadius: '12px',
+            padding: '8px 12px',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+          }}
+        >
+        <div
+          className="relative flex items-center rounded-full p-0.5"
+          style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)' }}
+        >
+          {/* sliding indicator */}
+          <div
+            className="absolute top-0.5 bottom-0.5 rounded-full transition-all duration-200"
+            style={{
+              width: 'calc(50% - 2px)',
+              left: tableView === 'ytd' ? 2 : 'calc(50%)',
+              background: configuracion.tema === 'dark' ? 'rgba(255,255,255,0.10)' : 'var(--sf-card)',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+            }}
+          />
+          <button
+            onClick={() => tableView !== 'ytd' && setConfiguracion({ tableView: 'ytd' })}
+            className="relative flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors duration-150 cursor-pointer z-10"
+            style={{ color: tableView === 'ytd' ? 'var(--sf-t1)' : 'var(--sf-t5)' }}
+            title="Venta YTD"
+          >
+            <TrendingUp className="w-3.5 h-3.5" style={{ color: tableView === 'ytd' ? '#10b981' : 'inherit' }} />
+            <span className="hidden sm:inline">Venta YTD</span>
+          </button>
+          <button
+            onClick={() => tableView !== 'monthly' && setConfiguracion({ tableView: 'monthly' })}
+            className="relative flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors duration-150 cursor-pointer z-10"
+            style={{ color: tableView === 'monthly' ? 'var(--sf-t1)' : 'var(--sf-t5)' }}
+            title="Venta mensual histórica"
+          >
+            <Calendar className="w-3.5 h-3.5" style={{ color: tableView === 'monthly' ? '#a78bfa' : 'inherit' }} />
+            <span className="hidden sm:inline">Venta mensual histórica</span>
+          </button>
+        </div>
+        </div>
+      </div>
 
       {/* Main chart */}
       <div className="relative" style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '12px', padding: '20px' }}>
@@ -806,7 +971,8 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
       <div style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', borderRadius: '12px', overflow: 'hidden' }}>
 
         {/* Pivot header bar */}
-        <div className="px-6 py-4 flex items-center justify-between" style={{ borderBottom: '1px solid var(--sf-border)' }}>
+        {/* [Ticket 3.F.2] Toggle YTD/monthly migrado al TopBar global. */}
+        <div className="px-6 py-4 flex items-center justify-between gap-3" style={{ borderBottom: '1px solid var(--sf-border)' }}>
           <p style={{ fontSize: '13px', fontWeight: 600, color: 'var(--sf-t2)' }}>Analiza tus ventas</p>
           <button
             onClick={() => setShowAdvanced(v => !v)}
@@ -825,13 +991,19 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
         {/* Dimension toggles — always visible */}
         <div className="px-6 py-3 flex items-center flex-wrap gap-2" style={{ borderBottom: '1px solid var(--sf-border)' }}>
           {DIM_TOGGLES
-            .filter(t => !t.requiresDim || (t.requiresDim === 'canal' && dataAvailability.has_canal) || (t.requiresDim === 'producto' && (dataAvailability.has_producto || dataAvailability.has_categoria)))
+            .filter(t => !t.requiresDim || dataAvailability[t.requiresDim] === true)
             .map(toggle => {
               const isActive = pivotDims.includes(toggle.key)
+              // [Ticket 3.E.2] Chip "Mes" deshabilitado en vista monthly:
+              // los meses ya están en columnas, agregarlo como dim no aporta.
+              const isMesDisabled = toggle.key === 'mes' && tableView === 'monthly'
               return (
                 <button
                   key={toggle.key}
-                  onClick={() => {
+                  disabled={isMesDisabled}
+                  aria-disabled={isMesDisabled}
+                  title={isMesDisabled ? 'Mes ya está en las columnas en esta vista' : undefined}
+                  onClick={isMesDisabled ? undefined : () => {
                     if (isActive) {
                       if (pivotDims.length > 1) setPivotDims(prev => prev.filter(d => d !== toggle.key))
                     } else {
@@ -844,7 +1016,8 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
                     background: isActive ? 'rgba(0,214,143,0.08)' : 'transparent',
                     color: isActive ? 'var(--sf-green)' : 'var(--sf-t4)',
                     fontWeight: isActive ? 500 : 400,
-                    cursor: 'pointer',
+                    cursor: isMesDisabled ? 'not-allowed' : 'pointer',
+                    opacity: isMesDisabled ? 0.4 : 1,
                   }}
                 >
                   <span>{toggle.icon}</span>
@@ -888,7 +1061,7 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
 
 
         {/* Table */}
-        {(() => {
+        {tableView === 'ytd' && (() => {
           const pivotGrid = 'minmax(180px, 1fr) 100px 100px 90px 100px 70px'
           const mono = { fontFamily: "'DM Mono', monospace" } as const
           const hdrStyle: CSSProperties = { fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--sf-t2)', padding: '12px 16px' }
@@ -1072,6 +1245,127 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
             </div>
           )
         })()}
+
+        {/* [Ticket 3.E.2] Tabla "Venta mensual histórica" — tree pivot con paridad UI YTD */}
+        {tableView === 'monthly' && (() => {
+          const fmtCell = (n: number) => n === 0 ? '—' : (useVentaNeta ? formatCurrency(n, configuracion.moneda) : formatUnits(n))
+          // Sort root por TOTAL desc/asc (P1)
+          const sortedRoot = [...monthlyPivotData].sort((a, b) =>
+            monthlySortDir === 'desc' ? b.total - a.total : a.total - b.total
+          )
+          const flat: (MonthlyPivotNode & { hasChildren: boolean })[] = []
+          flattenPivot(sortedRoot, expandedKeys, flat)
+          const colTotals = new Array(monthlyColumns.length).fill(0)
+          let grandTotal = 0
+          for (const root of monthlyPivotData) {
+            for (let i = 0; i < monthlyColumns.length; i++) colTotals[i] += root.valuesByCol[i]
+            grandTotal += root.total
+          }
+          if (monthlyPivotData.length === 0) {
+            return (
+              <div className="px-6 py-12 text-center text-sm" style={{ color: 'var(--sf-t5)' }}>
+                {pivotLoading ? 'Calculando…' : 'Sin datos para los filtros activos.'}
+              </div>
+            )
+          }
+          const cellStyle: CSSProperties = { padding: '8px 12px', fontSize: 12, fontFamily: "'DM Mono', monospace", textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid var(--sf-border)' }
+          const dimColWidth = 240
+          const cellColWidth = 110
+          const totalColWidth = 120
+          return (
+            <div className="overflow-x-auto" style={{ maxHeight: '70vh' }}>
+              <table style={{ borderCollapse: 'separate', borderSpacing: 0, width: 'max-content', minWidth: '100%' }}>
+                <thead>
+                  <tr>
+                    <th style={{ position: 'sticky', top: 0, left: 0, zIndex: 3, background: 'var(--sf-elevated)', borderBottom: '2px solid var(--sf-border)', borderRight: '1px solid var(--sf-border)', padding: '12px 16px', textAlign: 'left', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--sf-t2)', minWidth: dimColWidth }}>
+                      <span className="flex items-center gap-2">
+                        Dimensión
+                        <span className="flex items-center gap-0.5 ml-auto">
+                          <button onClick={expandAll} className="p-1 rounded transition-colors cursor-pointer" style={{ color: 'var(--sf-t5)' }} title="Expandir todo">
+                            <ChevronsDown className="w-3.5 h-3.5" />
+                          </button>
+                          <button onClick={collapseAll} className="p-1 rounded transition-colors cursor-pointer" style={{ color: 'var(--sf-t5)' }} title="Colapsar todo">
+                            <ChevronsUp className="w-3.5 h-3.5" />
+                          </button>
+                        </span>
+                      </span>
+                    </th>
+                    {monthlyColumns.map(col => (
+                      <th key={col.key} style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--sf-elevated)', borderBottom: '2px solid var(--sf-border)', padding: '12px 12px', textAlign: 'right', fontSize: 11, fontWeight: 600, color: 'var(--sf-t2)', whiteSpace: 'nowrap', minWidth: cellColWidth }}>
+                        {col.label}
+                      </th>
+                    ))}
+                    <th
+                      onClick={() => setMonthlySortDir(d => d === 'desc' ? 'asc' : 'desc')}
+                      style={{ position: 'sticky', top: 0, right: 0, zIndex: 3, background: 'var(--sf-elevated)', borderBottom: '2px solid var(--sf-border)', borderLeft: '1px solid var(--sf-border)', padding: '12px 16px', textAlign: 'right', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--sf-t1)', minWidth: totalColWidth, cursor: 'pointer' }}
+                      title="Ordenar por total"
+                    >
+                      Total {monthlySortDir === 'desc' ? '↓' : '↑'}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {flat.map(row => {
+                    const isRoot = row.depth === 0
+                    const indent = 16 + row.depth * 24
+                    const canExpand = row.hasChildren
+                    const isExpanded = expandedKeys.has(row.id)
+                    const dimMeta = row.dim !== 'total' ? DIM_META[row.dim] : null
+                    return (
+                      <tr key={row.id}>
+                        <td style={{ position: 'sticky', left: 0, zIndex: 1, background: 'var(--sf-card)', borderRight: '1px solid var(--sf-border)', borderBottom: '1px solid var(--sf-border)', padding: '8px 16px 8px 0', whiteSpace: 'nowrap' }}>
+                          <div className="flex items-center" style={{ paddingLeft: indent }}>
+                            {canExpand ? (
+                              <span
+                                onClick={() => toggleExpand(row.id)}
+                                style={{ width: 18, height: 18, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginRight: 8, cursor: 'pointer' }}
+                                className="hover:bg-[var(--sf-inset)]"
+                              >
+                                <ChevronRight style={{ width: 12, height: 12, color: 'var(--sf-t3)', transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 200ms ease' }} />
+                              </span>
+                            ) : (
+                              <span style={{ display: 'inline-block', width: 18, marginRight: 8, flexShrink: 0 }} />
+                            )}
+                            <span style={{ fontSize: isRoot ? 13 : 12, fontWeight: isRoot ? 600 : 400, color: isRoot ? 'var(--sf-t1)' : 'var(--sf-t2)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                              {row.label}
+                              {row.depth > 0 && dimMeta && (
+                                <span className={cn('shrink-0 px-1 py-0.5 rounded text-[9px] font-bold border leading-none', dimMeta.color)}>
+                                  {dimMeta.badge}
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                        </td>
+                        {row.valuesByCol.map((v, i) => (
+                          <td key={i} style={{ ...cellStyle, color: v === 0 ? 'var(--sf-t5)' : 'var(--sf-t2)' }}>
+                            {fmtCell(v)}
+                          </td>
+                        ))}
+                        <td style={{ position: 'sticky', right: 0, zIndex: 1, background: 'var(--sf-card)', borderLeft: '1px solid var(--sf-border)', borderBottom: '1px solid var(--sf-border)', padding: '8px 16px', fontSize: 12, fontFamily: "'DM Mono', monospace", textAlign: 'right', color: 'var(--sf-t1)', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                          {fmtCell(row.total)}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                  {/* Grand total row */}
+                  <tr>
+                    <td style={{ position: 'sticky', left: 0, zIndex: 2, background: 'var(--sf-elevated)', borderRight: '1px solid var(--sf-border)', borderTop: '2px solid var(--sf-border)', padding: '10px 16px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--sf-t1)' }}>
+                      Total
+                    </td>
+                    {colTotals.map((t, i) => (
+                      <td key={i} style={{ ...cellStyle, background: 'var(--sf-elevated)', borderTop: '2px solid var(--sf-border)', color: t === 0 ? 'var(--sf-t5)' : 'var(--sf-t1)', fontWeight: 600 }}>
+                        {fmtCell(t)}
+                      </td>
+                    ))}
+                    <td style={{ position: 'sticky', right: 0, zIndex: 2, background: 'var(--sf-elevated)', borderLeft: '1px solid var(--sf-border)', borderTop: '2px solid var(--sf-border)', padding: '10px 16px', fontSize: 12, fontFamily: "'DM Mono', monospace", textAlign: 'right', color: 'var(--sf-green)', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                      {fmtCell(grandTotal)}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )
+        })()}
       </div>
 
       {/* Drawer for rendimiento analysis */}
@@ -1085,12 +1379,18 @@ Reglas: máximo 100 palabras, cada bullet con número, sin instrucciones operati
             isOpen={isOpen}
             onClose={() => setExpandedRendVendedor(null)}
             title={expandedRendVendedor ?? ''}
-            subtitle={va?.variacion_ytd_pct != null ? `${va.variacion_ytd_pct >= 0 ? '+' : ''}${va.variacion_ytd_pct.toFixed(1)}% YTD` : undefined}
-            badges={va ? [{
-              label: va.variacion_ytd_pct != null && va.variacion_ytd_pct > 5 ? 'CRECIMIENTO' : va.variacion_ytd_pct != null && va.variacion_ytd_pct < -10 ? 'RIESGO' : 'ESTABLE',
-              color: va.variacion_ytd_pct != null && va.variacion_ytd_pct > 5 ? '#22c55e' : va.variacion_ytd_pct != null && va.variacion_ytd_pct < -10 ? '#ef4444' : '#eab308',
-              bg: va.variacion_ytd_pct != null && va.variacion_ytd_pct > 5 ? 'rgba(34,197,94,0.12)' : va.variacion_ytd_pct != null && va.variacion_ytd_pct < -10 ? 'rgba(239,68,68,0.12)' : 'rgba(234,179,8,0.12)',
-            }] : []}
+            subtitle={(() => {
+              const p = va ? (va.variacion_ytd_usd_pct ?? va.variacion_ytd_uds_pct ?? null) : null
+              return p != null ? `${p >= 0 ? '+' : ''}${p.toFixed(1)}% YTD` : undefined
+            })()}
+            badges={va ? (() => {
+              const p = va.variacion_ytd_usd_pct ?? va.variacion_ytd_uds_pct ?? null
+              return [{
+                label: p != null && p > 5 ? 'CRECIMIENTO' : p != null && p < -10 ? 'RIESGO' : 'ESTABLE',
+                color: p != null && p > 5 ? '#22c55e' : p != null && p < -10 ? '#ef4444' : '#eab308',
+                bg: p != null && p > 5 ? 'rgba(34,197,94,0.12)' : p != null && p < -10 ? 'rgba(239,68,68,0.12)' : 'rgba(234,179,8,0.12)',
+              }]
+            })() : []}
             analysisText={analysis?.text ?? null}
             onDeepen={expandedRendVendedor && analysis?.text ? () => {
               navigate(dp('/chat'), { state: {

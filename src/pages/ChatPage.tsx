@@ -763,7 +763,7 @@ export default function ChatPage() {
   const {
     isProcessed, vendorAnalysis, teamStats, insights, clientesDormidos,
     concentracionRiesgo, categoriasInventario, dataAvailability,
-    configuracion, selectedPeriod, sales,
+    configuracion, selectedPeriod, sales, departamentoSummaries,
     chatMessages: messages, setChatMessages: setMessages, addChatMessage, clearChatMessages,
   } = useAppStore()
   const [input, setInput] = useState('')
@@ -801,8 +801,10 @@ export default function ChatPage() {
     categoriasInventario,
     dataAvailability,
     sales,
+    departamentoSummaries,
   }), [configuracion, selectedPeriod, vendorAnalysis, teamStats, insights,
-    clientesDormidos, concentracionRiesgo, categoriasInventario, dataAvailability, sales])
+    clientesDormidos, concentracionRiesgo, categoriasInventario, dataAvailability, sales,
+    departamentoSummaries])
 
   // Índice del último mensaje asistente
   const lastAssistantMessageIndex = useMemo(() => {

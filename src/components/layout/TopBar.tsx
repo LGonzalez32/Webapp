@@ -2,9 +2,10 @@ import { useState, useRef, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAppStore } from '../../store/appStore'
 import { Sun, Moon, DollarSign, Hash } from 'lucide-react'
+import { cn } from '../../lib/utils'
 
 const PAGE_TITLES: Record<string, { title: string; sub: string }> = {
-  '/cargar':        { title: 'Cargar Datos',        sub: 'Sube tus ventas y activa el monitor comercial' },
+  '/cargar':        { title: 'Cargar Datos',        sub: 'Paso 1 · Datos de ventas' },
   '/dashboard':     { title: 'Estado Comercial',    sub: 'Alertas, semáforo de riesgo y KPIs del equipo' },
   '/vendedores':    { title: 'Vendedores',          sub: 'Desempeño individual y alertas por vendedor' },
   '/rendimiento':   { title: 'Rendimiento Anual',   sub: 'Comparativa año actual vs año anterior' },
@@ -18,7 +19,18 @@ const PAGE_TITLES: Record<string, { title: string; sub: string }> = {
 export default function TopBar() {
   const location  = useLocation()
   const navigate  = useNavigate()
-  const { dataSource, configuracion, setConfiguracion, dataAvailability, setTipoMetaActivo } = useAppStore()
+  const { dataSource, configuracion, setConfiguracion, dataAvailability, setTipoMetaActivo, selectedPeriod, setSelectedPeriodRange, fechaRefISO } = useAppStore()
+
+  // [Ticket 2.3.4] Selector global de período (Desde/Hasta). Se renderiza
+  // solo cuando el store materializó el shape (year !== 0 = fechaRef llegó).
+  // Mientras year === 0 los dropdowns están ocultos — pattern más limpio que
+  // disabled+placeholder porque evita que el usuario interactúe con un
+  // control sin opciones válidas.
+  const periodReady = selectedPeriod.year !== 0
+  const fechaRefMonth = fechaRefISO ? new Date(fechaRefISO).getMonth() : 11
+  const fechaRefYear = fechaRefISO ? new Date(fechaRefISO).getFullYear() : selectedPeriod.year
+  const isCurrentYear = selectedPeriod.year === fechaRefYear
+  const MESES_CORTOS = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
   const tema = configuracion.tema
   const metricaGlobal = configuracion.metricaGlobal ?? 'usd'
 
@@ -54,12 +66,48 @@ export default function TopBar() {
     <header className="sf-topbar h-14 border-b border-zinc-800 bg-zinc-950/70 backdrop-blur-md flex items-center justify-between pl-16 pr-6 md:px-6 sticky top-0 z-30">
       <div className="flex items-center gap-2">
         <div>
-          <h1 className="text-sm font-bold text-zinc-100 leading-tight">{page.title}</h1>
+          <p className="text-sm font-bold text-zinc-100 leading-tight">{page.title}</p>
           <p className="text-[11px]" style={{ color: 'var(--sf-t5)' }}>{page.sub}</p>
         </div>
       </div>
 
       <div className="flex items-center gap-2">
+        {/* [Ticket 2.3.4] Selector global de período Desde/Hasta */}
+        {periodReady && (
+          <div className="sf-no-print flex items-center gap-1.5" data-testid="period-range-selector">
+            <label className="text-[11px] font-semibold" style={{ color: 'var(--sf-t5)' }}>Desde</label>
+            <select
+              data-testid="period-monthStart"
+              value={selectedPeriod.monthStart}
+              onChange={(e) => {
+                const newStart = Number(e.target.value)
+                setSelectedPeriodRange(newStart, selectedPeriod.monthEnd, 'start')
+              }}
+              className="px-2 py-1 rounded-md text-xs font-medium cursor-pointer"
+              style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', color: 'var(--sf-t1)' }}
+            >
+              {MESES_CORTOS.map((m, i) => (
+                <option key={i} value={i} disabled={isCurrentYear && i > fechaRefMonth}>{m}</option>
+              ))}
+            </select>
+            <label className="text-[11px] font-semibold" style={{ color: 'var(--sf-t5)' }}>Hasta</label>
+            <select
+              data-testid="period-monthEnd"
+              value={selectedPeriod.monthEnd}
+              onChange={(e) => {
+                const newEnd = Number(e.target.value)
+                setSelectedPeriodRange(selectedPeriod.monthStart, newEnd, 'end')
+              }}
+              className="px-2 py-1 rounded-md text-xs font-medium cursor-pointer"
+              style={{ background: 'var(--sf-inset)', border: '1px solid var(--sf-border)', color: 'var(--sf-t1)' }}
+            >
+              {MESES_CORTOS.map((m, i) => (
+                <option key={i} value={i} disabled={isCurrentYear && i > fechaRefMonth}>{m}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {dataSource === 'demo' && !location.pathname.startsWith('/demo') && (
           <div className="relative">
             <button
@@ -115,26 +163,36 @@ export default function TopBar() {
           </div>
         )}
 
-        <button
-          onClick={() => {
-            const isDemo = location.pathname.startsWith('/demo')
-            const chatPath = isDemo ? '/demo/chat' : '/chat'
-            const targetState = {
-              prefill: '¿Qué debo hacer hoy?',
-              systemOverride: 'El usuario quiere saber las 3 acciones prioritarias para hoy. Responde con exactamente 3 acciones concretas en formato numerado. Cada acción debe incluir: el nombre real de la persona o área responsable, la acción específica en máximo 10 palabras, y debajo "Por qué hoy:" con la razón en máximo 10 palabras. Sin introducción ni conclusión, solo los 3 items.',
-            }
-            if (location.pathname === '/chat' || location.pathname === '/demo/chat') {
-              window.dispatchEvent(new CustomEvent('sf-header-action', { detail: targetState }))
-            } else {
-              navigate(chatPath, { state: targetState })
-            }
-          }}
-          className="sf-no-print bg-[var(--sf-green)] hover:opacity-90 font-semibold text-xs px-3 py-1.5 rounded-lg transition-opacity"
-          style={{ color: tema === 'dark' ? '#020C18' : '#fff' }}
-        >
-          <span className="hidden md:inline">✦ ¿Qué hago hoy?</span>
-          <span className="md:hidden">✦ Hoy</span>
-        </button>
+        {/* [Ω.1.2] Ocultar "¿Qué hago hoy?" en /cargar mientras no haya
+            datos cargados: el botón pide insights y sin datos no hay nada
+            que recomendar. */}
+        {!(location.pathname === '/cargar' && dataSource === 'none') && (
+          <button
+            onClick={() => {
+              const isDemo = location.pathname.startsWith('/demo')
+              const chatPath = isDemo ? '/demo/chat' : '/chat'
+              const targetState = {
+                prefill: '¿Qué debo hacer hoy?',
+                systemOverride: 'El usuario quiere saber las 3 acciones prioritarias para hoy. Responde con exactamente 3 acciones concretas en formato numerado. Cada acción debe incluir: el nombre real de la persona o área responsable, la acción específica en máximo 10 palabras, y debajo "Por qué hoy:" con la razón en máximo 10 palabras. Sin introducción ni conclusión, solo los 3 items.',
+              }
+              if (location.pathname === '/chat' || location.pathname === '/demo/chat') {
+                window.dispatchEvent(new CustomEvent('sf-header-action', { detail: targetState }))
+              } else {
+                navigate(chatPath, { state: targetState })
+              }
+            }}
+            className={cn(
+              'sf-no-print font-semibold text-xs px-3 py-1.5 rounded-lg transition-all',
+              location.pathname === '/cargar'
+                ? 'border border-[var(--sf-border-strong)] text-[var(--sf-t2)] hover:bg-[var(--sf-hover)]'
+                : 'bg-[var(--sf-green)] hover:opacity-90'
+            )}
+            style={location.pathname !== '/cargar' ? { color: tema === 'dark' ? '#0A1220' : '#fff' } : undefined}
+          >
+            <span className="hidden md:inline">✦ ¿Qué hago hoy?</span>
+            <span className="md:hidden">✦ Hoy</span>
+          </button>
+        )}
         {/* Currency toggle — only when venta_neta data is available */}
         {dataAvailability.has_venta_neta && (
           <div
@@ -147,7 +205,7 @@ export default function TopBar() {
               style={{
                 width: 'calc(50% - 2px)',
                 left: metricaGlobal === 'usd' ? 2 : 'calc(50%)',
-                background: tema === 'dark' ? '#475569' : 'var(--sf-card)',
+                background: tema === 'dark' ? 'rgba(255,255,255,0.10)' : 'var(--sf-card)',
                 boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
               }}
             />
@@ -183,7 +241,7 @@ export default function TopBar() {
             style={{
               width: 'calc(50% - 2px)',
               left: tema === 'light' ? 2 : 'calc(50%)',
-              background: tema === 'dark' ? '#475569' : 'var(--sf-card)',
+              background: tema === 'dark' ? 'rgba(255,255,255,0.10)' : 'var(--sf-card)',
               boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
             }}
           />

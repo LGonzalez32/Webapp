@@ -139,11 +139,7 @@ export default function PrivacyPage() {
           11. Contacto
         </h2>
         <p className="mb-4 leading-relaxed" style={{ color: 'var(--sf-t3)' }}>
-          Para consultas sobre privacidad o ejercer tus derechos, contáctanos en{' '}
-          {/* TODO: Reemplazar con email real */}
-          <a href="mailto:privacidad@salesflow.com" className="text-emerald-500 hover:underline">
-            privacidad@salesflow.com
-          </a>.
+          Para consultas sobre privacidad o ejercer tus derechos, contáctanos a través de nuestros canales oficiales.
           También puedes revisar nuestros{' '}
           <Link to="/terminos" className="text-emerald-500 hover:underline">Términos de Servicio</Link>.
         </p>

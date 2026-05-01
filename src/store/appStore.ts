@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { saveDraft as wizardSaveDraft, loadDraft as wizardLoadDraft, clearDraft as wizardClearDraft, flushPendingSaves as wizardFlushPending } from '../lib/wizardCache'
 import type {
   ClienteSummary,
   ProductoSummary,
@@ -25,6 +26,7 @@ import type {
   ChatClienteContext,
   ChatMessage,
 } from '../types'
+import type { InsightCandidate } from '../lib/insight-engine'
 
 const DEFAULT_CONFIG: Configuracion = {
   empresa: 'Mi Empresa',
@@ -39,6 +41,7 @@ const DEFAULT_CONFIG: Configuracion = {
   metricaGlobal: 'usd',
   giro: '',
   giro_custom: '',
+  tableView: 'ytd',
 }
 
 const DEFAULT_AVAILABILITY: DataAvailability = {
@@ -51,6 +54,11 @@ const DEFAULT_AVAILABILITY: DataAvailability = {
   has_departamento: false,
   has_metas: false,
   has_inventario: false,
+  has_unidades: false,
+  has_precio_unitario: false,
+  has_subcategoria: false,
+  has_proveedor: false,
+  has_costo_unitario: false,
 }
 
 interface AppState {
@@ -63,6 +71,10 @@ interface AppState {
   vendorAnalysis: VendorAnalysis[]
   teamStats: TeamStats | null
   insights: Insight[]
+  // [Z.11.4] Single source of truth: motor 2 candidates post Z.11+Z.12 emitidos
+  // por analysisWorker. Page-side los consume directamente. NO se persisten
+  // (objetos grandes con _stats internos).
+  filteredCandidates: InsightCandidate[]
   clientesDormidos: ClienteDormido[]
   concentracionRiesgo: ConcentracionRiesgo[]
   categoriasInventario: CategoriaInventario[]
@@ -98,12 +110,38 @@ interface AppState {
   loadingMessage: string
   orgId: string
   dataSource: 'none' | 'demo' | 'real'
-  selectedPeriod: { year: number; month: number }
+  // [Ticket 2.3] Shape multi-mes. monthStart/monthEnd son los nuevos drivers
+  // del rango mensual; `month` queda como alias compat de monthStart hasta que
+  // todos los consumers migren a [monthStart, monthEnd] en Ticket 2.4.
+  selectedPeriod: { year: number; monthStart: number; monthEnd: number; month: number }
   tipoMetaActivo: 'uds' | 'usd'
 
   // Comparativa de períodos
   comparisonEnabled: boolean
   comparisonPeriod: { year: number; month: number } | null
+
+  // [B1] Borrador del wizard de carga (in-memory, no persistido).
+  // Sobrevive a navegaciones intra-app entre sidebar/dashboard/upload así que
+  // un usuario que sube un archivo y navega antes de "Analizar ventas" no
+  // pierde el archivo al volver a /cargar. Se limpia en doAnalyze() y
+  // resetAll().
+  wizardDraft: null | {
+    ventas?: SaleRecord[]
+    metas?: MetaRecord[]
+    inventario?: InventoryItem[]
+    detectedCols?: Record<string, string[]>
+    ignoredColumns?: Record<string, string[]>
+    discardedRows?: Record<string, unknown[]>
+    dateAmbiguity?: Record<string, { convention: string; evidence: string; ambiguous: boolean }>
+    warnings?: Record<string, Array<{ code: string; message: string; field?: string }>>
+    mapping?: Record<string, Record<string, string>>
+    files?: Record<string, File>
+    currentStep?: number
+    stepStatus?: Record<string, 'pending' | 'loaded' | 'skipped' | 'error'>
+    // [1.6.2] Override del usuario tras modal de desambiguación de metas.
+    // Persiste en wizardCache para sobrevivir reload sin re-preguntar.
+    metaUnitOverride?: 'unidades' | 'venta_neta'
+  }
 
   // Configuración
   configuracion: Configuracion
@@ -117,6 +155,7 @@ interface AppState {
   setVendorAnalysis: (data: VendorAnalysis[]) => void
   setTeamStats: (data: TeamStats | null) => void
   setInsights: (data: Insight[]) => void
+  setFilteredCandidates: (data: InsightCandidate[]) => void
   setClientesDormidos: (data: ClienteDormido[]) => void
   setConcentracionRiesgo: (data: ConcentracionRiesgo[]) => void
   setCategoriasInventario:  (data: CategoriaInventario[]) => void
@@ -139,7 +178,15 @@ interface AppState {
   setIsLoading: (val: boolean) => void
   setLoadingMessage: (msg: string) => void
   setDataSource: (source: 'none' | 'demo' | 'real') => void
-  setSelectedPeriod: (period: { year: number; month: number }) => void
+  // [Ticket 2.3] Acepta partial merge { year?, monthStart?, monthEnd?, month? }.
+  // `month` se conserva como input legacy: si el caller pasa `month`, se mapea
+  // a monthStart = monthEnd = month (comportamiento equivalente al setter viejo).
+  setSelectedPeriod: (period: Partial<{ year: number; monthStart: number; monthEnd: number; month: number }>) => void
+  // [Ticket 2.3.4] Setter del rango Desde/Hasta del TopBar. lastChanged indica
+  // qué dropdown movió el usuario para resolver inversiones (Desde>Hasta o
+  // Hasta<Desde) sin perder la intención: el lado que el usuario tocó manda,
+  // el otro se ajusta. Sincroniza month = monthEnd.
+  setSelectedPeriodRange: (monthStart: number, monthEnd: number, lastChanged: 'start' | 'end') => void
   setTipoMetaActivo: (tipo: 'uds' | 'usd') => void
   setConfiguracion: (config: Partial<Configuracion>) => void
   setChatContextVendedor: (v: VendorAnalysis | null) => void
@@ -155,6 +202,11 @@ interface AppState {
   toggleComparison: () => void
   setComparisonPeriod: (period: { year: number; month: number } | null) => void
 
+  // [B1] Borrador del wizard de carga
+  setWizardDraft: (draft: AppState['wizardDraft']) => void
+  clearWizardDraft: () => Promise<void>
+  hydrateWizardDraftFromCache: () => Promise<void>
+
   resetAll: () => void
 }
 
@@ -168,6 +220,7 @@ export const useAppStore = create<AppState>()(
       vendorAnalysis: [],
       teamStats: null,
       insights: [],
+      filteredCandidates: [],
       clientesDormidos: [],
       concentracionRiesgo: [],
       categoriasInventario: [],
@@ -187,6 +240,7 @@ export const useAppStore = create<AppState>()(
       chatContextVendedor: null,
       chatContextCliente: null,
       chatMessages: [],
+      wizardDraft: null,
       forecastData: null,
       forecastLoading: false,
       forecastChartLoading: false,
@@ -197,21 +251,34 @@ export const useAppStore = create<AppState>()(
       dataSource: 'none',
       comparisonEnabled: false,
       comparisonPeriod: null,
+      // [Ticket 2.3.2] Initial state neutro — sin new Date() del browser.
+      // Cumple regla CONTEXT.md "fechaRef = max(sales.fecha), NUNCA new Date()".
+      // setFechaRefISO es el único materializador cuando llegan datos.
+      // Consumers que lean .year=0 antes de que llegue fechaRef no encuentran
+      // ventas (filtros vacíos) y la pantalla muestra empty state correctamente.
       selectedPeriod: {
-        year: new Date().getFullYear(),
-        month: new Date().getMonth(), // 0-indexed
+        year: 0,
+        monthStart: 0,
+        monthEnd: 0,
+        month: 0, // alias compat = monthEnd (sincronizado en cada mutator)
       },
       configuracion: DEFAULT_CONFIG,
       tipoMetaActivo: 'uds',
 
       // Actions
-      setSales: (sales) => set({ sales }),
-      setMetas: (metas) => set({ metas }),
-      setInventory: (inventory) => set({ inventory }),
+      // Cambiar el dataset siempre invalida el análisis derivado (vendorAnalysis,
+      // dataAvailability, insights, etc.). Sin este reset, navegar entre datos
+      // cargados → demo deja `isProcessed=true` y useAnalysis no re-corre,
+      // dejando dataAvailability con flags viejos (has_inventario/has_departamento
+      // = false) y empty states en /rotacion y /departamentos.
+      setSales: (sales) => set({ sales, isProcessed: false }),
+      setMetas: (metas) => set({ metas, isProcessed: false }),
+      setInventory: (inventory) => set({ inventory, isProcessed: false }),
 
       setVendorAnalysis: (vendorAnalysis) => set({ vendorAnalysis }),
       setTeamStats: (teamStats) => set({ teamStats }),
       setInsights: (insights) => set({ insights }),
+      setFilteredCandidates: (filteredCandidates) => set({ filteredCandidates }),
       setClientesDormidos: (clientesDormidos) => set({ clientesDormidos }),
       setConcentracionRiesgo: (concentracionRiesgo) => set({ concentracionRiesgo }),
       setCategoriasInventario:  (categoriasInventario)  => set({ categoriasInventario }),
@@ -227,13 +294,75 @@ export const useAppStore = create<AppState>()(
       setCanalesDisponibles:    (canalesDisponibles)    => set({ canalesDisponibles }),
       setMonthlyTotals:         (monthlyTotals)         => set({ monthlyTotals }),
       setMonthlyTotalsSameDay:  (monthlyTotalsSameDay)  => set({ monthlyTotalsSameDay }),
-      setFechaRefISO:           (fechaRefISO)           => set({ fechaRefISO }),
+      setFechaRefISO: (fechaRefISO) => set((state) => {
+        const updates: any = { fechaRefISO }
+        if (fechaRefISO) {
+          const fechaRef = new Date(fechaRefISO)
+          // [Fix 3.B.8] Materializar selectedPeriod solo si el estado está neutro
+          // (year === 0, pre-hidratación / pre-carga) o si el dataset pertenece
+          // a un año distinto al activo. NO sobrescribir el rango activo del
+          // usuario en cada worker run — eso causaba el rebote del dropdown
+          // "Desde" del TopBar después de que el motor reanaliza.
+          const needsMaterialize =
+            state.selectedPeriod.year === 0 ||
+            state.selectedPeriod.year !== fechaRef.getFullYear()
+          if (needsMaterialize) {
+            const monthEnd = fechaRef.getMonth()
+            updates.selectedPeriod = {
+              year: fechaRef.getFullYear(),
+              monthStart: 0,
+              monthEnd,
+              month: monthEnd,
+            }
+          }
+        }
+        return updates
+      }),
 
       setDataSource: (dataSource) => set({ dataSource }),
       setIsProcessed: (isProcessed) => set({ isProcessed }),
       setLoadingMessage: (loadingMessage) => set({ loadingMessage }),
       setIsLoading: (isLoading) => set({ isLoading }),
-      setSelectedPeriod: (selectedPeriod) => set({ selectedPeriod, isProcessed: false }),
+      // [Ticket 2.3.4] Setter del rango Desde/Hasta. La auto-corrección de
+      // inversiones vive acá (regla única, no duplicada en el componente):
+      // - lastChanged='start' y monthStart>monthEnd: end = start (Desde manda).
+      // - lastChanged='end' y monthEnd<monthStart: start = end (Hasta manda).
+      // Sincroniza month = monthEnd.
+      setSelectedPeriodRange: (monthStart, monthEnd, lastChanged) => set((state) => {
+        let s = monthStart
+        let e = monthEnd
+        if (e < s) {
+          if (lastChanged === 'start') e = s
+          else s = e
+        }
+        return {
+          selectedPeriod: {
+            year: state.selectedPeriod.year,
+            monthStart: s,
+            monthEnd: e,
+            month: e,
+          },
+          isProcessed: false,
+        }
+      }),
+      // [Ticket 2.3.2] Setter merge-partial. Acepta `month` legacy (mapea a
+      // monthStart=monthEnd=month) o `monthStart`/`monthEnd` nuevos. Auto-corrige
+      // monthEnd >= monthStart. `month` siempre = monthEnd (alias compat = mes activo).
+      setSelectedPeriod: (partial) => set((state) => {
+        const sp = state.selectedPeriod
+        const monthStart = partial.monthStart ?? (partial.month !== undefined ? partial.month : sp.monthStart)
+        let monthEnd = partial.monthEnd ?? (partial.month !== undefined ? partial.month : sp.monthEnd)
+        if (monthEnd < monthStart) monthEnd = monthStart
+        return {
+          selectedPeriod: {
+            year: partial.year ?? sp.year,
+            monthStart,
+            monthEnd,
+            month: monthEnd,
+          },
+          isProcessed: false,
+        }
+      }),
       setTipoMetaActivo: (tipoMetaActivo) => set({ tipoMetaActivo, isProcessed: false }),
       setConfiguracion: (config) =>
         set((state) => ({
@@ -260,6 +389,37 @@ export const useAppStore = create<AppState>()(
       })),
       setComparisonPeriod: (comparisonPeriod) => set({ comparisonPeriod }),
 
+      // [B1] Borrador del wizard
+      setWizardDraft: (wizardDraft) => {
+        set({ wizardDraft })
+        if (wizardDraft) {
+          // debounced 500ms internamente; saturar es seguro
+          void wizardSaveDraft(wizardDraft).catch(() => { /* graceful */ })
+        }
+      },
+      clearWizardDraft: async () => {
+        // Flush antes de set/clear para evitar race "save-after-clear"
+        try { await wizardFlushPending() } catch { /* graceful */ }
+        set({ wizardDraft: null })
+        try { await wizardClearDraft() } catch { /* graceful */ }
+      },
+      hydrateWizardDraftFromCache: async () => {
+        try {
+          const cached = await wizardLoadDraft()
+          if (!cached) return
+          const current = (useAppStore.getState() as AppState).wizardDraft
+          // No sobrescribir si la memoria ya tiene draft útil
+          const memoryHasDraft = current && (
+            (current.ventas?.length ?? 0) > 0 ||
+            (current.metas?.length ?? 0) > 0 ||
+            (current.inventario?.length ?? 0) > 0 ||
+            (current.currentStep ?? 0) > 0
+          )
+          if (memoryHasDraft) return
+          set({ wizardDraft: cached as AppState['wizardDraft'] })
+        } catch { /* graceful */ }
+      },
+
       resetAll: () => {
         localStorage.removeItem('salesflow-storage')
         set({
@@ -272,6 +432,7 @@ export const useAppStore = create<AppState>()(
           vendorAnalysis: [],
           teamStats: null,
           insights: [],
+          filteredCandidates: [],
           clientesDormidos: [],
           concentracionRiesgo: [],
           categoriasInventario: [],
@@ -294,28 +455,50 @@ export const useAppStore = create<AppState>()(
           dataSource: 'none',
           comparisonEnabled: false,
           comparisonPeriod: null,
+          wizardDraft: null,
           isProcessed: false,
           isLoading: false,
+          // [Ticket 2.3.2] resetAll vuelve a estado neutro (sin new Date()).
           selectedPeriod: {
-            year: new Date().getFullYear(),
-            month: new Date().getMonth(),
+            year: 0,
+            monthStart: 0,
+            monthEnd: 0,
+            month: 0,
           },
         })
       },
     }),
     {
       name: 'salesflow-storage',
-      version: 9,
+      version: 13,
       migrate: (persistedState: any) => {
         // v8: remove deepseek_api_key from persisted config (now handled by backend proxy)
         // v9: migrate moneda 'USD' → '$' for display consistency
+        // v10 [Ticket 2.3.1]: selectedPeriod shape pasa de {year, month} a
+        //   {year, monthStart, monthEnd, month}.
+        // v11 [Ticket 2.3.2]: alias .month re-sincronizado a monthEnd (era monthStart).
+        //   Sesiones v10 con month=monthStart=0 se re-sincronizan vía migrate.
+        // v12 [Ticket 2.4.4]: selectedMonths removido del store (chip multi-mes
+        //   eliminado de EstadoComercialPage). El campo nunca se persistió
+        //   (no estaba en partialize), pero se bumpea versión para forzar
+        //   re-hidratación limpia tras la simplificación de firmas downstream.
+        // v13 [Ticket 3.F.2]: configuracion.tableView agregado ('ytd' | 'monthly').
+        //   Sesiones v12 sin el campo se rellenan automáticamente vía
+        //   { ...DEFAULT_CONFIG, ...cleanConfig } (default 'ytd').
         const { deepseek_api_key: _, ...cleanConfig } = persistedState?.configuracion ?? {}
         if (cleanConfig.moneda === 'USD') cleanConfig.moneda = '$'
+        // [Ticket 2.3.2] Migración v9 → v10: shape legacy {year, month} se mapea
+        // a YTD (monthStart=0, monthEnd=month previo). `month` = monthEnd
+        // (alias compat = mes activo). Si no hay persistedState.selectedPeriod,
+        // dejar neutro (year=0) — setFechaRefISO lo materializa cuando llegan datos.
+        const legacySp = persistedState?.selectedPeriod
+        const migratedSp = legacySp && typeof legacySp.monthStart === 'number'
+          ? { ...legacySp, month: legacySp.monthEnd ?? legacySp.monthStart } // re-sincronizar alias por si venía mal
+          : legacySp && typeof legacySp.month === 'number'
+            ? { year: legacySp.year, monthStart: 0, monthEnd: legacySp.month, month: legacySp.month }
+            : { year: 0, monthStart: 0, monthEnd: 0, month: 0 }
         return {
-        selectedPeriod: persistedState?.selectedPeriod ?? {
-          year: new Date().getFullYear(),
-          month: new Date().getMonth(),
-        },
+        selectedPeriod: migratedSp,
         configuracion: {
           ...DEFAULT_CONFIG,
           ...cleanConfig,
@@ -326,13 +509,50 @@ export const useAppStore = create<AppState>()(
       },
       // sales/metas/inventory NO se persisten: son muy grandes para localStorage
       // y bloquean el hilo principal al serializarse. Se restauran via IndexedDB o getDemoData().
-      partialize: (state) => ({
-        selectedPeriod: state.selectedPeriod,
-        configuracion: state.configuracion,
-        orgId: state.orgId,
-        dataSource: state.dataSource,
-        tipoMetaActivo: state.tipoMetaActivo,
-      }) as any,
+      // [Sprint G1] En modo demo el partialize devuelve {} para que el storage
+      // no acumule PII (configuracion.empresa = "Los Pinos S.A.", orgId, etc.).
+      // El skip real de la escritura ocurre en el storage wrapper de abajo —
+      // partialize {} es defensa-en-profundidad.
+      partialize: (state) => {
+        if (state.dataSource === 'demo') {
+          return {} as any
+        }
+        return {
+          selectedPeriod: state.selectedPeriod,
+          configuracion: state.configuracion,
+          orgId: state.orgId,
+          dataSource: state.dataSource,
+          tipoMetaActivo: state.tipoMetaActivo,
+        } as any
+      },
+      // [Sprint G1] Storage wrapper que no-opea setItem cuando el state vivo es
+      // demo. El parse mira el flag dataSource del payload serializado (Zustand
+      // serializa { state, version }). Si el payload viene de demo (o vacío,
+      // post-partialize {}), no escribimos a localStorage.
+      storage: {
+        getItem: (name) => {
+          try {
+            const raw = localStorage.getItem(name)
+            return raw == null ? null : JSON.parse(raw)
+          } catch { return null }
+        },
+        setItem: (name, value) => {
+          try {
+            const liveDataSource = (value as any)?.state?.dataSource
+            if (liveDataSource === 'demo') return
+            // partialize devolvió {} en demo (sin dataSource). Detectar y skip.
+            if (
+              value && typeof value === 'object' &&
+              (value as any).state &&
+              Object.keys((value as any).state).length === 0
+            ) return
+            localStorage.setItem(name, JSON.stringify(value))
+          } catch { /* storage access denied */ }
+        },
+        removeItem: (name) => {
+          try { localStorage.removeItem(name) } catch { /* */ }
+        },
+      },
     }
   )
 )
